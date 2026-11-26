@@ -410,6 +410,20 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(model.index.hasPath("sub/ghost2.ts")).toBe(false);
     expect(model.index.hasPath("sub/nested/deep.ts")).toBe(false);
 
+    // Remove `sub` completely from loaded root, then deliver a late response for `sub/nested`: no descendants added.
+    rootState.set({
+      status: "loaded",
+      entries: [{ name: "docs", kind: "directory" }],
+    });
+    expect(model.index.hasPath("sub")).toBe(false);
+    model.index.setLazyDirectoryState("sub/nested", {
+      status: "loaded",
+      entries: [{ name: "deep-removed.ts", kind: "file" }],
+    });
+    expect(model.index.hasPath("sub")).toBe(false);
+    expect(model.index.hasPath("sub/nested")).toBe(false);
+    expect(model.index.hasPath("sub/nested/deep-removed.ts")).toBe(false);
+
     // Optimistic delete of `docs` must NOT retire `docs` lazy subscription on parent refresh.
     await bound.ensureDirectoryLoaded("docs");
     model.index.applyOptimistic("opt-del-docs", { kind: "delete", path: "docs" }, { inFlight: true });
