@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <title>Bridged Preview App</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 16px;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        background: #ffffff;
+        color: #111827;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        background: #dbeafe;
+        color: #1d4ed8;
+        font-size: 12px;
+        font-weight: 600;
+      }
+      code {
+        background: #f3f4f6;
+        padding: 2px 6px;
+        border-radius: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <span class="badge">Bridged preview</span>
+    <h1 id="heading">Preview route: /</h1>
+    <p>Port: <code id="port">5173</code> · Reloads: <code id="reloads">0</code></p>
+    <script>
+      const CHANNEL = "wb:preview:v1";
+      const params = new URLSearchParams(location.search);
+      const port = params.get("port") || "5173";
+      const historyStack = [params.get("path") || "/"];
+      let cursor = 0;
+      let reloads = 0;
+      let activeToken = "";
+
+      const heading = document.getElementById("heading");
+      const portEl = document.getElementById("port");
+      const reloadsEl = document.getElementById("reloads");
+      portEl.textContent = port;
+
+      function render() {
+        const current = historyStack[cursor] || "/";
+        heading.textContent = "Preview route: " + current;
+        reloadsEl.textContent = String(reloads);
+        document.title = "Bridged " + current;
+      }
+      render();
+
+      window.addEventListener("message", (event) => {
+        if (event.origin !== location.origin) return;
+        const data = event.data;
+        if (!data || data.channel !== CHANNEL) return;
+        if (data.type === "hello") {
+          activeToken = data.token;
+          event.source.postMessage(
+            {
+              channel: CHANNEL,
+              type: "hello-ack",
+              token: activeToken,
+              path: historyStack[cursor],
+              title: document.title,
+            },
+            location.origin,
+          );
+          return;
+        }
+        if (data.token !== activeToken) return;
+        if (data.type === "navigate" && typeof data.path === "string") {
+          historyStack.splice(cursor + 1);
+          historyStack.push(data.path);
+          cursor = historyStack.length - 1;
+          render();
+          event.source.postMessage(
+            { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
+            location.origin,
+          );
+          event.source.postMessage(
+            { channel: CHANNEL, type: "title", token: activeToken, title: document.title },
+            location.origin,
+          );
+        } else if (data.type === "back" && cursor > 0) {
+          cursor -= 1;
+          render();
+          event.source.postMessage(
+            { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
+            location.origin,
+          );
+        } else if (data.type === "forward" && cursor < historyStack.length - 1) {
+          cursor += 1;
+          render();
+          event.source.postMessage(
+            { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
+            location.origin,
+          );
+        } else if (data.type === "reload") {
+          reloads += 1;
+          render();
+        }
+      });
+    </script>
+  </body>
+</html>

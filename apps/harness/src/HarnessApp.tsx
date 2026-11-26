@@ -11,6 +11,8 @@ import {
 } from "@shaulavo/workbench-core";
 import { useSubscribable, useWorkbenchTheme } from "@shaulavo/workbench-core/react";
 import { FileIconSprite, FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
+import { PreviewPane } from "@shaulavo/workbench-preview";
+import { TerminalPanel } from "@shaulavo/workbench-terminal";
 import { observeWorkbenchTheme, readTerminalTokenColors } from "@shaulavo/workbench-tokens";
 import { FileTreeView } from "@shaulavo/workbench-tree/react";
 import {
@@ -34,6 +36,9 @@ import {
   type SearchMatch,
   type SearchQueryOptions,
 } from "@shaulavo/workbench-ui";
+import type { Terminal } from "ghostty-webgpu";
+import { createBridgedHarnessPreviewAdapter, createRemoteHarnessPreviewAdapter } from "./preview-fixture";
+import { createHarnessTerminalBundle } from "./terminal-fixture";
 import {
   create50kScaleTree,
   createDemoIndexedTree,
@@ -136,9 +141,22 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [phoneShell, setPhoneShell] = useState<boolean>(() => isPhoneViewport());
   const [keyboardOpen, setKeyboardOpen] = useState(false);
 
+  const [activeTab, setActiveTab] = useState<string>(SAMPLE_FILES[0].id);
   const [sidebarView, setSidebarView] = useState<"explorer" | "search">("explorer");
   const [treeMode, setTreeMode] = useState<"25" | "50k" | "lazy">("25");
   const [treeBundle, setTreeBundle] = useState<HarnessTreeBundle>(() => createDemoIndexedTree());
+  const [previewMode, setPreviewMode] = useState<"bridged" | "remote">("bridged");
+  const [bridgedPreview] = useState(() => createBridgedHarnessPreviewAdapter());
+  const [remotePreview] = useState(() => createRemoteHarnessPreviewAdapter());
+  const [terminalTransparent, setTerminalTransparent] = useState(false);
+  const [terminalBundle] = useState(() =>
+    createHarnessTerminalBundle((path) => {
+      setActiveTab(path);
+    }),
+  );
+  const terminalStats = useSubscribable(terminalBundle.stats);
+  const [ghosttyProbe, setGhosttyProbe] = useState<string>("pending");
+  const activeGhosttyRef = useRef<Terminal | null>(null);
   const [searchQuery, setSearchQuery] = useState("workbench");
   const [searchOptions, setSearchOptions] = useState<SearchQueryOptions>({
     caseSensitive: false,
@@ -146,7 +164,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     regex: false,
   });
 
-  const [activeTab, setActiveTab] = useState<string>(SAMPLE_FILES[0].id);
   const [lastDecision, setLastDecision] = useState<string>("none");
   const [termBg, setTermBg] = useState<string>(() => readRootTerminalBg());
   const [scopedNode, setScopedNode] = useState<HTMLElement | null>(null);
@@ -411,6 +428,25 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
           >
             Soft keyboard: {keyboardOpen ? "open" : "closed"}
           </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="toggle-terminal-override"
+            onClick={() => setTerminalTransparent((v) => !v)}
+          >
+            Term override: {terminalTransparent ? "transparent" : "css"}
+          </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="enable-decckm"
+            onClick={() => {
+              const id = terminalBundle.adapter.activeId.getSnapshot();
+              if (id) terminalBundle.enableDecckm(id);
+            }}
+          >
+            Enable DECCKM
+          </button>
         </div>
 
         <div className="harness-grid">
@@ -420,6 +456,11 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
               <div>observedScheme: {rootTheme.scheme}</div>
               <div>terminalBg: {termBg}</div>
               <div>preset: {preset}</div>
+              <div data-testid="terminal-appearance-probe">ghostty: {ghosttyProbe}</div>
+              <div data-testid="terminal-stats-probe">
+                lastInput: {terminalStats.lastInput || "none"} · detaches: {terminalStats.detachCount} ·
+                closes: {terminalStats.closeCount}
+              </div>
             </div>
             {hostKind === "tailwind" ? (
               <div style={{ color: "rgb(255, 0, 255)" }}>
@@ -473,20 +514,46 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   );
 
   const previewPane = (
-    <ToolPane title="Preview" detail="localhost:5173" scroll={false}>
-      <iframe
-        title="Mock preview"
-        className="harness-preview-frame"
-        sandbox=""
-        srcDoc="<!doctype html><body style='font-family:sans-serif;padding:12px'>Preview fixture</body>"
-      />
-    </ToolPane>
+    <PreviewPane
+      key={previewMode}
+      adapter={previewMode === "bridged" ? bridgedPreview : remotePreview}
+      actions={
+        <button
+          type="button"
+          className="harness-btn"
+          data-testid="toggle-preview-mode"
+          onClick={() => setPreviewMode((m) => (m === "bridged" ? "remote" : "bridged"))}
+        >
+          {previewMode === "bridged" ? "Bridged" : "Remote"}
+        </button>
+      }
+    />
   );
 
+  function syncGhosttyProbe(term: Terminal): void {
+    const app = term.appearance;
+    const bg = app.theme.background;
+    const selFg = app.theme.selectionForeground;
+    const ansi1 = app.theme.palette[1];
+    setGhosttyProbe(
+      `scheme=${app.colorScheme} opacity=${app.backgroundOpacity} bg=${bg.r},${bg.g},${bg.b} selFg=${selFg.r},${selFg.g},${selFg.b} ansi1=${ansi1?.r ?? 0},${ansi1?.g ?? 0},${ansi1?.b ?? 0} font=${app.font.size}`,
+    );
+  }
+
   const terminalPane = (
-    <ToolPane title="Terminal" detail="bash" scroll={false}>
-      <div className="harness-terminal-mock">$ bun run verify</div>
-    </ToolPane>
+    <TerminalPanel
+      adapter={terminalBundle.adapter}
+      active={!phoneShell || mobilePane === "terminal"}
+      themeOverride={terminalTransparent ? terminalBundle.transparentOverride : undefined}
+      showAccessoryBar
+      onTerminalReady={(_id, term) => {
+        activeGhosttyRef.current = term;
+        syncGhosttyProbe(term);
+        term.on("appearance", () => {
+          if (activeGhosttyRef.current === term) syncGhosttyProbe(term);
+        });
+      }}
+    />
   );
 
   return (

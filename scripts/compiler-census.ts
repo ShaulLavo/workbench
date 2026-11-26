@@ -16,6 +16,10 @@ const ALLOWED_BAILOUTS: ReadonlyMap<string, string> = new Map([
     "packages/tree/src/react/tree-viewport.tsx",
     "TanStack useVirtualizer returns a mutable virtualizer instance read on every render",
   ],
+  [
+    "packages/terminal/src/terminal-view.tsx",
+    "Imperative Ghostty WASM canvas host wrapper: retains terminal across Fast Refresh and async handovers",
+  ],
 ]);
 
 const ROOT = process.cwd();
