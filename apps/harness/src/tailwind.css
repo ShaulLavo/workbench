@@ -1,0 +1,5 @@
+@import "tailwindcss";
+@import "@shaulavo/workbench-tokens/tokens.css";
+@import "@shaulavo/workbench-tokens/themes/fregat.css";
+@import "@shaulavo/workbench-tokens/themes/sprockt.css";
+@import "@shaulavo/workbench-tokens/tailwind-bridge.css";

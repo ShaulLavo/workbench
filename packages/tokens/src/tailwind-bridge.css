@@ -1,0 +1,16 @@
+/* Optional Tailwind v4 bridge for consumers like Fregat that run `@tailwindcss/vite`. */
+@theme inline {
+  --color-wb-bg: var(--wb-bg);
+  --color-wb-chrome: var(--wb-bg-chrome);
+  --color-wb-panel: var(--wb-bg-panel);
+  --color-wb-well: var(--wb-bg-well);
+  --color-wb-elevated: var(--wb-bg-elevated);
+  --color-wb-border: var(--wb-border);
+  --color-wb-fg: var(--wb-fg);
+  --color-wb-fg-muted: var(--wb-fg-muted);
+  --color-wb-accent: var(--wb-accent);
+  --color-wb-accent-fg: var(--wb-accent-fg);
+  --color-wb-row-hover: var(--wb-row-hover);
+  --color-wb-row-active: var(--wb-row-active);
+  --color-wb-row-selected: var(--wb-row-selected);
+}
