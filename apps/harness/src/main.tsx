@@ -2,6 +2,8 @@ import "@shaulavo/workbench-tokens/tokens.css";
 import "@shaulavo/workbench-tokens/reset.css";
 import "@shaulavo/workbench-tokens/themes/sprockt.css";
 import "@shaulavo/workbench-tokens/themes/fregat.css";
+import "@shaulavo/workbench-icons/icons.css";
+import "@shaulavo/workbench-ui/ui.css";
 import "./harness.css";
 
 import { StrictMode } from "react";

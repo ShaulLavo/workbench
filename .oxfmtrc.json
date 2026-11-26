@@ -3,5 +3,5 @@
   "singleQuote": false,
   "trailingComma": "all",
   "printWidth": 110,
-  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "bun.lock"]
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "**/src/generated/**", "bun.lock"]
 }

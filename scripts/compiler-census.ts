@@ -7,7 +7,12 @@ import path from "node:path";
  * React Compiler with zero unapproved bailouts or `'use no memo'` directives.
  * Any justified opt-out (e.g. imperative Ghostty WASM canvas host wrapper) must be allowlisted below.
  */
-const ALLOWED_BAILOUTS: ReadonlyMap<string, string> = new Map();
+const ALLOWED_BAILOUTS: ReadonlyMap<string, string> = new Map([
+  [
+    "packages/ui/src/components/virtual-list.tsx",
+    "TanStack useVirtualizer returns a mutable virtualizer instance read on every render",
+  ],
+]);
 
 const ROOT = process.cwd();
 const SCAN_ROOTS = ["packages", "apps/harness/src"];

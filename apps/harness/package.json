@@ -11,8 +11,11 @@
     "typecheck": "tsc -p tsconfig.json"
   },
   "dependencies": {
+    "@base-ui/react": "catalog:",
     "@shaulavo/workbench-core": "workspace:*",
+    "@shaulavo/workbench-icons": "workspace:*",
     "@shaulavo/workbench-tokens": "workspace:*",
+    "@shaulavo/workbench-ui": "workspace:*",
     "react": "catalog:",
     "react-dom": "catalog:"
   },

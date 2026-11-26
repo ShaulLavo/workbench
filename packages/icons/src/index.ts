@@ -1,0 +1,31 @@
+export { FILE_ICON_GLYPHS, type FileIconGlyph } from "./generated/glyphs";
+export {
+  EXCLUDED_VSCODE_ICON_SOURCES,
+  FILE_ICON_MANIFEST,
+  type ApprovedGlyphSpec,
+  type CatppuccinGlyphName,
+  type FileIconGlyphName,
+  type IconLicenseId,
+  type IconSourceKind,
+  type VscodeGlyphName,
+} from "./manifest";
+export {
+  buildFileIconSpriteMarkup,
+  fileIconSymbolHref,
+  getFileIconRule,
+  resolveFileIcon,
+  resolveFileIconName,
+  strokeIconSymbolHref,
+  type FileIconEntry,
+  type FileIconPreset,
+  type ResolvedFileIcon,
+} from "./resolver";
+export {
+  FILE_ICON_EXTENSIONS,
+  FILE_ICON_FILE_NAMES,
+  FILE_ICON_RULES,
+  type FileIconHue,
+  type FileIconRule,
+  type FileIconRuleName,
+} from "./rules";
+export { STROKE_ICON_GLYPHS, type StrokeGlyph, type StrokeIconName } from "./stroke-glyphs";

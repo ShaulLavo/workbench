@@ -1,0 +1,10 @@
+@shaulavo/workbench-icons
+Copyright (c) 2026 Shaul Lavo
+Licensed under the MIT License (see LICENSE).
+
+This package includes selected vector glyphs under permissive licenses:
+- @pierre/vscode-icons (MIT License, Copyright (c) 2026 The Pierre Computer Company; svgs/claude.svg excluded)
+- @iconify-json/catppuccin (MIT License, Copyright (c) Catppuccin / Iconify Contributors)
+- simple-icons (CC0 1.0 Universal, Claude glyph for CLAUDE.md)
+
+Full third-party license texts are included in THIRD_PARTY_NOTICES.txt.
