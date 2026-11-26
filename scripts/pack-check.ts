@@ -13,7 +13,13 @@ import os from "node:os";
 import path from "node:path";
 
 const ROOT = process.cwd();
-const PACKAGES = ["packages/tokens", "packages/core", "packages/icons", "packages/ui"] as const;
+const PACKAGES = [
+  "packages/tokens",
+  "packages/core",
+  "packages/icons",
+  "packages/ui",
+  "packages/tree",
+] as const;
 const REQUIRED_TOKEN_CSS_EXPORTS = [
   "@shaulavo/workbench-tokens/tokens.css",
   "@shaulavo/workbench-tokens/reset.css",
@@ -91,6 +97,7 @@ try {
   const allOverrides = {
     ...reactFreeOverrides,
     "@shaulavo/workbench-ui": `file:${tarballs.get("@shaulavo/workbench-ui")}`,
+    "@shaulavo/workbench-tree": `file:${tarballs.get("@shaulavo/workbench-tree")}`,
   };
 
   // Fixture A: React-free root consumer (tokens + core + icons, ZERO react installed).
@@ -188,6 +195,8 @@ try {
     ["@shaulavo/workbench-icons root", "node_modules/@shaulavo/workbench-icons/dist/index.js", false],
     ["@shaulavo/workbench-icons/react", "node_modules/@shaulavo/workbench-icons/dist/react/index.js", true],
     ["@shaulavo/workbench-ui root", "node_modules/@shaulavo/workbench-ui/dist/index.js", true],
+    ["@shaulavo/workbench-tree root", "node_modules/@shaulavo/workbench-tree/dist/index.js", false],
+    ["@shaulavo/workbench-tree/react", "node_modules/@shaulavo/workbench-tree/dist/react/index.js", true],
   ] as const) {
     const imported = scanImportsInFile(path.join(fullPeerDir, relPath));
     const importsReact =
@@ -237,18 +246,23 @@ try {
       `import * as coreReact from "@shaulavo/workbench-core/react";
        import * as iconsReact from "@shaulavo/workbench-icons/react";
        import * as ui from "@shaulavo/workbench-ui";
+       import * as tree from "@shaulavo/workbench-tree";
+       import * as treeReact from "@shaulavo/workbench-tree/react";
        import { existsSync } from "node:fs";
        import { fileURLToPath } from "node:url";
        if (!coreReact.useSubscribable || !iconsReact.FileTypeIcon || !ui.WorkbenchShell || !ui.CommandPalette) process.exit(1);
-       const uiCss = fileURLToPath(import.meta.resolve("@shaulavo/workbench-ui/ui.css"));
-       if (!existsSync(uiCss)) throw new Error("Missing @shaulavo/workbench-ui/ui.css");
-       console.log("full-peer-react-and-ui-ok");`,
+       if (!tree.prepareFileTreeInput || !tree.FileTreeModel || !treeReact.FileTreeView) process.exit(1);
+       for (const css of ["@shaulavo/workbench-ui/ui.css", "@shaulavo/workbench-tree/tree.css"]) {
+         const resolved = fileURLToPath(import.meta.resolve(css));
+         if (!existsSync(resolved)) throw new Error("Missing CSS export: " + css);
+       }
+       console.log("full-peer-react-ui-and-tree-ok");`,
     ],
     fullPeerDir,
   );
 
   console.log(
-    "pack-check: ok (4 packages: react-free + full-peer fixtures, CSS subpaths, single @shaulavo/hotkeys & @base-ui/react, LICENSE/NOTICE/THIRD_PARTY_NOTICES verified)",
+    "pack-check: ok (5 packages: react-free + full-peer fixtures, CSS subpaths, single @shaulavo/hotkeys & @base-ui/react, LICENSE/NOTICE/THIRD_PARTY_NOTICES verified)",
   );
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });

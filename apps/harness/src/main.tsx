@@ -4,6 +4,7 @@ import "@shaulavo/workbench-tokens/themes/sprockt.css";
 import "@shaulavo/workbench-tokens/themes/fregat.css";
 import "@shaulavo/workbench-icons/icons.css";
 import "@shaulavo/workbench-ui/ui.css";
+import "@shaulavo/workbench-tree/tree.css";
 import "./harness.css";
 
 import { StrictMode } from "react";

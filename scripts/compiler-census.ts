@@ -12,6 +12,10 @@ const ALLOWED_BAILOUTS: ReadonlyMap<string, string> = new Map([
     "packages/ui/src/components/virtual-list.tsx",
     "TanStack useVirtualizer returns a mutable virtualizer instance read on every render",
   ],
+  [
+    "packages/tree/src/react/tree-viewport.tsx",
+    "TanStack useVirtualizer returns a mutable virtualizer instance read on every render",
+  ],
 ]);
 
 const ROOT = process.cwd();
