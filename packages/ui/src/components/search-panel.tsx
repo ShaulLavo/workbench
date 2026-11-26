@@ -1,8 +1,9 @@
-import { useState, type MouseEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { resolveActivationFocus, type ActivationFocusDecision } from "@shaulavo/workbench-core";
 import { FileTypeIcon } from "@shaulavo/workbench-icons/react";
 import { cx } from "../utils/cx";
-import { FilterField } from "./filter-field";
+import { resolveListboxKeyAction } from "../utils/listbox";
+import { FilterField, type FilterFieldHandle } from "./filter-field";
 import { ToolPane } from "./tool-pane";
 import { VirtualList } from "./virtual-list";
 
@@ -52,7 +53,7 @@ function renderSnippet(match: SearchMatch) {
   );
 }
 
-/** Workspace search panel with regex/case/word toggles, file icons, and virtualized match rows. */
+/** Workspace search panel with regex/case/word toggles, file icons, keyboard handoff, and virtualized match rows. */
 export function SearchPanel({
   query,
   onQueryChange,
@@ -67,6 +68,9 @@ export function SearchPanel({
   className,
 }: SearchPanelProps) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const filterRef = useRef<FilterFieldHandle | null>(null);
+  const resultsScrollRef = useRef<HTMLDivElement | null>(null);
+
   const currentOptions: SearchQueryOptions = options ?? {
     caseSensitive: false,
     wholeWord: false,
@@ -77,21 +81,54 @@ export function SearchPanel({
     onOptionsChange?.({ ...currentOptions, [key]: !currentOptions[key] });
   }
 
+  function focusMatchRow(index: number): void {
+    const button = resultsScrollRef.current?.querySelector<HTMLButtonElement>(
+      `[data-index="${index}"] button`,
+    );
+    button?.focus();
+  }
+
+  function handleArrowDownFromInput(): void {
+    if (matches.length === 0) return;
+    setActiveIndex(0);
+    focusMatchRow(0);
+  }
+
   function handleMatchClick(match: SearchMatch, index: number, event: MouseEvent<HTMLButtonElement>): void {
     setActiveIndex(index);
     const decision = resolveActivationFocus(event, "auto");
     onSelectMatch(match, decision);
   }
 
+  function handleResultKeyDown(event: KeyboardEvent<HTMLButtonElement>, index: number): void {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      filterRef.current?.focus();
+      return;
+    }
+    const action = resolveListboxKeyAction({
+      key: event.key,
+      count: matches.length,
+      activeIndex: index,
+      loop: false,
+    });
+    if (action.kind === "move") {
+      event.preventDefault();
+      setActiveIndex(action.index);
+      queueMicrotask(() => focusMatchRow(action.index));
+    }
+  }
+
   const detail = query ? `${matches.length} ${matches.length === 1 ? "result" : "results"}` : undefined;
   const subheader = (
     <div className="wb-search-bar">
       <FilterField
+        handleRef={filterRef}
         aria-label="Search query"
         placeholder={placeholder}
         value={query}
         onValueChange={onQueryChange}
-        onArrowDown={() => setActiveIndex(0)}
+        onArrowDown={handleArrowDownFromInput}
         trailing={
           onOptionsChange ? (
             <div className="wb-search-toggles" role="group" aria-label="Search options">
@@ -166,6 +203,7 @@ export function SearchPanel({
           items={matches}
           getKey={(item) => item.id}
           activeIndex={activeIndex}
+          scrollRef={resultsScrollRef}
           estimateSize={(_item, _idx, rowHeight) => Math.max(rowHeight, 42)}
           initialRect={{ width: 320, height: 320 }}
           className="wb-search-results"
@@ -173,9 +211,11 @@ export function SearchPanel({
             <button
               type="button"
               className="wb-search-row"
+              tabIndex={index === activeIndex ? 0 : -1}
               data-active={index === activeIndex ? "true" : "false"}
               data-testid={`wb-search-match-${match.id}`}
               title={`${match.path}:${match.line}:${match.column}`}
+              onKeyDown={(event) => handleResultKeyDown(event, index)}
               onClick={(event) => handleMatchClick(match, index, event)}
             >
               <span className="wb-search-row-header">

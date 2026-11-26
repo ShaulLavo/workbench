@@ -31,13 +31,14 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ====================================================================
-@iconify-json/catppuccin (1.2.17) — MIT License
+@iconify-json/catppuccin (1.2.17) / catppuccin/vscode-icons — MIT License
 (Selected language/file glyphs per packages/icons/src/manifest.ts)
 ====================================================================
 
 MIT License
 
-Copyright (c) Catppuccin / Iconify Contributors
+Copyright (c) 2023 Catppuccin
+Copyright (c) 2023 thang-nm
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal

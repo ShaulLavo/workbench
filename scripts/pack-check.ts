@@ -192,6 +192,14 @@ try {
     }
   }
 
+  const uiEntry = readFileSync(
+    path.join(fullPeerDir, "node_modules/@shaulavo/workbench-ui/dist/index.js"),
+    "utf8",
+  );
+  if (!/from\s+["']@base-ui\/react\/[^"']+["']/.test(uiEntry)) {
+    throw new Error("@shaulavo/workbench-ui must keep @base-ui/react externalized");
+  }
+
   run(
     "bun",
     [

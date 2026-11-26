@@ -1,5 +1,6 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
+import { validateSafeSvgGlyph } from "../../scripts/icon-generator";
 import {
   buildFileIconSpriteMarkup,
   EXCLUDED_VSCODE_ICON_SOURCES,
@@ -80,5 +81,32 @@ describe("@shaulavo/workbench-icons", () => {
 
     const uiStroke = renderToStaticMarkup(<StrokeIcon name="search" />);
     expect(uiStroke).toContain('data-wb-stroke-icon="search"');
+  });
+
+  it("rejects unsafe SVG elements, event handlers, and external references", () => {
+    expect(() => validateSafeSvgGlyph("test", { viewBox: "0 0 16 16", paths: "<foreignObject/>" })).toThrow(
+      /Disallowed SVG element/,
+    );
+    expect(() =>
+      validateSafeSvgGlyph("test", { viewBox: "0 0 16 16", paths: "<script>alert(1)</script>" }),
+    ).toThrow(/Unexpected text node|Disallowed SVG element/);
+    expect(() =>
+      validateSafeSvgGlyph("test", {
+        viewBox: "0 0 16 16",
+        paths: '<path d="M0 0" onclick="alert(1)"/>',
+      }),
+    ).toThrow(/Disallowed SVG attribute/);
+    expect(() =>
+      validateSafeSvgGlyph("test", {
+        viewBox: "0 0 16 16",
+        paths: '<use href="https://example.com/evil.svg#a"/>',
+      }),
+    ).toThrow(/Unsafe SVG href/);
+    expect(() =>
+      validateSafeSvgGlyph("test", {
+        viewBox: "0 0 16 16",
+        paths: '<path fill="url(#other-id)" d="M0 0"/>',
+      }),
+    ).toThrow(/Unsafe SVG url\(\) reference/);
   });
 });

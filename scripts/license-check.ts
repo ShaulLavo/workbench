@@ -1,9 +1,11 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import path from "node:path";
+import { generateApprovedGlyphs } from "../packages/icons/scripts/icon-generator";
 import {
   EXCLUDED_VSCODE_ICON_SOURCES,
   FILE_ICON_GLYPHS,
   FILE_ICON_MANIFEST,
+  type FileIconGlyphName,
 } from "../packages/icons/src/index";
 
 const ROOT = process.cwd();
@@ -87,7 +89,7 @@ function checkPackageDeps(pkgDir: string): void {
   }
 }
 
-function checkIconManifest(): void {
+function checkIconManifestAndPayload(): void {
   const excluded = new Set<string>(EXCLUDED_VSCODE_ICON_SOURCES);
   const manifestKeys = new Set(Object.keys(FILE_ICON_MANIFEST));
   const generatedKeys = new Set(Object.keys(FILE_ICON_GLYPHS));
@@ -115,12 +117,37 @@ function checkIconManifest(): void {
   if (FILE_ICON_MANIFEST.claude.source === "vscode-icons") {
     violations.push("packages/icons: claude glyph must not be sourced from @pierre/vscode-icons");
   }
+
+  // Re-generate from pinned inputs with strict SVG tag/attribute/reference validation and compare exact payloads.
+  try {
+    const expectedGlyphs = generateApprovedGlyphs();
+    for (const key of Object.keys(expectedGlyphs) as FileIconGlyphName[]) {
+      const committed = FILE_ICON_GLYPHS[key];
+      const expected = expectedGlyphs[key];
+      if (!committed || committed.viewBox !== expected.viewBox || committed.paths !== expected.paths) {
+        violations.push(
+          `packages/icons: committed glyph "${key}" does not match validated output from approved inputs`,
+        );
+      }
+    }
+  } catch (error) {
+    violations.push(
+      `packages/icons: SVG validation failed: ${error instanceof Error ? error.message : String(error)}`,
+    );
+  }
+
   const noticesPath = path.join(ROOT, "packages/icons/THIRD_PARTY_NOTICES.txt");
   if (!existsSync(noticesPath)) {
     violations.push("packages/icons/THIRD_PARTY_NOTICES.txt is missing");
   } else {
     const notices = readFileSync(noticesPath, "utf8");
-    for (const required of ["@pierre/vscode-icons", "@iconify-json/catppuccin", "simple-icons"]) {
+    for (const required of [
+      "@pierre/vscode-icons",
+      "@iconify-json/catppuccin",
+      "Copyright (c) 2023 Catppuccin",
+      "Copyright (c) 2023 thang-nm",
+      "simple-icons",
+    ]) {
       if (!notices.includes(required)) {
         violations.push(`packages/icons/THIRD_PARTY_NOTICES.txt missing attribution for ${required}`);
       }
@@ -152,7 +179,7 @@ if (existsSync(packagesDir)) {
   }
 }
 
-checkIconManifest();
+checkIconManifestAndPayload();
 
 if (violations.length > 0) {
   console.error("license-check failed:");
@@ -161,5 +188,5 @@ if (violations.length > 0) {
 }
 
 console.log(
-  `license-check: ok (100% MIT/CC0 provenance verified across ${Object.keys(FILE_ICON_MANIFEST).length} approved icon glyphs)`,
+  `license-check: ok (100% MIT/CC0 provenance & validated SVG payload match across ${Object.keys(FILE_ICON_MANIFEST).length} approved icon glyphs)`,
 );

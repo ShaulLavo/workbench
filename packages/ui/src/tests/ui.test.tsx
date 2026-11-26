@@ -11,6 +11,7 @@ import {
   MobilePaneShell,
   RenderErrorBoundary,
   resolveListboxKeyAction,
+  SearchPanel,
   Splitter,
   ToastHost,
   ToolPane,
@@ -122,6 +123,49 @@ describe("@shaulavo/workbench-ui", () => {
     expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
+  it("re-evaluates mutable command enabled() predicates across reopen and at dispatch", () => {
+    let canRun = true;
+    const ran: string[] = [];
+    const stableCommands = [
+      {
+        id: "save",
+        label: "Save File",
+        enabled: () => canRun,
+        run: () => {
+          ran.push("save");
+        },
+      },
+    ];
+
+    function Harness({ open }: { readonly open: boolean }) {
+      return (
+        <WorkbenchPortalProvider>
+          <CommandPalette open={open} onOpenChange={vi.fn()} commands={stableCommands} />
+        </WorkbenchPortalProvider>
+      );
+    }
+
+    const host = mount(<Harness open />);
+    const input = host.querySelector<HTMLInputElement>('[data-testid="wb-command-palette-input"]');
+    expect(host.querySelector('[data-testid="wb-palette-item-save"]')).not.toBeNull();
+
+    // Predicate flips to false while still open -> Enter must NOT execute stale enabled command.
+    canRun = false;
+    act(() => {
+      input?.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+    });
+    expect(ran).toEqual([]);
+
+    // Reopening with the same referentially stable `commands` array hides the disabled command.
+    act(() => {
+      activeRoot?.render(<Harness open={false} />);
+    });
+    act(() => {
+      activeRoot?.render(<Harness open />);
+    });
+    expect(host.querySelector('[data-testid="wb-palette-item-save"]')).toBeNull();
+  });
+
   it("handles FilterField Escape clear, ArrowDown handoff, and IME guard", () => {
     const onArrowDown = vi.fn();
     function Harness() {
@@ -211,6 +255,66 @@ describe("@shaulavo/workbench-ui", () => {
 
     const switcher = host.querySelector<HTMLElement>("[data-wb-pane-switcher]");
     expect(switcher?.hidden).toBe(true);
+  });
+
+  it("wires ARIA tablist controls and arrow-key navigation in MobilePaneShell", () => {
+    function Harness() {
+      const [pane, setPane] = useState<"explorer" | "editor" | "terminal">("explorer");
+      return (
+        <MobilePaneShell
+          activePane={pane}
+          onSelectPane={(next) => setPane(next as "explorer" | "editor" | "terminal")}
+          panes={[
+            { id: "explorer", label: "Files", content: <div>files</div> },
+            { id: "editor", label: "Code", content: <div>code</div> },
+            { id: "terminal", label: "Terminal", content: <div>term</div> },
+          ]}
+        />
+      );
+    }
+
+    const host = mount(<Harness />);
+    const explorerTab = host.querySelector<HTMLButtonElement>('[data-testid="mobile-pane-explorer"]');
+    const panel = host.querySelector<HTMLDivElement>('[role="tabpanel"]');
+    expect(explorerTab?.getAttribute("aria-controls")).toBe(panel?.id);
+    expect(panel?.getAttribute("aria-labelledby")).toBe(explorerTab?.id);
+
+    act(() => {
+      explorerTab?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    const editorTab = host.querySelector<HTMLButtonElement>('[data-testid="mobile-pane-editor"]');
+    expect(editorTab?.getAttribute("aria-selected")).toBe("true");
+    expect(document.activeElement).toBe(editorTab);
+  });
+
+  it("moves focus from SearchPanel filter input into the first match on ArrowDown", () => {
+    const heightSpy = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(320);
+    const widthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(320);
+    try {
+      const host = mount(
+        <SearchPanel
+          query="app"
+          onQueryChange={vi.fn()}
+          matches={[
+            { id: "m1", path: "src/App.tsx", line: 1, column: 1, preview: "export function App() {}" },
+          ]}
+          onSelectMatch={vi.fn()}
+        />,
+      );
+      const input = host.querySelector<HTMLInputElement>('input[aria-label="Search query"]');
+      const firstMatch = host.querySelector<HTMLButtonElement>('[data-testid="wb-search-match-m1"]');
+      expect(input).not.toBeNull();
+      expect(firstMatch).not.toBeNull();
+
+      act(() => {
+        input?.focus();
+        input?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      });
+      expect(document.activeElement).toBe(firstMatch);
+    } finally {
+      heightSpy.mockRestore();
+      widthSpy.mockRestore();
+    }
   });
 
   it("prioritizes ToolPane pending over empty and isolates RenderErrorBoundary failures", () => {

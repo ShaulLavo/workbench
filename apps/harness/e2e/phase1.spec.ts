@@ -63,6 +63,13 @@ for (const host of [
       );
       await expect(tooltipInPortal).toBeVisible({ timeout: 3000 });
       await expect(tooltipInPortal).toContainText("Search");
+
+      // SearchPanel ArrowDown moves focus from the search input into the first match row.
+      await page.getByTestId("activity-search").click();
+      const searchInput = page.getByLabel("Search query");
+      await searchInput.focus();
+      await searchInput.press("ArrowDown");
+      await expect(page.getByTestId("wb-search-match-m1")).toBeFocused();
     }
 
     expect(errors).toEqual([]);

@@ -1,4 +1,4 @@
-import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 import { Dialog } from "@base-ui/react/dialog";
 import type { HotkeyAdapter, WorkbenchCommand } from "@shaulavo/workbench-core";
 import { StrokeIcon } from "@shaulavo/workbench-icons/react";
@@ -14,6 +14,7 @@ export interface CommandPaletteItem {
   readonly hint?: string;
   readonly icon?: ReactNode;
   readonly disabled?: boolean;
+  readonly isEnabled?: () => boolean;
   readonly onSelect: () => void;
 }
 
@@ -23,6 +24,8 @@ export interface CommandPaletteProps {
   readonly commands?: readonly WorkbenchCommand[];
   readonly items?: readonly CommandPaletteItem[];
   readonly hotkeys?: Pick<HotkeyAdapter, "formatHint">;
+  /** Optional revision token from a mutable command registry to force availability re-evaluation while open. */
+  readonly availabilityKey?: unknown;
   readonly placeholder?: string;
   readonly emptyLabel?: string;
   readonly title?: string;
@@ -40,9 +43,43 @@ function matchesQuery(item: CommandPaletteItem, query: string): boolean {
   return true;
 }
 
+function collectVisibleItems(
+  open: boolean,
+  query: string,
+  availabilityKey: unknown,
+  items: readonly CommandPaletteItem[] | undefined,
+  commands: readonly WorkbenchCommand[] | undefined,
+  hotkeys: Pick<HotkeyAdapter, "formatHint"> | undefined,
+): readonly CommandPaletteItem[] {
+  void availabilityKey;
+  if (!open) return [];
+  const source: readonly CommandPaletteItem[] =
+    items ??
+    (commands ?? []).map((command) => ({
+      id: command.id,
+      label: command.label,
+      category: command.category,
+      hint: hotkeys?.formatHint(command.id),
+      isEnabled: command.enabled,
+      onSelect: () => {
+        void command.run();
+      },
+    }));
+
+  const visible: CommandPaletteItem[] = [];
+  for (const item of source) {
+    if (item.disabled) continue;
+    if (item.isEnabled && !item.isEnabled()) continue;
+    if (!matchesQuery(item, query)) continue;
+    visible.push(item);
+  }
+  return visible;
+}
+
 /**
  * Keyboard-driven command palette built on Base UI `Dialog` and portaled into the active theme
- * scope. Opens and closes without enter/exit animation for zero perceived latency.
+ * scope. Re-evaluates command availability on open, query change, and dispatch, and scrolls the
+ * active option into view during keyboard navigation.
  */
 export function CommandPalette({
   open,
@@ -50,6 +87,7 @@ export function CommandPalette({
   commands,
   items,
   hotkeys,
+  availabilityKey,
   placeholder = "Type a command…",
   emptyLabel = "No matching commands",
   title = "Command palette",
@@ -61,32 +99,23 @@ export function CommandPalette({
   const listId = useId();
   const container = useWorkbenchPortalContainer(portalContainer);
 
-  const normalizedItems: readonly CommandPaletteItem[] =
-    items ??
-    (commands ?? []).map((command) => ({
-      id: command.id,
-      label: command.label,
-      category: command.category,
-      hint: hotkeys?.formatHint(command.id),
-      disabled: command.enabled ? !command.enabled() : false,
-      onSelect: () => {
-        void command.run();
-      },
-    }));
-
-  const filtered = normalizedItems.filter((item) => !item.disabled && matchesQuery(item, query));
+  const filtered = collectVisibleItems(open, query, availabilityKey, items, commands, hotkeys);
   const safeActiveIndex = filtered.length === 0 ? -1 : Math.min(activeIndex, filtered.length - 1);
   const activeOptionId = safeActiveIndex >= 0 ? `${listId}-opt-${safeActiveIndex}` : undefined;
 
+  useEffect(() => {
+    if (!open || !activeOptionId) return;
+    document.getElementById(activeOptionId)?.scrollIntoView?.({ block: "nearest" });
+  }, [open, activeOptionId]);
+
   function handleOpenChange(nextOpen: boolean): void {
-    if (!nextOpen) {
-      setQuery("");
-      setActiveIndex(0);
-    }
+    setQuery("");
+    setActiveIndex(0);
     onOpenChange(nextOpen);
   }
 
   function runItem(item: CommandPaletteItem): void {
+    if (item.disabled || (item.isEnabled && !item.isEnabled())) return;
     handleOpenChange(false);
     item.onSelect();
   }

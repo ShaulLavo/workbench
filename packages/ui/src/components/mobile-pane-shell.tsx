@@ -1,4 +1,4 @@
-import type { MouseEvent, ReactNode } from "react";
+import { useId, type KeyboardEvent, type MouseEvent, type ReactNode } from "react";
 import {
   dismissSoftKeyboardOnTouchActivation,
   resolveActivationFocus,
@@ -28,8 +28,8 @@ export interface MobilePaneShellProps {
 
 /**
  * Single-pane phone shell respecting `--wb-keyboard-inset` and `env(safe-area-inset-bottom)`.
- * Collapses the bottom switcher while the soft keyboard is open and dismisses open touch
- * keyboards when switching panes.
+ * Collapses the bottom switcher while the soft keyboard is open, dismisses open touch keyboards
+ * when switching panes, and implements WAI-ARIA tablist keyboard navigation.
  */
 export function MobilePaneShell({
   panes,
@@ -39,10 +39,28 @@ export function MobilePaneShell({
   switcherLabel = "Switch workbench pane",
   className,
 }: MobilePaneShellProps) {
+  const baseId = useId();
+
   function handleSwitch(paneId: WorkbenchPaneId, event: MouseEvent<HTMLButtonElement>): void {
     const decision = resolveActivationFocus(event, "never");
     dismissSoftKeyboardOnTouchActivation(decision, event.currentTarget);
     onSelectPane(paneId);
+  }
+
+  function handleTabKeyDown(index: number, event: KeyboardEvent<HTMLButtonElement>): void {
+    if (panes.length === 0) return;
+    let nextIndex = -1;
+    if (event.key === "ArrowRight") nextIndex = (index + 1) % panes.length;
+    else if (event.key === "ArrowLeft") nextIndex = (index - 1 + panes.length) % panes.length;
+    else if (event.key === "Home") nextIndex = 0;
+    else if (event.key === "End") nextIndex = panes.length - 1;
+    if (nextIndex < 0) return;
+
+    event.preventDefault();
+    const target = panes[nextIndex];
+    if (!target) return;
+    onSelectPane(target.id);
+    document.getElementById(`${baseId}-tab-${target.id}`)?.focus();
   }
 
   return (
@@ -58,7 +76,9 @@ export function MobilePaneShell({
           return (
             <div
               key={pane.id}
+              id={`${baseId}-panel-${pane.id}`}
               role="tabpanel"
+              aria-labelledby={`${baseId}-tab-${pane.id}`}
               data-wb-mobile-pane={pane.id}
               data-active={isActive ? "true" : "false"}
               className="wb-mobile-pane"
@@ -77,17 +97,21 @@ export function MobilePaneShell({
         className="wb-pane-switcher"
         hidden={keyboardOpen}
       >
-        {panes.map((pane) => {
+        {panes.map((pane, index) => {
           const isActive = pane.id === activePane;
           return (
             <button
               key={pane.id}
+              id={`${baseId}-tab-${pane.id}`}
               type="button"
               role="tab"
+              tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
+              aria-controls={`${baseId}-panel-${pane.id}`}
               data-active={isActive ? "true" : "false"}
               data-testid={`mobile-pane-${pane.id}`}
               className="wb-pane-switcher-btn"
+              onKeyDown={(event) => handleTabKeyDown(index, event)}
               onClick={(event) => handleSwitch(pane.id, event)}
             >
               {pane.icon ? (

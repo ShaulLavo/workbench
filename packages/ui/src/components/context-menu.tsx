@@ -37,7 +37,9 @@ export function ContextMenu({
 
   return (
     <BaseContextMenu.Root>
-      <BaseContextMenu.Trigger className={className}>{children}</BaseContextMenu.Trigger>
+      <BaseContextMenu.Trigger data-wb-native-long-press="true" className={className}>
+        {children}
+      </BaseContextMenu.Trigger>
       <BaseContextMenu.Portal container={container}>
         <BaseContextMenu.Positioner className="wb-menu-positioner" sideOffset={2}>
           <BaseContextMenu.Popup className="wb-menu-popup" aria-label={label} data-wb-context-menu="">
