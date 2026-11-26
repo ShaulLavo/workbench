@@ -14,9 +14,12 @@
     "@base-ui/react": "catalog:",
     "@shaulavo/workbench-core": "workspace:*",
     "@shaulavo/workbench-icons": "workspace:*",
+    "@shaulavo/workbench-preview": "workspace:*",
+    "@shaulavo/workbench-terminal": "workspace:*",
     "@shaulavo/workbench-tokens": "workspace:*",
     "@shaulavo/workbench-tree": "workspace:*",
     "@shaulavo/workbench-ui": "workspace:*",
+    "ghostty-webgpu": "catalog:",
     "react": "catalog:",
     "react-dom": "catalog:"
   },

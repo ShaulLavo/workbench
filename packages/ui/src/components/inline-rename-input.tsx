@@ -17,7 +17,7 @@ export interface InlineRenameInputProps extends Omit<
   readonly initialSelection?: readonly [start: number, end: number];
   readonly validationMessage?: string;
   readonly onValueChange?: (value: string) => void;
-  readonly onCommit: (value: string) => void;
+  readonly onCommit: (value: string, reason?: "keyboard" | "blur") => void;
   readonly onCancel: () => void;
 }
 
@@ -45,14 +45,14 @@ export function InlineRenameInput({
   const settledRef = useRef(false);
   const selectedRef = useRef(false);
 
-  function commit(input: HTMLInputElement): void {
+  function commit(input: HTMLInputElement, reason: "keyboard" | "blur"): void {
     if (settledRef.current) return;
     if (validationMessage) {
       input.focus({ preventScroll: true });
       return;
     }
     settledRef.current = true;
-    onCommit(input.value);
+    onCommit(input.value, reason);
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLInputElement>): void {
@@ -62,7 +62,7 @@ export function InlineRenameInput({
     event.preventDefault();
     if (settledRef.current) return;
     if (event.key === "Enter") {
-      commit(event.currentTarget);
+      commit(event.currentTarget, "keyboard");
       return;
     }
     settledRef.current = true;
@@ -89,7 +89,7 @@ export function InlineRenameInput({
         aria-describedby={validationMessage ? errorId : props["aria-describedby"]}
         className={cx("wb-inline-rename-input", className)}
         value={value}
-        onBlur={(event) => commit(event.currentTarget)}
+        onBlur={(event) => commit(event.currentTarget, "blur")}
         onChange={(event) => {
           setValue(event.currentTarget.value);
           onValueChange?.(event.currentTarget.value);

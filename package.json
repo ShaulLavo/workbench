@@ -13,6 +13,7 @@
       "@pierre/vscode-icons": "0.0.9",
       "@shaulavo/hotkeys": "0.0.4",
       "@tanstack/react-virtual": "3.14.28",
+      "ghostty-webgpu": "0.3.34",
       "@types/bun": "1.4.4",
       "@types/react": "19.3.3",
       "@types/react-dom": "19.3.0",

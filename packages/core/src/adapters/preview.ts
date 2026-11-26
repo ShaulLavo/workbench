@@ -45,6 +45,7 @@ export interface PreviewAdapter {
     frame: HTMLIFrameElement,
     port: number,
     onEvent: (event: PreviewFrameEvent) => void,
+    options?: { readonly initialPath?: string },
   ): PreviewFrameController;
   onReloadNeeded?(listener: () => void): () => void;
 }

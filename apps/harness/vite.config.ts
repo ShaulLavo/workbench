@@ -6,7 +6,10 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react({ compiler: true }), tailwindcss()],
   resolve: {
-    dedupe: ["react", "react-dom", "@shaulavo/hotkeys"],
+    dedupe: ["react", "react-dom", "@shaulavo/hotkeys", "@base-ui/react", "ghostty-webgpu"],
+  },
+  optimizeDeps: {
+    exclude: ["ghostty-webgpu"],
   },
   build: {
     target: "esnext",
