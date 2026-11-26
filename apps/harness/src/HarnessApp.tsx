@@ -5,7 +5,7 @@ import {
   resolveActivationFocus,
 } from "@shaulavo/workbench-core";
 import { useKeyboardInset, useWorkbenchTheme } from "@shaulavo/workbench-core/react";
-import { readTerminalTokenColors } from "@shaulavo/workbench-tokens";
+import { observeWorkbenchTheme, readTerminalTokenColors } from "@shaulavo/workbench-tokens";
 
 export interface HarnessAppProps {
   readonly hostKind: "plain" | "tailwind";
@@ -19,6 +19,11 @@ const SAMPLE_TABS = [
   { id: "package.json", label: "package.json", tone: "json" },
 ] as const;
 
+function readRootTerminalBg(): string {
+  const colors = readTerminalTokenColors(document.documentElement);
+  return `rgb(${colors.background.r}, ${colors.background.g}, ${colors.background.b})`;
+}
+
 export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppProps) {
   const [preset, setPreset] = useState<"sprockt" | "fregat">(initialPreset);
   const [mode, setMode] = useState<"light" | "dark">(initialMode);
@@ -26,17 +31,20 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [scopedMode, setScopedMode] = useState<"light" | "dark">(initialMode === "light" ? "dark" : "light");
   const [activeTab, setActiveTab] = useState<string>(SAMPLE_TABS[0].id);
   const [lastDecision, setLastDecision] = useState<string>("none");
-  const [termBg, setTermBg] = useState<string>("");
+  const [termBg, setTermBg] = useState<string>(() => readRootTerminalBg());
+  const [scopedNode, setScopedNode] = useState<HTMLElement | null>(null);
 
-  const scopedRef = useRef<HTMLDivElement | null>(null);
   const editorInputRef = useRef<HTMLTextAreaElement | null>(null);
 
   useKeyboardInset();
   const rootTheme = useWorkbenchTheme(document.documentElement);
-  const scopedTheme = useWorkbenchTheme(scopedRef.current);
+  const scopedTheme = useWorkbenchTheme(scopedNode);
 
   useEffect(() => {
     ensurePointerModalityTracking();
+    return observeWorkbenchTheme(document.documentElement, () => {
+      setTermBg(readRootTerminalBg());
+    });
   }, []);
 
   useEffect(() => {
@@ -46,9 +54,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     root.classList.toggle("dark", mode === "dark");
     if (density === "compact") root.dataset.wbDensity = "compact";
     else delete root.dataset.wbDensity;
-
-    const colors = readTerminalTokenColors(root);
-    setTermBg(`rgb(${colors.background.r}, ${colors.background.g}, ${colors.background.b})`);
   }, [preset, mode, density]);
 
   function onTabActivate(tabId: string, event: React.MouseEvent<HTMLButtonElement>): void {
@@ -110,10 +115,18 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             <div>terminalBg: {termBg}</div>
             <div>preset: {preset}</div>
           </div>
+          {hostKind === "tailwind" ? (
+            <div
+              className="rounded border border-wb-border bg-wb-well p-2 text-xs text-wb-fg"
+              data-testid="tailwind-bridge-probe"
+            >
+              Tailwind @theme inline bridge active
+            </div>
+          ) : null}
         </section>
 
         <section
-          ref={scopedRef}
+          ref={setScopedNode}
           className="harness-card"
           data-wb-theme-scope=""
           data-wb-theme={preset}

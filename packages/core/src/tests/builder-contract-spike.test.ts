@@ -86,7 +86,7 @@ describe("Consumer 3 vibe-builder pre-freeze contract spike", () => {
             onEvent({ type: "navigate", location: { port, path } });
           },
           reload: () => {
-            frame.src = frame.src;
+            frame.setAttribute("src", frame.getAttribute("src") ?? "");
           },
           back: () => {},
           forward: () => {},

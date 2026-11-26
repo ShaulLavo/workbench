@@ -2,11 +2,14 @@ import { expect, test } from "@playwright/test";
 
 test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 host (Fregat)", async ({
   page,
-}) => {
+}, testInfo) => {
   const errors: string[] = [];
-  page.on("pageerror", (error) => errors.push(error.message));
+  page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (msg) => {
-    if (msg.type() === "error") errors.push(msg.text());
+    if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
+  });
+  page.on("requestfailed", (req) => {
+    errors.push(`requestfailed: ${req.url()} (${req.failure()?.errorText ?? "unknown"})`);
   });
 
   // Plain-CSS host (Sprockt Sheet & Biro)
@@ -19,19 +22,50 @@ test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 
   await expect(page.getByTestId("root-theme-probe")).toContainText("observedScheme: dark");
   await expect(page.getByTestId("root-theme-probe")).toContainText("terminalBg: rgb(10, 13, 20)");
 
-  // Scoped embedded theme updates independently of root and sets matching text ink color
+  // Scoped embedded theme updates independently of root, sets matching text ink color,
+  // and inherits live --wb-keyboard-inset from <html> without shadowing it.
+  const scopedCard = page.getByTestId("scoped-theme-card");
   const scopedProbe = page.getByTestId("scoped-theme-probe");
   await expect(scopedProbe).toContainText("scopedObserved: dark");
   await expect(scopedProbe).toHaveCSS("color", "rgb(233, 237, 243)");
+  await page.evaluate(() => document.documentElement.style.setProperty("--wb-keyboard-inset", "280px"));
+  const inheritedInset = await scopedCard.evaluate((el) =>
+    getComputedStyle(el).getPropertyValue("--wb-keyboard-inset").trim(),
+  );
+  expect(inheritedInset).toBe("280px");
+  await page.evaluate(() => document.documentElement.style.removeProperty("--wb-keyboard-inset"));
+
   await page.getByTestId("toggle-scoped-mode").click();
   await expect(scopedProbe).toContainText("scopedObserved: light");
   await expect(scopedProbe).toHaveCSS("color", "rgb(17, 17, 17)");
 
-  // Tailwind v4 host (Fregat Graphite)
+  // Compact density overrides both Sprockt and Fregat presets on desktop, while coarse touch keeps 44px (2.75rem) rows.
+  const expectedCompactRow = testInfo.project.name === "webkit-touch" ? "2.75rem" : "1.375rem";
+  await page.getByTestId("toggle-density").click();
+  const compactSprocktRow = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--wb-tree-row-height").trim(),
+  );
+  expect(compactSprocktRow).toBe(expectedCompactRow);
+  await page.getByTestId("preset-fregat").click();
+  const compactFregatRow = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--wb-tree-row-height").trim(),
+  );
+  expect(compactFregatRow).toBe(expectedCompactRow);
+
+  // Tailwind v4 host (Fregat Graphite) + @theme inline bridge utility classes
   await page.goto("/tailwind.html");
   await expect(page.getByTestId("harness-ready")).toHaveAttribute("data-host-kind", "tailwind");
   await expect(page.getByTestId("root-theme-probe")).toContainText("observedScheme: dark");
   await expect(page.getByTestId("root-theme-probe")).toContainText("preset: fregat");
+
+  const bridgeProbe = page.getByTestId("tailwind-bridge-probe");
+  await expect(bridgeProbe).toBeVisible();
+  const bridgeColors = await bridgeProbe.evaluate((el) => {
+    const style = getComputedStyle(el);
+    return { bg: style.backgroundColor, color: style.color };
+  });
+  expect(bridgeColors.bg).not.toBe("rgba(0, 0, 0, 0)");
+  expect(bridgeColors.bg).not.toBe(bridgeColors.color);
 
   expect(errors).toEqual([]);
 });

@@ -157,6 +157,8 @@ function hasSnapshotPath(snapshot: IndexedTreeSnapshot, targetPath: string): boo
 function destinationSettled(snapshot: IndexedTreeSnapshot, targetPath: string): boolean {
   if (hasSnapshotPath(snapshot, targetPath)) return true;
   const parent = parentDirectoryOf(targetPath);
+  // Root directory is always loaded, so a pending root-level create/move never settles before appearing.
+  if (parent === "") return false;
   return !snapshot.loadedDirectoryPaths.has(parent);
 }
 

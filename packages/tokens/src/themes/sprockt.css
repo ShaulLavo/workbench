@@ -3,8 +3,8 @@
 @layer theme, base, components, utilities, workbench, workbench-app;
 
 @layer workbench {
-  :root[data-wb-theme="sprockt"],
-  [data-wb-theme-scope][data-wb-theme="sprockt"] {
+  /* Single-attribute specificity (0,1,0): beats :where() defaults (0,0,0), yields to density/shell (0,2,0). */
+  [data-wb-theme="sprockt"] {
     --wb-font-ui:
       "Schibsted Grotesk Variable", "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI",
       sans-serif;

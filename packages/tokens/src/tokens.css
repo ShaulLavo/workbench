@@ -3,8 +3,13 @@
 @layer theme, base, components, utilities, workbench, workbench-app;
 
 @layer workbench {
-  :root,
-  [data-wb-theme-scope] {
+  :where(:root) {
+    /* Mobile soft keyboard inset written on <html> by attachKeyboardInset; must not be shadowed on embedded scopes. */
+    --wb-keyboard-inset: 0px;
+  }
+
+  /* Zero-specificity base defaults so presets (0,1,0) always override defaults, and density/shell (0,2,0) always override presets. */
+  :where(:root, [data-wb-theme-scope]) {
     color-scheme: light dark;
 
     /* ── Typography ── */
@@ -73,9 +78,6 @@
 
     /* ── Tab accent (opt-in per theme) ── */
     --wb-tab-accent: transparent;
-
-    /* ── Mobile soft keyboard inset (written by useKeyboardInset) ── */
-    --wb-keyboard-inset: 0px;
 
     /* ── Motion ── */
     --wb-dur-enter: 140ms;
@@ -155,7 +157,9 @@
 
   @media (pointer: coarse) {
     :root,
-    [data-wb-theme-scope] {
+    :root[data-wb-theme],
+    [data-wb-theme-scope],
+    [data-wb-theme-scope][data-wb-theme] {
       --wb-tree-row-height: 2.75rem;
     }
   }
