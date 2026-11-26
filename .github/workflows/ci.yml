@@ -22,6 +22,7 @@ jobs:
       - run: bun run build
       - run: bun run gates
       - run: bun run test:unit
+      - run: bun run bench:tree:gate
       - run: bun run pack:check
       - name: Install Playwright browsers (Chromium & WebKit)
         run: bunx playwright install --with-deps chromium webkit

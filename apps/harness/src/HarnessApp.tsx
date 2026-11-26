@@ -12,6 +12,7 @@ import {
 import { useSubscribable, useWorkbenchTheme } from "@shaulavo/workbench-core/react";
 import { FileIconSprite, FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
 import { observeWorkbenchTheme, readTerminalTokenColors } from "@shaulavo/workbench-tokens";
+import { FileTreeView } from "@shaulavo/workbench-tree/react";
 import {
   ActivityBar,
   BarTab,
@@ -20,8 +21,6 @@ import {
   ConfirmDialog,
   createToastStore,
   DesktopSplitGrid,
-  FilterField,
-  InlineRenameInput,
   Kbd,
   MobilePaneShell,
   PointContextMenu,
@@ -35,6 +34,12 @@ import {
   type SearchMatch,
   type SearchQueryOptions,
 } from "@shaulavo/workbench-ui";
+import {
+  create50kScaleTree,
+  createDemoIndexedTree,
+  createLazyDemoTree,
+  type HarnessTreeBundle,
+} from "./tree-fixture";
 
 export interface HarnessAppProps {
   readonly hostKind: "plain" | "tailwind";
@@ -132,8 +137,8 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [keyboardOpen, setKeyboardOpen] = useState(false);
 
   const [sidebarView, setSidebarView] = useState<"explorer" | "search">("explorer");
-  const [fileFilter, setFileFilter] = useState("");
-  const [renamingFile, setRenamingFile] = useState<string | null>(null);
+  const [treeMode, setTreeMode] = useState<"25" | "50k" | "lazy">("25");
+  const [treeBundle, setTreeBundle] = useState<HarnessTreeBundle>(() => createDemoIndexedTree());
   const [searchQuery, setSearchQuery] = useState("workbench");
   const [searchOptions, setSearchOptions] = useState<SearchQueryOptions>({
     caseSensitive: false,
@@ -242,7 +247,7 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
       hint: "F2",
       testId: "ctx-rename",
       onSelect() {
-        setRenamingFile(activeTab);
+        treeBundle.model.setDraft({ mode: "rename", path: activeTab });
       },
     },
     {
@@ -258,9 +263,13 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     },
   ];
 
-  const visibleFiles = SAMPLE_FILES.filter((file) =>
-    file.id.toLocaleLowerCase().includes(fileFilter.trim().toLocaleLowerCase()),
-  );
+  function selectTreeMode(next: "25" | "50k" | "lazy"): void {
+    setTreeMode(next);
+    if (next === "50k") setTreeBundle(create50kScaleTree());
+    else if (next === "lazy") setTreeBundle(createLazyDemoTree());
+    else setTreeBundle(createDemoIndexedTree());
+  }
+
   const filteredMatches = SAMPLE_SEARCH_MATCHES.filter((match) =>
     !searchQuery.trim()
       ? true
@@ -284,60 +293,52 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     ) : (
       <ToolPane
         title="Explorer"
-        detail={`${visibleFiles.length} files`}
-        subheader={
-          <div className="wb-search-bar">
-            <FilterField
-              aria-label="Filter files"
-              placeholder="Filter files…"
-              value={fileFilter}
-              onValueChange={setFileFilter}
-            />
+        scroll={false}
+        actions={
+          <div className="harness-toolbar-group">
+            <button
+              type="button"
+              className="harness-btn"
+              data-testid="tree-mode-25"
+              data-active={treeMode === "25"}
+              onClick={() => selectTreeMode("25")}
+            >
+              25
+            </button>
+            <button
+              type="button"
+              className="harness-btn"
+              data-testid="tree-mode-50k"
+              data-active={treeMode === "50k"}
+              onClick={() => selectTreeMode("50k")}
+            >
+              50k
+            </button>
+            <button
+              type="button"
+              className="harness-btn"
+              data-testid="tree-mode-lazy"
+              data-active={treeMode === "lazy"}
+              onClick={() => selectTreeMode("lazy")}
+            >
+              Lazy
+            </button>
           </div>
         }
       >
-        <div className="harness-file-list" data-testid="harness-file-list">
-          {visibleFiles.map((file) => (
-            <div
-              key={file.id}
-              className="harness-file-row"
-              data-active={activeTab === file.id ? "true" : "false"}
-            >
-              <FileTypeIcon entry={{ name: file.id, type: "file" }} preset={iconPreset} sprite />
-              {renamingFile === file.id ? (
-                <InlineRenameInput
-                  aria-label={`Rename ${file.label}`}
-                  initialValue={file.label}
-                  onCommit={(next) => {
-                    setRenamingFile(null);
-                    toastStore.push({ id: "renamed", tone: "info", title: `Renamed to ${next}` });
-                  }}
-                  onCancel={() => setRenamingFile(null)}
-                />
-              ) : (
-                <button
-                  type="button"
-                  className="harness-file-btn"
-                  data-testid={`file-row-${file.id}`}
-                  onClick={(event) => {
-                    onTabActivate(
-                      file.id,
-                      { shouldFocusEditor: !phoneShell, origin: phoneShell ? "touch" : "mouse" },
-                      event.currentTarget,
-                    );
-                    if (phoneShell) layout.setMobileActivePane("editor");
-                  }}
-                  onContextMenu={(event) => {
-                    event.preventDefault();
-                    setContextMenu({ open: true, x: event.clientX, y: event.clientY });
-                  }}
-                >
-                  {file.label}
-                </button>
-              )}
-            </div>
-          ))}
-        </div>
+        <FileTreeView
+          key={treeMode}
+          model={treeBundle.model}
+          adapter={treeBundle.adapter}
+          iconPreset={iconPreset}
+          onOpenFile={(path, decision) => {
+            onTabActivate(path, decision);
+            if (phoneShell) layout.setMobileActivePane("editor");
+          }}
+          onError={(message) => {
+            toastStore.push({ id: "tree-error", tone: "error", title: message });
+          }}
+        />
       </ToolPane>
     );
 

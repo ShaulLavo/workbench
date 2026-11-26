@@ -1,0 +1,25 @@
+{
+  "capturedAt": "2026-11-27T00:29:23+02:00",
+  "source": "ShaulLavo/fregat pre-cutover @workspace/tree (apps/web/scripts/file-tree-prepared-input-benchmark.ts)",
+  "environment": "Linux x86_64, Bun 1.4.4",
+  "results": [
+    {
+      "pathCount": 10000,
+      "preparedColdMedianMs": 10.744,
+      "preparedRemountMedianMs": 3.928,
+      "rawColdMedianMs": 10.896,
+      "rawRemountMedianMs": 10.487,
+      "coldSlowdown": -0.014,
+      "remountSpeedup": 0.625
+    },
+    {
+      "pathCount": 50000,
+      "preparedColdMedianMs": 83.279,
+      "preparedRemountMedianMs": 17.868,
+      "rawColdMedianMs": 86.751,
+      "rawRemountMedianMs": 86.29,
+      "coldSlowdown": -0.04,
+      "remountSpeedup": 0.793
+    }
+  ]
+}

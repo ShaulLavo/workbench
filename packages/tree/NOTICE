@@ -1,0 +1,4 @@
+Third-party notices for @shaulavo/workbench-*
+
+This repository is licensed under the MIT License (see LICENSE).
+Third-party MIT packages consumed at build or runtime retain their respective copyright notices.

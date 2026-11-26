@@ -86,9 +86,9 @@ test("layout-splitter-mobile resizes desktop panes and switches/collapses mobile
     const switcher = page.locator("[data-wb-pane-switcher]");
     await expect(switcher).toBeVisible();
 
-    // Switch to Files pane on touch and verifyCLAUDE.md row renders.
+    // Switch to Files pane on touch and verify CLAUDE.md row renders.
     await page.getByTestId("mobile-pane-explorer").tap();
-    await expect(page.getByTestId("file-row-CLAUDE.md")).toBeVisible();
+    await expect(page.getByTestId("wb-tree-row-CLAUDE.md")).toBeVisible();
 
     // Return to Editor, focus editor input, then verify keyboard-open collapses switcher.
     await page.getByTestId("mobile-pane-editor").tap();

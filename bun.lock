@@ -34,6 +34,7 @@
         "@shaulavo/workbench-core": "workspace:*",
         "@shaulavo/workbench-icons": "workspace:*",
         "@shaulavo/workbench-tokens": "workspace:*",
+        "@shaulavo/workbench-tree": "workspace:*",
         "@shaulavo/workbench-ui": "workspace:*",
         "react": "catalog:",
         "react-dom": "catalog:",
@@ -106,6 +107,35 @@
         "typescript": "catalog:",
         "vite": "catalog:",
         "vitest": "catalog:",
+      },
+    },
+    "packages/tree": {
+      "name": "@shaulavo/workbench-tree",
+      "version": "0.0.1",
+      "dependencies": {
+        "@shaulavo/workbench-core": "workspace:*",
+        "@shaulavo/workbench-icons": "workspace:*",
+        "@shaulavo/workbench-tokens": "workspace:*",
+        "@shaulavo/workbench-ui": "workspace:*",
+        "@tanstack/react-virtual": "catalog:",
+      },
+      "devDependencies": {
+        "@base-ui/react": "catalog:",
+        "@types/react": "catalog:",
+        "@types/react-dom": "catalog:",
+        "@vitejs/plugin-react": "catalog:",
+        "happy-dom": "catalog:",
+        "oxc-transform-react": "catalog:",
+        "react": "catalog:",
+        "react-dom": "catalog:",
+        "typescript": "catalog:",
+        "vite": "catalog:",
+        "vitest": "catalog:",
+      },
+      "peerDependencies": {
+        "@base-ui/react": ">=1.0.0",
+        "react": ">=19.2.0",
+        "react-dom": ">=19.2.0",
       },
     },
     "packages/ui": {
@@ -371,6 +401,8 @@
 
     "@shaulavo/workbench-tokens": ["@shaulavo/workbench-tokens@workspace:packages/tokens"],
 
+    "@shaulavo/workbench-tree": ["@shaulavo/workbench-tree@workspace:packages/tree"],
+
     "@shaulavo/workbench-ui": ["@shaulavo/workbench-ui@workspace:packages/ui"],
 
     "@tailwindcss/node": ["@tailwindcss/node@4.3.3", "", { "dependencies": { "@jridgewell/remapping": "^2.3.5", "enhanced-resolve": "^5.24.1", "jiti": "^2.7.0", "lightningcss": "1.32.0", "magic-string": "^0.30.21", "source-map-js": "^1.2.1", "tailwindcss": "4.3.3" } }, "sha512-/T8IKEsf9VTU6tLjgC7+sv2mOPtQxzE2jMw7u4Tt40Tx+QSZxpzh95/H6cMKoja9XuW7iMdLJYBB0o9G1CaAgg=="],
@@ -616,6 +648,8 @@
     "ws": ["ws@8.23.0", "", { "peerDependencies": { "bufferutil": "^4.0.1", "utf-8-validate": ">=5.0.2" }, "optionalPeers": ["bufferutil", "utf-8-validate"] }, "sha512-wCkmX8QMOrKjgO8HW2WyDbTSGeqkocxgDzS9iR79rEAexty6/2qzilx3Ag8Tqf9ykop3irLKle0MtVn5qjVnoQ=="],
 
     "@shaulavo/workbench-icons/happy-dom": ["happy-dom@20.14.5", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ=="],
+
+    "@shaulavo/workbench-tree/happy-dom": ["happy-dom@20.14.5", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ=="],
 
     "@shaulavo/workbench-ui/happy-dom": ["happy-dom@20.14.5", "", { "dependencies": { "@types/node": ">=20.0.0", "@types/whatwg-mimetype": "^3.0.2", "@types/ws": "^8.18.1", "buffer-image-size": "^0.6.4", "entities": "^7.0.1", "whatwg-mimetype": "^3.0.0", "ws": "^8.21.0" } }, "sha512-x/RzkpWO40bTjIoT30iQtt64FLLmH/iRcUCN2X//bLx7H3ifkdfPXyqsro/OYtqzIAhiLMMA7mmiOR9C3NOKjQ=="],
 
