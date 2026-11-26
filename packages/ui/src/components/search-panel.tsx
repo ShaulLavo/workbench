@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { resolveActivationFocus, type ActivationFocusDecision } from "@shaulavo/workbench-core";
 import { FileTypeIcon } from "@shaulavo/workbench-icons/react";
 import { cx } from "../utils/cx";
 import { resolveListboxKeyAction } from "../utils/listbox";
 import { FilterField, type FilterFieldHandle } from "./filter-field";
 import { ToolPane } from "./tool-pane";
-import { VirtualList, type VirtualListHandle } from "./virtual-list";
+import { VirtualList } from "./virtual-list";
 
 export interface SearchQueryOptions {
   readonly caseSensitive: boolean;
@@ -72,23 +72,12 @@ export function SearchPanel({
     null,
   );
   const filterRef = useRef<FilterFieldHandle | null>(null);
-  const resultsScrollRef = useRef<HTMLDivElement | null>(null);
-  const virtualHandleRef = useRef<VirtualListHandle | null>(null);
 
   const currentOptions: SearchQueryOptions = options ?? {
     caseSensitive: false,
     wholeWord: false,
     regex: false,
   };
-
-  useEffect(() => {
-    if (!focusRequest) return;
-    virtualHandleRef.current?.scrollToIndex(focusRequest.index, { align: "auto" });
-    const button = resultsScrollRef.current?.querySelector<HTMLButtonElement>(
-      `[data-index="${focusRequest.index}"] button`,
-    );
-    button?.focus();
-  }, [focusRequest]);
 
   function toggleOption(key: keyof SearchQueryOptions): void {
     onOptionsChange?.({ ...currentOptions, [key]: !currentOptions[key] });
@@ -212,13 +201,22 @@ export function SearchPanel({
           items={matches}
           getKey={(item) => item.id}
           activeIndex={activeIndex}
-          scrollRef={resultsScrollRef}
-          handleRef={virtualHandleRef}
           estimateSize={(_item, _idx, rowHeight) => Math.max(rowHeight, 42)}
           initialRect={{ width: 320, height: 320 }}
           className="wb-search-results"
           renderRow={(match, index) => (
             <button
+              ref={
+                focusRequest && focusRequest.index === index
+                  ? (node) => {
+                      if (!node) return;
+                      node.focus();
+                      setFocusRequest((current) =>
+                        current && current.seq === focusRequest.seq ? null : current,
+                      );
+                    }
+                  : undefined
+              }
               type="button"
               className="wb-search-row"
               tabIndex={index === activeIndex ? 0 : -1}

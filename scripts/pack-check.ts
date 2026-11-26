@@ -197,20 +197,29 @@ try {
     "utf8",
   );
   const expectedBaseUiSubpaths = new Set<string>();
-  const uiSrcDir = path.join(ROOT, "packages/ui/src/components");
-  for (const file of readdirSync(uiSrcDir)) {
-    if (!file.endsWith(".tsx") && !file.endsWith(".ts")) continue;
-    const srcText = readFileSync(path.join(uiSrcDir, file), "utf8");
-    for (const match of srcText.matchAll(/from\s+["'](@base-ui\/react\/[^"']+)["']/g)) {
-      if (match[1]) expectedBaseUiSubpaths.add(match[1]);
+  const baseUiImportRe = /(?:from\s+|import\s*\(?\s*)["'](@base-ui\/react(?:\/[^"']+)?)["']/g;
+  const collectUiImports = (dir: string): void => {
+    for (const entry of readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "tests") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) {
+        collectUiImports(full);
+        continue;
+      }
+      if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
+      const srcText = readFileSync(full, "utf8");
+      for (const match of srcText.matchAll(baseUiImportRe)) {
+        if (match[1]) expectedBaseUiSubpaths.add(match[1]);
+      }
     }
-  }
+  };
+  collectUiImports(path.join(ROOT, "packages/ui/src"));
   if (expectedBaseUiSubpaths.size === 0) {
-    throw new Error("Expected @shaulavo/workbench-ui to import at least one @base-ui/react subpath");
+    throw new Error("Expected @shaulavo/workbench-ui to import at least one @base-ui/react specifier");
   }
   for (const subpath of expectedBaseUiSubpaths) {
     const escaped = subpath.replaceAll("/", "\\/");
-    if (!new RegExp(`from\\s+["']${escaped}["']`).test(uiEntry)) {
+    if (!new RegExp(`(?:from\\s+|import\\s*\\(?\\s*)["']${escaped}["']`).test(uiEntry)) {
       throw new Error(`@shaulavo/workbench-ui bundled instead of externalizing ${subpath}`);
     }
   }
