@@ -409,8 +409,9 @@ describe("@shaulavo/workbench-terminal", () => {
     );
     expect(tabButton).not.toBeNull();
 
-    // Press F2 on the focused tab button -> inline rename input opens.
+    // Press F2 on the focused tab button -> inline rename input opens; Escape restores focus to the tab.
     act(() => {
+      tabButton?.focus();
       tabButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true, cancelable: true }));
     });
     const renameInput = host.querySelector<HTMLInputElement>('[data-testid="wb-term-rename-input-bash-1"]');
@@ -422,11 +423,26 @@ describe("@shaulavo/workbench-terminal", () => {
       );
     });
     expect(host.querySelector('[data-testid="wb-term-rename-input-bash-1"]')).toBeNull();
+    const tabAfterCancel = host.querySelector<HTMLButtonElement>(
+      '[data-testid="wb-term-tab-bash-1"] button[role="tab"]',
+    );
+    expect(document.activeElement).toBe(tabAfterCancel);
 
-    // Clicking the Rename button in the header also opens inline rename.
+    // Clicking the Rename button opens inline rename; Enter commits and restores focus to the renamed tab.
     act(() => {
       host.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
     });
-    expect(host.querySelector('[data-testid="wb-term-rename-input-bash-1"]')).not.toBeNull();
+    const renameInput2 = host.querySelector<HTMLInputElement>('[data-testid="wb-term-rename-input-bash-1"]');
+    expect(renameInput2).not.toBeNull();
+    act(() => {
+      renameInput2?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(renameSession).toHaveBeenCalledWith("bash-1", "bash");
+    const tabAfterCommit = host.querySelector<HTMLButtonElement>(
+      '[data-testid="wb-term-tab-bash-1"] button[role="tab"]',
+    );
+    expect(document.activeElement).toBe(tabAfterCommit);
   });
 });

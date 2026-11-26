@@ -242,16 +242,24 @@ describe("@shaulavo/workbench-preview", () => {
     expect(iframe?.getAttribute("sandbox")).not.toContain("allow-same-origin");
     expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/start");
 
-    // Cross-origin reload before any toolbar navigation must keep /start, not fall back to /.
+    // Opaque sandboxed frames must NEVER read contentDocument on frame load or reload (avoids WebKit pageerror).
+    const contentDocSpy = vi.fn(() => {
+      throw new Error("cross-origin");
+    });
     Object.defineProperty(iframe, "contentDocument", {
-      get() {
-        throw new Error("cross-origin");
-      },
+      get: contentDocSpy,
       configurable: true,
     });
     act(() => {
+      iframe?.dispatchEvent(new Event("load"));
+    });
+    expect(contentDocSpy).not.toHaveBeenCalled();
+
+    // Cross-origin reload before any toolbar navigation must keep /start without touching contentDocument.
+    act(() => {
       host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-reload"]')?.click();
     });
+    expect(contentDocSpy).not.toHaveBeenCalled();
     expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/start");
 
     // Navigate to /next then press Back -> returns to /start (not /).

@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type {
   HotkeyAdapter,
   Subscribable,
@@ -64,6 +64,22 @@ export function TerminalPanel({
   const activeId = useSubscribable(adapter.activeId);
   const splitId = useSubscribable(adapter.splitId);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const headerRef = useRef<HTMLDivElement | null>(null);
+  const restoreFocusSessionRef = useRef<string | null>(null);
+
+  useEffect(() => {
+    if (renamingId !== null) return;
+    const targetSessionId = restoreFocusSessionRef.current;
+    if (!targetSessionId) return;
+    restoreFocusSessionRef.current = null;
+    const header = headerRef.current;
+    if (!header) return;
+    for (const tab of header.querySelectorAll<HTMLElement>("[data-wb-term-session]")) {
+      if (tab.dataset.wbTermSession !== targetSessionId) continue;
+      tab.querySelector<HTMLButtonElement>('button[role="tab"]')?.focus();
+      return;
+    }
+  }, [renamingId]);
 
   const primarySession = sessions.find((s) => s.id === activeId) ?? sessions[0];
   const secondarySession =
@@ -73,7 +89,7 @@ export function TerminalPanel({
 
   return (
     <section data-wb-terminal-panel="" aria-label="Terminal" className={cx("wb-terminal-panel", className)}>
-      <div className="wb-terminal-header">
+      <div ref={headerRef} className="wb-terminal-header">
         <BarTabStrip label="Terminal sessions">
           {sessions.map((session) => {
             const isActive = session.id === primarySession?.id;
@@ -86,12 +102,16 @@ export function TerminalPanel({
                     aria-label={`Rename ${session.title}`}
                     initialValue={session.title}
                     data-testid={`wb-term-rename-input-${session.id}`}
-                    onCommit={(next) => {
+                    onCommit={(next, reason) => {
                       const trimmed = next.trim();
                       if (trimmed) adapter.renameSession(session.id, trimmed);
+                      if (reason === "keyboard") restoreFocusSessionRef.current = session.id;
                       setRenamingId(null);
                     }}
-                    onCancel={() => setRenamingId(null)}
+                    onCancel={() => {
+                      restoreFocusSessionRef.current = session.id;
+                      setRenamingId(null);
+                    }}
                   />
                 </div>
               );
@@ -103,6 +123,7 @@ export function TerminalPanel({
                 label={session.title}
                 tone="shell"
                 icon={<SessionStatusDot status={session.status} />}
+                data-wb-term-session={session.id}
                 data-testid={`wb-term-tab-${session.id}`}
                 onActivate={() => adapter.selectSession(session.id)}
                 onDoubleClickLabel={() => setRenamingId(session.id)}

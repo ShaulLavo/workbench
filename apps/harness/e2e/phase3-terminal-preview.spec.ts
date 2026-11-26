@@ -74,15 +74,22 @@ for (const host of [
       await page.getByTestId("wb-term-split").click();
       await expect(page.locator("[data-wb-terminal]")).toHaveCount(2);
 
-      // Keyboard F2 on focused terminal tab enters inline rename and commits cleanly.
+      // Keyboard F2 on focused terminal tab enters inline rename; Escape and Enter both restore focus to the tab.
       const tabButton = page.locator('[data-testid="wb-term-tab-logs-2"] button[role="tab"]');
       await tabButton.focus();
       await page.keyboard.press("F2");
       const renameInput = page.getByTestId("wb-term-rename-input-logs-2");
       await expect(renameInput).toBeVisible();
+      await renameInput.press("Escape");
+      await expect(renameInput).toHaveCount(0);
+      await expect(tabButton).toBeFocused();
+
+      await page.keyboard.press("F2");
+      await expect(renameInput).toBeVisible();
       await renameInput.fill("api logs");
       await renameInput.press("Enter");
       await expect(page.getByTestId("wb-term-tab-logs-2")).toContainText("api logs");
+      await expect(tabButton).toBeFocused();
     }
 
     expect(errors).toEqual([]);
