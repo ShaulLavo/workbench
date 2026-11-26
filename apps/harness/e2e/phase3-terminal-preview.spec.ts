@@ -90,6 +90,16 @@ for (const host of [
       await renameInput.press("Enter");
       await expect(page.getByTestId("wb-term-tab-logs-2")).toContainText("api logs");
       await expect(tabButton).toBeFocused();
+
+      // Blurring inline rename onto another control commits without stealing focus back to the tab.
+      await page.keyboard.press("F2");
+      await expect(renameInput).toBeVisible();
+      await renameInput.fill("server logs");
+      const splitBtn = page.getByTestId("wb-term-split");
+      await splitBtn.focus();
+      await expect(renameInput).toHaveCount(0);
+      await expect(page.getByTestId("wb-term-tab-logs-2")).toContainText("server logs");
+      await expect(splitBtn).toBeFocused();
     }
 
     expect(errors).toEqual([]);

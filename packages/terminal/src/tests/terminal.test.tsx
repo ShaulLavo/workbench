@@ -444,5 +444,20 @@ describe("@shaulavo/workbench-terminal", () => {
       '[data-testid="wb-term-tab-bash-1"] button[role="tab"]',
     );
     expect(document.activeElement).toBe(tabAfterCommit);
+
+    // Blurring the rename input to another control commits without stealing focus back to the tab.
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
+    });
+    const renameInput3 = host.querySelector<HTMLInputElement>('[data-testid="wb-term-rename-input-bash-1"]');
+    const newBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]');
+    expect(renameInput3).not.toBeNull();
+    expect(newBtn).not.toBeNull();
+    act(() => {
+      newBtn?.focus();
+      renameInput3?.dispatchEvent(new FocusEvent("blur", { bubbles: true, relatedTarget: newBtn }));
+    });
+    expect(host.querySelector('[data-testid="wb-term-rename-input-bash-1"]')).toBeNull();
+    expect(document.activeElement).toBe(newBtn);
   });
 });
