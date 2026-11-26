@@ -1,11 +1,11 @@
-import { useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type MouseEvent } from "react";
 import { resolveActivationFocus, type ActivationFocusDecision } from "@shaulavo/workbench-core";
 import { FileTypeIcon } from "@shaulavo/workbench-icons/react";
 import { cx } from "../utils/cx";
 import { resolveListboxKeyAction } from "../utils/listbox";
 import { FilterField, type FilterFieldHandle } from "./filter-field";
 import { ToolPane } from "./tool-pane";
-import { VirtualList } from "./virtual-list";
+import { VirtualList, type VirtualListHandle } from "./virtual-list";
 
 export interface SearchQueryOptions {
   readonly caseSensitive: boolean;
@@ -68,8 +68,12 @@ export function SearchPanel({
   className,
 }: SearchPanelProps) {
   const [activeIndex, setActiveIndex] = useState(0);
+  const [focusRequest, setFocusRequest] = useState<{ readonly index: number; readonly seq: number } | null>(
+    null,
+  );
   const filterRef = useRef<FilterFieldHandle | null>(null);
   const resultsScrollRef = useRef<HTMLDivElement | null>(null);
+  const virtualHandleRef = useRef<VirtualListHandle | null>(null);
 
   const currentOptions: SearchQueryOptions = options ?? {
     caseSensitive: false,
@@ -77,21 +81,27 @@ export function SearchPanel({
     regex: false,
   };
 
+  useEffect(() => {
+    if (!focusRequest) return;
+    virtualHandleRef.current?.scrollToIndex(focusRequest.index, { align: "auto" });
+    const button = resultsScrollRef.current?.querySelector<HTMLButtonElement>(
+      `[data-index="${focusRequest.index}"] button`,
+    );
+    button?.focus();
+  }, [focusRequest]);
+
   function toggleOption(key: keyof SearchQueryOptions): void {
     onOptionsChange?.({ ...currentOptions, [key]: !currentOptions[key] });
   }
 
-  function focusMatchRow(index: number): void {
-    const button = resultsScrollRef.current?.querySelector<HTMLButtonElement>(
-      `[data-index="${index}"] button`,
-    );
-    button?.focus();
+  function requestRowFocus(index: number): void {
+    setActiveIndex(index);
+    setFocusRequest((prev) => ({ index, seq: (prev?.seq ?? 0) + 1 }));
   }
 
   function handleArrowDownFromInput(): void {
     if (matches.length === 0) return;
-    setActiveIndex(0);
-    focusMatchRow(0);
+    requestRowFocus(0);
   }
 
   function handleMatchClick(match: SearchMatch, index: number, event: MouseEvent<HTMLButtonElement>): void {
@@ -114,8 +124,7 @@ export function SearchPanel({
     });
     if (action.kind === "move") {
       event.preventDefault();
-      setActiveIndex(action.index);
-      queueMicrotask(() => focusMatchRow(action.index));
+      requestRowFocus(action.index);
     }
   }
 
@@ -204,6 +213,7 @@ export function SearchPanel({
           getKey={(item) => item.id}
           activeIndex={activeIndex}
           scrollRef={resultsScrollRef}
+          handleRef={virtualHandleRef}
           estimateSize={(_item, _idx, rowHeight) => Math.max(rowHeight, 42)}
           initialRect={{ width: 320, height: 320 }}
           className="wb-search-results"

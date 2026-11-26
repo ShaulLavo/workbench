@@ -106,8 +106,8 @@ export function validateSafeSvgGlyph(glyphName: string, glyph: GeneratedGlyph): 
   if (!VIEWBOX_RE.test(glyph.viewBox)) {
     throw new Error(`Invalid SVG viewBox "${glyph.viewBox}" in glyph "${glyphName}"`);
   }
-  if (/<!--|<!\[CDATA\[|<\?|javascript:|data:/i.test(glyph.paths)) {
-    throw new Error(`Disallowed SVG construct or URI scheme in glyph "${glyphName}"`);
+  if (/<!--|<!\[CDATA\[|<\?|&|javascript:|data:/i.test(glyph.paths)) {
+    throw new Error(`Disallowed SVG construct, entity, or URI scheme in glyph "${glyphName}"`);
   }
   const stripped = glyph.paths.replaceAll(/<\/?[a-zA-Z][\w:-]*(?:\s+[^<>]*)?\/?>/g, "").trim();
   if (stripped.length > 0) {

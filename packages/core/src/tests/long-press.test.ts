@@ -81,6 +81,33 @@ describe("attachLongPressContextMenu", () => {
     row.click();
     expect(onRowClick).toHaveBeenCalledTimes(1);
 
+    // A fresh pointerdown + click on the same target inside the dedup window is NOT swallowed.
+    row.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 2,
+        clientX: 12,
+        clientY: 12,
+        bubbles: true,
+      }),
+    );
+    vi.advanceTimersByTime(250);
+    expect(onRowContext).toHaveBeenCalledTimes(2);
+    row.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        pointerType: "touch",
+        isPrimary: true,
+        pointerId: 3,
+        clientX: 12,
+        clientY: 12,
+        bubbles: true,
+      }),
+    );
+    row.dispatchEvent(new PointerEvent("pointerup", { pointerType: "touch", pointerId: 3, bubbles: true }));
+    row.click();
+    expect(onRowClick).toHaveBeenCalledTimes(2);
+
     detach();
   });
 });

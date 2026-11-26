@@ -99,6 +99,7 @@ export function MobilePaneShell({
       >
         {panes.map((pane, index) => {
           const isActive = pane.id === activePane;
+          const panelMounted = isActive || Boolean(pane.keepMounted);
           return (
             <button
               key={pane.id}
@@ -107,7 +108,7 @@ export function MobilePaneShell({
               role="tab"
               tabIndex={isActive ? 0 : -1}
               aria-selected={isActive}
-              aria-controls={`${baseId}-panel-${pane.id}`}
+              aria-controls={panelMounted ? `${baseId}-panel-${pane.id}` : undefined}
               data-active={isActive ? "true" : "false"}
               data-testid={`mobile-pane-${pane.id}`}
               className="wb-pane-switcher-btn"

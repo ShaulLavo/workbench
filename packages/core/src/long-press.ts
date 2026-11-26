@@ -66,9 +66,8 @@ export function attachLongPressContextMenu(
 
   const onPointerDown = (event: Event): void => {
     const pointer = event as PointerEvent;
-    if (suppressedTarget && !isSameGestureTarget(suppressedTarget, pointer.target)) {
-      clearSuppression();
-    }
+    // Any new pointerdown begins a fresh user gesture, so clear prior gesture suppression even on the same element.
+    clearSuppression();
     if (pointer.pointerType !== "touch" || !pointer.isPrimary) return;
     if (hasNativeLongPressOwner(pointer.target)) return;
     if (isSelectableTextPoint(pointer.target, pointer.clientX, pointer.clientY)) return;

@@ -196,8 +196,23 @@ try {
     path.join(fullPeerDir, "node_modules/@shaulavo/workbench-ui/dist/index.js"),
     "utf8",
   );
-  if (!/from\s+["']@base-ui\/react\/[^"']+["']/.test(uiEntry)) {
-    throw new Error("@shaulavo/workbench-ui must keep @base-ui/react externalized");
+  const expectedBaseUiSubpaths = new Set<string>();
+  const uiSrcDir = path.join(ROOT, "packages/ui/src/components");
+  for (const file of readdirSync(uiSrcDir)) {
+    if (!file.endsWith(".tsx") && !file.endsWith(".ts")) continue;
+    const srcText = readFileSync(path.join(uiSrcDir, file), "utf8");
+    for (const match of srcText.matchAll(/from\s+["'](@base-ui\/react\/[^"']+)["']/g)) {
+      if (match[1]) expectedBaseUiSubpaths.add(match[1]);
+    }
+  }
+  if (expectedBaseUiSubpaths.size === 0) {
+    throw new Error("Expected @shaulavo/workbench-ui to import at least one @base-ui/react subpath");
+  }
+  for (const subpath of expectedBaseUiSubpaths) {
+    const escaped = subpath.replaceAll("/", "\\/");
+    if (!new RegExp(`from\\s+["']${escaped}["']`).test(uiEntry)) {
+      throw new Error(`@shaulavo/workbench-ui bundled instead of externalizing ${subpath}`);
+    }
   }
 
   run(

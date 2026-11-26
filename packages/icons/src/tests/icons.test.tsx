@@ -105,6 +105,12 @@ describe("@shaulavo/workbench-icons", () => {
     expect(() =>
       validateSafeSvgGlyph("test", {
         viewBox: "0 0 16 16",
+        paths: '<use href="&#x68;ttps://example.com/evil.svg#a"/>',
+      }),
+    ).toThrow(/Disallowed SVG construct, entity, or URI scheme/);
+    expect(() =>
+      validateSafeSvgGlyph("test", {
+        viewBox: "0 0 16 16",
         paths: '<path fill="url(#other-id)" d="M0 0"/>',
       }),
     ).toThrow(/Unsafe SVG url\(\) reference/);

@@ -275,15 +275,17 @@ describe("@shaulavo/workbench-ui", () => {
 
     const host = mount(<Harness />);
     const explorerTab = host.querySelector<HTMLButtonElement>('[data-testid="mobile-pane-explorer"]');
+    const editorTab = host.querySelector<HTMLButtonElement>('[data-testid="mobile-pane-editor"]');
     const panel = host.querySelector<HTMLDivElement>('[role="tabpanel"]');
     expect(explorerTab?.getAttribute("aria-controls")).toBe(panel?.id);
+    expect(editorTab?.getAttribute("aria-controls")).toBeNull();
     expect(panel?.getAttribute("aria-labelledby")).toBe(explorerTab?.id);
 
     act(() => {
       explorerTab?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
     });
-    const editorTab = host.querySelector<HTMLButtonElement>('[data-testid="mobile-pane-editor"]');
     expect(editorTab?.getAttribute("aria-selected")).toBe("true");
+    expect(editorTab?.getAttribute("aria-controls")).not.toBeNull();
     expect(document.activeElement).toBe(editorTab);
   });
 
