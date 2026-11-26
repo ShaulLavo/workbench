@@ -40,10 +40,12 @@ export interface FileTreeViewportProps {
   readonly parkedIndices: readonly number[];
   readonly activeIndex: number;
   readonly scrollSeq: number;
+  readonly hasEntryTabStop: boolean;
   readonly label: string;
   readonly focusModality: "pointer" | "keyboard";
   readonly iconPreset: "rich" | "stroke";
   readonly dragging: boolean;
+  readonly touchDragY: number | null;
   readonly renderRow: (row: TreeRow, index: number) => ReactNode;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onSelectStickyAncestor: (dirPath: string) => void;
@@ -61,10 +63,12 @@ export function FileTreeViewport({
   parkedIndices,
   activeIndex,
   scrollSeq,
+  hasEntryTabStop,
   label,
   focusModality,
   iconPreset,
   dragging,
+  touchDragY,
   renderRow,
   onKeyDown,
   onSelectStickyAncestor,
@@ -93,6 +97,12 @@ export function FileTreeViewport({
       if (scrollTimerRef.current !== undefined) window.clearTimeout(scrollTimerRef.current);
     };
   }, []);
+
+  useEffect(() => {
+    if (touchDragY !== null) {
+      dragPointerYRef.current = touchDragY;
+    }
+  }, [touchDragY]);
 
   // Edge auto-scroll animation loop while dragging over the top/bottom 40px edge zones.
   useEffect(() => {
@@ -184,7 +194,7 @@ export function FileTreeViewport({
         role="tree"
         aria-label={label}
         aria-multiselectable="true"
-        tabIndex={rows.length === 0 ? 0 : -1}
+        tabIndex={hasEntryTabStop ? -1 : 0}
         data-wb-tree-scroller=""
         data-focus-modality={focusModality}
         className="wb-tree-scroller"

@@ -29,6 +29,7 @@ export interface PreparedFileTreeInput {
 export interface PendingOptimisticEntry {
   readonly id: string;
   readonly mutation: OptimisticTreeMutation;
+  readonly inFlight?: boolean;
 }
 
 export type PatchApplyResult =
@@ -238,6 +239,53 @@ function collectSubtreeFromLayer(
   return entries;
 }
 
+function patchTouchesPath(patch: IndexedTreePatch, targetPath: string): boolean {
+  const canonical = normalizeTreePath(targetPath);
+  if (patch.kind === "reset") return true;
+  if (patch.kind === "create" || patch.kind === "delete") {
+    const p = normalizeTreePath(patch.path);
+    return p === canonical || canonical.startsWith(`${p}/`);
+  }
+  if (patch.kind === "duplicate") {
+    const to = normalizeTreePath(patch.to);
+    return to === canonical || canonical.startsWith(`${to}/`);
+  }
+  return patch.moves.some((move) => {
+    const from = normalizeTreePath(move.from);
+    const to = normalizeTreePath(move.to);
+    return (
+      from === canonical ||
+      to === canonical ||
+      canonical.startsWith(`${from}/`) ||
+      canonical.startsWith(`${to}/`)
+    );
+  });
+}
+
+function isOptimisticConfirmedByPatch(
+  confirmedKinds: ReadonlyMap<string, EntryKind>,
+  patch: IndexedTreePatch,
+  mutation: OptimisticTreeMutation,
+): boolean {
+  if (mutation.kind === "create") {
+    const target = normalizeTreePath(mutation.path);
+    return confirmedKinds.has(target);
+  }
+  if (mutation.kind === "delete") {
+    const target = normalizeTreePath(mutation.path);
+    return !confirmedKinds.has(target) && patchTouchesPath(patch, target);
+  }
+  if (mutation.kind === "duplicate") {
+    const to = normalizeTreePath(mutation.to);
+    return confirmedKinds.has(to);
+  }
+  return mutation.moves.every((move) => {
+    const from = normalizeTreePath(move.from);
+    const to = normalizeTreePath(move.to);
+    return !confirmedKinds.has(from) && confirmedKinds.has(to);
+  });
+}
+
 function applyMutationToLayer(layer: MutableLayer, mutation: OptimisticTreeMutation): void {
   if (mutation.kind === "create") {
     createPathInLayer(layer, normalizeTreePath(mutation.path), mutation.entryKind);
@@ -403,8 +451,16 @@ export class FileTreeIndex {
     this.confirmedOverlay = null;
     this.confirmedSnapshotCache = snapshot;
     if (this.pendingOptimistic.length > 0) {
+      const confirmedKinds = this.confirmedKinds();
       this.pendingOptimistic = this.pendingOptimistic.filter(
-        (entry) => !isOptimisticTreeMutationConfirmed(snapshot, entry.mutation),
+        (entry) =>
+          !(entry.inFlight
+            ? isOptimisticConfirmedByPatch(
+                confirmedKinds,
+                { kind: "reset", nextRevision: snapshot.revision },
+                entry.mutation,
+              )
+            : isOptimisticTreeMutationConfirmed(snapshot, entry.mutation)),
       );
     }
     this.rebuildOptimisticOverlay();
@@ -435,9 +491,9 @@ export class FileTreeIndex {
     }
     this.base = { ...this.base, revision: patch.nextRevision };
     if (this.pendingOptimistic.length > 0) {
-      const confirmed = this.toConfirmedSnapshot();
+      const confirmedKinds = this.confirmedKinds();
       this.pendingOptimistic = this.pendingOptimistic.filter(
-        (entry) => !isOptimisticTreeMutationConfirmed(confirmed, entry.mutation),
+        (entry) => !isOptimisticConfirmedByPatch(confirmedKinds, patch, entry.mutation),
       );
     }
     this.rebuildOptimisticOverlay();
@@ -445,10 +501,30 @@ export class FileTreeIndex {
   }
 
   /** Applies an optimistic local mutation on top of confirmed state until settled or rolled back. */
-  applyOptimistic(id: string, mutation: OptimisticTreeMutation): void {
+  applyOptimistic(
+    id: string,
+    mutation: OptimisticTreeMutation,
+    options?: { readonly inFlight?: boolean },
+  ): void {
     this.pendingOptimistic = this.pendingOptimistic
       .filter((item) => item.id !== id)
-      .concat([{ id, mutation }]);
+      .concat([{ id, mutation, inFlight: options?.inFlight ?? false }]);
+    this.rebuildOptimisticOverlay();
+  }
+
+  /** Marks an in-flight optimistic mutation as completed so unloaded-parent snapshots can settle it. */
+  settleOptimistic(id: string): void {
+    let changed = false;
+    this.pendingOptimistic = this.pendingOptimistic.map((item) => {
+      if (item.id !== id || !item.inFlight) return item;
+      changed = true;
+      return { id: item.id, mutation: item.mutation, inFlight: false };
+    });
+    if (!changed) return;
+    const confirmed = this.toConfirmedSnapshot();
+    this.pendingOptimistic = this.pendingOptimistic.filter(
+      (entry) => entry.inFlight || !isOptimisticTreeMutationConfirmed(confirmed, entry.mutation),
+    );
     this.rebuildOptimisticOverlay();
   }
 
@@ -466,10 +542,11 @@ export class FileTreeIndex {
 
     const layer = this.ensureConfirmedMutable();
     const previous = layer.children.get(normalized) ?? [];
-    const nextNames = new Set(state.entries.map((entry) => entry.name));
+    const nextKindByName = new Map(state.entries.map((entry) => [entry.name, entry.kind]));
 
     for (const old of previous) {
-      if (!nextNames.has(old.name)) {
+      const nextKind = nextKindByName.get(old.name);
+      if (nextKind === undefined || (old.kind === "directory" && nextKind !== "directory")) {
         deleteSubtreeInLayer(layer, joinPath(normalized, old.name));
       }
     }
@@ -488,7 +565,7 @@ export class FileTreeIndex {
     if (this.pendingOptimistic.length > 0) {
       const confirmed = this.toConfirmedSnapshot();
       this.pendingOptimistic = this.pendingOptimistic.filter(
-        (entry) => !isOptimisticTreeMutationConfirmed(confirmed, entry.mutation),
+        (entry) => entry.inFlight || !isOptimisticTreeMutationConfirmed(confirmed, entry.mutation),
       );
     }
     this.rebuildOptimisticOverlay();

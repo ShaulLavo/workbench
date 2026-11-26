@@ -216,4 +216,130 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(loadDirectory).toHaveBeenCalledWith("remote", { force: true });
     expect(host.querySelector('[data-testid="wb-tree-row-remote/recovered.ts"]')).not.toBeNull();
   });
+
+  it("exposes an initial Tab stop, transfers focus on compact collapse, rechecks writability at commit, and executes touch long-press drop", async () => {
+    vi.useFakeTimers();
+    try {
+      const writableSub = createSubscribable(true);
+      const move = vi.fn(async () => {});
+      const adapter: FileSystemAdapter = {
+        workspaceId: "test-view-guards",
+        writable: writableSub,
+        indexed: {
+          snapshot: createSubscribable({
+            revision: 1,
+            entries: [
+              { path: "a/b/item.ts", kind: "file" as const },
+              { path: "dest", kind: "directory" as const },
+              { path: "note.md", kind: "file" as const },
+            ],
+            loadedDirectoryPaths: new Set(["", "a", "a/b", "dest"]),
+          }),
+          subscribePatches: () => () => {},
+          requestResync: async () => {},
+        },
+        listFiles: async () => [],
+        readText: async () => "",
+        createFile: async () => {},
+        createDirectory: async () => {},
+        move,
+        remove: async () => {},
+      };
+
+      const model = new FileTreeModel({ initialExpanded: ["a", "a/b"] });
+      const host = mount(<FileTreeView model={model} adapter={adapter} />);
+
+      // Initial populated tree exposes exactly one Tab stop on the first entry row.
+      const tabStops = host.querySelectorAll('[tabindex="0"]');
+      expect(tabStops).toHaveLength(1);
+      expect(tabStops[0]?.getAttribute("data-path")).toBe("a/b");
+
+      // ArrowLeft on expanded compact chain `a/b` collapses `a` and moves focus to `a`.
+      const compactRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a/b"]');
+      const scroller = host.querySelector<HTMLElement>("[data-wb-tree-scroller]");
+      act(() => {
+        compactRow?.focus();
+      });
+      act(() => {
+        scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowLeft", bubbles: true }));
+      });
+      expect(model.getSnapshot().focusedPath).toBe("a");
+      expect(document.activeElement).toBe(host.querySelector('[data-testid="wb-tree-row-a"]'));
+
+      // Opening rename while writable, flipping read-only before Enter, must block adapter.move.
+      act(() => {
+        host.querySelector<HTMLElement>('[data-testid="wb-tree-row-note.md"]')?.click();
+      });
+      act(() => {
+        scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      });
+      const input = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+      expect(input).not.toBeNull();
+      act(() => {
+        writableSub.set(false);
+      });
+      act(() => {
+        if (input) {
+          input.value = "blocked.md";
+          input.dispatchEvent(new Event("input", { bubbles: true }));
+          input.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        }
+      });
+      expect(move).not.toHaveBeenCalled();
+
+      // Re-enable writable and execute pointer-driven touch long-press drag of note.md onto dest.
+      act(() => {
+        writableSub.set(true);
+      });
+      const noteRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-note.md"]');
+      const destRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dest"]');
+      expect(noteRow).not.toBeNull();
+      expect(destRow).not.toBeNull();
+
+      const elementFromPointSpy = vi.spyOn(document, "elementFromPoint").mockReturnValue(destRow as Element);
+
+      act(() => {
+        noteRow?.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 7,
+            pointerType: "touch",
+            clientX: 20,
+            clientY: 80,
+            bubbles: true,
+          }),
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+      act(() => {
+        noteRow?.dispatchEvent(
+          new PointerEvent("pointermove", {
+            pointerId: 7,
+            pointerType: "touch",
+            clientX: 20,
+            clientY: 40,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        noteRow?.dispatchEvent(
+          new PointerEvent("pointerup", {
+            pointerId: 7,
+            pointerType: "touch",
+            clientX: 20,
+            clientY: 40,
+            bubbles: true,
+          }),
+        );
+        await Promise.resolve();
+      });
+      expect(move).toHaveBeenCalledTimes(1);
+      expect(move).toHaveBeenCalledWith("note.md", "dest/note.md");
+      elementFromPointSpy.mockRestore();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });

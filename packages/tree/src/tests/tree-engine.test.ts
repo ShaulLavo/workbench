@@ -294,4 +294,124 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(canMoveInto(["src/a.ts"], "src")).toBe(false);
     expect(canMoveInto(["src/a.ts"], "lib")).toBe(true);
   });
+
+  it("preserves optimistic writes under unloaded directories across unrelated patches", () => {
+    const index = FileTreeIndex.fromSnapshot({
+      revision: 1,
+      entries: [{ path: "remote", kind: "directory" }],
+      loadedDirectoryPaths: new Set([""]),
+    });
+    index.applyOptimistic(
+      "opt-remote",
+      { kind: "create", path: "remote/new.ts", entryKind: "file" },
+      { inFlight: true },
+    );
+    expect(index.hasPath("remote/new.ts")).toBe(true);
+
+    // Unrelated patch adding README.md must NOT discard pending remote/new.ts.
+    const res = index.applyPatch({
+      kind: "create",
+      baseRevision: 1,
+      nextRevision: 2,
+      path: "README.md",
+      entryKind: "file",
+    });
+    expect(res).toEqual({ status: "applied", revision: 2 });
+    expect(index.hasPath("README.md")).toBe(true);
+    expect(index.hasPath("remote/new.ts")).toBe(true);
+    expect(index.getPendingOptimistic()).toHaveLength(1);
+  });
+
+  it("projects retryable root lazy error, reloads invalidated collapsed dirs, and prunes dir->file descendants", async () => {
+    const rootState = createSubscribable<DirectoryLoadState>({
+      status: "error",
+      message: "Root offline",
+      retryable: true,
+    });
+    const docsState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [{ name: "old.md", kind: "file" }],
+    });
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
+    const loadCalls: { readonly dir: string; readonly force?: boolean }[] = [];
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "test-lazy-edge",
+      writable: createSubscribable(true),
+      lazy: {
+        getDirectoryState: (dir) => (dir === "" ? rootState : docsState),
+        async loadDirectory(dir, options) {
+          loadCalls.push({ dir, force: options?.force });
+          if (dir === "") {
+            rootState.set({
+              status: "loaded",
+              entries: [
+                { name: "docs", kind: "directory" },
+                { name: "sub", kind: "directory" },
+              ],
+            });
+          } else if (dir === "docs") {
+            docsState.set({ status: "loaded", entries: [{ name: "fresh.md", kind: "file" }] });
+          }
+        },
+        subscribeInvalidation(listener) {
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
+        },
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+    };
+
+    const model = new FileTreeModel();
+    const bound = bindFileSystemAdapter(model, adapter);
+    // Root error projects a retryable status row at depth 0 (never blank).
+    expect(model.getSnapshot().rows).toEqual([
+      expect.objectContaining({ type: "error", directory: "", retryable: true, depth: 0 }),
+    ]);
+
+    await bound.ensureDirectoryLoaded("", { force: true });
+    expect(model.index.hasPath("docs")).toBe(true);
+
+    // Seed sub/child.ts, then replace directory `sub` with a file named `sub`: old child must be pruned.
+    model.index.setLazyDirectoryState("sub", {
+      status: "loaded",
+      entries: [{ name: "child.ts", kind: "file" }],
+    });
+    expect(model.index.hasPath("sub/child.ts")).toBe(true);
+    model.index.setLazyDirectoryState("", {
+      status: "loaded",
+      entries: [
+        { name: "docs", kind: "directory" },
+        { name: "sub", kind: "file" },
+      ],
+    });
+    expect(model.index.getKind("sub")).toBe("file");
+    expect(model.index.hasPath("sub/child.ts")).toBe(false);
+
+    // Invalidate collapsed `docs` while adapter still reports `loaded`; expanding it must force reload.
+    for (const listener of invListeners) {
+      listener({ directories: ["docs"], reset: false, moves: [], removed: [] });
+    }
+    await bound.ensureDirectoryLoaded("docs");
+    expect(loadCalls).toContainEqual({ dir: "docs", force: true });
+    expect(model.index.hasPath("docs/fresh.md")).toBe(true);
+    bound.dispose();
+  });
+
+  it("transfers focus to the root segment when collapsing an expanded compacted folder chain", () => {
+    const model = new FileTreeModel({
+      paths: ["a/b/file.ts"],
+      initialExpanded: ["a", "a/b"],
+    });
+    model.select("a/b", "replace", "keyboard");
+    const action = navigateTree(model.getSnapshot().rows, "a/b", "ArrowLeft");
+    expect(action).toEqual({ collapse: "a", focus: "a" });
+    model.setExpanded("a", false);
+    expect(model.getSnapshot().focusedPath).toBe("a");
+  });
 });

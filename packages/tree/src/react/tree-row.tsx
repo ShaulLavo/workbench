@@ -23,8 +23,10 @@ export interface FileTreeRowProps {
   readonly dropTargetSegment: string | undefined;
   readonly canDrag: boolean;
   readonly siblingNames: ReadonlySet<string>;
+  readonly isTabStop: boolean;
   readonly focusSeq?: number;
   readonly onFocusHandled?: (seq: number) => void;
+  readonly onRowFocus?: (row: TreeEntryRow) => void;
   readonly onActivate: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
   readonly onToggleDirectory: (dirPath: string) => void;
   readonly onSegmentClick: (segmentPath: string, event: MouseEvent<HTMLButtonElement>) => void;
@@ -46,7 +48,8 @@ export interface FileTreeRowProps {
   readonly onRowDragEnd?: () => void;
   readonly onTouchPointerDown?: (row: TreeEntryRow, event: PointerEvent<HTMLElement>) => void;
   readonly onTouchPointerMove?: (event: PointerEvent<HTMLElement>) => void;
-  readonly onTouchPointerUp?: () => void;
+  readonly onTouchPointerUp?: (event: PointerEvent<HTMLElement>) => void;
+  readonly onTouchPointerCancel?: () => void;
 }
 
 /** Renders one virtualized file or folder row with indent guides, compact segments, git status, and inline rename. */
@@ -58,8 +61,10 @@ export function FileTreeRow({
   dropTargetSegment,
   canDrag,
   siblingNames,
+  isTabStop,
   focusSeq,
   onFocusHandled,
+  onRowFocus,
   onActivate,
   onToggleDirectory,
   onSegmentClick,
@@ -74,6 +79,7 @@ export function FileTreeRow({
   onTouchPointerDown,
   onTouchPointerMove,
   onTouchPointerUp,
+  onTouchPointerCancel,
 }: FileTreeRowProps) {
   const isDirectory = row.kind === "directory";
   const isDropHighlight = isDirectory && dropTargetSegment === undefined && dropTargetDirectory === row.path;
@@ -93,8 +99,11 @@ export function FileTreeRow({
       aria-level={row.depth + 1}
       aria-selected={row.selected}
       aria-expanded={isDirectory ? row.expanded : undefined}
-      tabIndex={row.focused ? 0 : -1}
+      tabIndex={isTabStop ? 0 : -1}
       draggable={canDrag && !row.editing}
+      onFocus={(event) => {
+        if (event.target === event.currentTarget) onRowFocus?.(row);
+      }}
       data-wb-tree-row=""
       data-path={row.path}
       data-kind={row.kind}
@@ -122,7 +131,7 @@ export function FileTreeRow({
       onPointerDown={(event) => onTouchPointerDown?.(row, event)}
       onPointerMove={onTouchPointerMove}
       onPointerUp={onTouchPointerUp}
-      onPointerCancel={onTouchPointerUp}
+      onPointerCancel={onTouchPointerCancel}
       onDragStart={(event) => onRowDragStart?.(row, event)}
       onDragOver={(event) => onRowDragOver?.(row, undefined, event)}
       onDrop={(event) => onRowDrop?.(row, undefined, event)}
@@ -351,7 +360,7 @@ export function FileTreeStatusRow({ row, onRetry }: FileTreeStatusRowProps) {
         <button
           type="button"
           className="wb-tree-retry-btn"
-          data-testid={`wb-tree-retry-${row.directory}`}
+          data-testid={`wb-tree-retry-${row.directory || "root"}`}
           onClick={() => onRetry(row.directory)}
         >
           Retry

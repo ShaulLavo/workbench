@@ -37,12 +37,29 @@ for (const host of [
       return;
     }
 
+    // Populated tree exposes an initial keyboard Tab stop before any click.
+    await expect(page.locator('[data-wb-tree-scroller] [tabindex="0"]')).toHaveCount(1);
+
     // Compact folder chain (features/editor under src) with per-segment drop targets + Git badges & ignored dimming.
     const compactRow = page.getByTestId("wb-tree-row-src/features/editor");
     await expect(compactRow).toBeVisible();
     await expect(page.getByTestId("wb-tree-segment-src/features")).toBeVisible();
     await expect(page.getByTestId("wb-tree-segment-src/features/editor")).toBeVisible();
     await expect(compactRow.locator('[data-wb-git-dot="true"]')).toBeVisible();
+
+    // Dragging src/App.test.tsx onto docs issues exactly one move into docs/ (never a second move to root).
+    const appTestRow = page.getByTestId("wb-tree-row-src/App.test.tsx");
+    const docsRow = page.getByTestId("wb-tree-row-docs");
+    await appTestRow.dragTo(docsRow);
+    await expect(page.getByTestId("wb-tree-row-docs/App.test.tsx")).toBeVisible();
+    await expect(page.getByTestId("wb-tree-row-App.test.tsx")).toHaveCount(0);
+
+    // ArrowLeft on expanded compact chain collapses src/features and transfers focus to src/features.
+    await compactRow.focus();
+    await page.keyboard.press("ArrowLeft");
+    await expect(page.getByTestId("wb-tree-row-src/features")).toBeFocused();
+    await page.keyboard.press("ArrowRight");
+    await expect(compactRow).toBeVisible();
 
     const appRow = page.getByTestId("wb-tree-row-src/features/editor/App.tsx");
     await expect(appRow).toBeVisible();

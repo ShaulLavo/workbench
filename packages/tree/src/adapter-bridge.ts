@@ -1,5 +1,6 @@
 import type { FileSystemAdapter } from "@shaulavo/workbench-core";
 import type { FileTreeModel } from "./model";
+import { normalizeTreePath } from "./paths";
 
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
@@ -19,6 +20,7 @@ export function bindFileSystemAdapter(
 ): BoundFileTreeAdapter {
   const cleanups: (() => void)[] = [];
   const lazyUnsubs = new Map<string, () => void>();
+  const staleLazyDirs = new Set<string>();
   let disposed = false;
 
   if (adapter.git) {
@@ -56,16 +58,17 @@ export function bindFileSystemAdapter(
 
   function subscribeLazyDir(dirPath: string): void {
     const lazy = adapter.lazy;
-    if (!lazy || lazyUnsubs.has(dirPath)) return;
-    const stateSub = lazy.getDirectoryState(dirPath);
-    model.index.setLazyDirectoryState(dirPath, stateSub.getSnapshot());
+    const normalized = normalizeTreePath(dirPath);
+    if (!lazy || lazyUnsubs.has(normalized)) return;
+    const stateSub = lazy.getDirectoryState(normalized);
+    model.index.setLazyDirectoryState(normalized, stateSub.getSnapshot());
     model.notifyIndexChange();
     const unsub = stateSub.subscribe(() => {
       if (disposed) return;
-      model.index.setLazyDirectoryState(dirPath, stateSub.getSnapshot());
+      model.index.setLazyDirectoryState(normalized, stateSub.getSnapshot());
       model.notifyIndexChange();
     });
-    lazyUnsubs.set(dirPath, unsub);
+    lazyUnsubs.set(normalized, unsub);
   }
 
   async function ensureDirectoryLoaded(
@@ -74,10 +77,13 @@ export function bindFileSystemAdapter(
   ): Promise<void> {
     const lazy = adapter.lazy;
     if (!lazy || disposed) return;
-    subscribeLazyDir(dirPath);
-    const current = lazy.getDirectoryState(dirPath).getSnapshot();
-    if (!options?.force && current.status !== "idle") return;
-    await lazy.loadDirectory(dirPath, options);
+    const normalized = normalizeTreePath(dirPath);
+    subscribeLazyDir(normalized);
+    const wasStale = staleLazyDirs.delete(normalized);
+    const force = Boolean(options?.force) || wasStale;
+    const current = lazy.getDirectoryState(normalized).getSnapshot();
+    if (!force && current.status !== "idle") return;
+    await lazy.loadDirectory(normalized, force ? { force: true } : options);
   }
 
   if (adapter.lazy) {
@@ -86,7 +92,7 @@ export function bindFileSystemAdapter(
     void ensureDirectoryLoaded("");
     for (const dir of model.getSnapshot().expanded) {
       subscribeLazyDir(dir);
-      const current = lazy.getDirectoryState(dir).getSnapshot();
+      const current = lazy.getDirectoryState(normalizeTreePath(dir)).getSnapshot();
       if (current.status === "idle") void ensureDirectoryLoaded(dir);
     }
 
@@ -96,6 +102,8 @@ export function bindFileSystemAdapter(
         model.index.applyLazyInvalidation(event);
         model.notifyIndexChange();
         if (event.reset) {
+          for (const dir of lazyUnsubs.keys()) staleLazyDirs.add(dir);
+          staleLazyDirs.add("");
           void ensureDirectoryLoaded("", { force: true });
           for (const dir of model.getSnapshot().expanded) {
             void ensureDirectoryLoaded(dir, { force: true });
@@ -104,8 +112,11 @@ export function bindFileSystemAdapter(
         }
         const expanded = model.getSnapshot().expanded;
         for (const dir of event.directories) {
-          if (dir === "" || expanded.has(dir)) {
-            void ensureDirectoryLoaded(dir, { force: true });
+          const normalized = normalizeTreePath(dir);
+          if (normalized === "" || expanded.has(normalized)) {
+            void ensureDirectoryLoaded(normalized, { force: true });
+          } else {
+            staleLazyDirs.add(normalized);
           }
         }
       }),

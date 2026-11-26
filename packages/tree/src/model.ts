@@ -211,7 +211,7 @@ export function computeVisibleRows(
     }
 
     const loadState = index.getDirectoryLoadState(dir);
-    if (!filterSets && dir !== "" && loadState.status === "loading") {
+    if (!filterSets && loadState.status === "loading") {
       rows.push({
         type: "loading",
         key: `\0loading:${dir}`,
@@ -222,7 +222,7 @@ export function computeVisibleRows(
       });
       return;
     }
-    if (!filterSets && dir !== "" && loadState.status === "error") {
+    if (!filterSets && loadState.status === "error") {
       rows.push({
         type: "error",
         key: `\0error:${dir}`,
@@ -390,7 +390,10 @@ export function navigateTree(
     return next && next.depth > row.depth ? { focus: next.path } : {};
   }
   if (row.kind === "directory" && row.expanded) {
-    return { collapse: row.segments?.[0]?.path ?? row.path };
+    const collapsePath = row.segments?.[0]?.path ?? row.path;
+    return collapsePath !== row.path
+      ? { collapse: collapsePath, focus: collapsePath }
+      : { collapse: collapsePath };
   }
   const parent = row.ancestorPaths.at(-1) ?? parentOf(row.segments?.[0]?.path ?? row.path);
   return parent === "" ? {} : { focus: parent };
@@ -524,6 +527,9 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
       for (const anc of ancestorsOf(path)) this.expanded.add(anc);
     } else {
       this.expanded.delete(path);
+      if (this.focusedPath && isInside(this.focusedPath, path)) {
+        this.focusedPath = path;
+      }
     }
     this.emit();
   }

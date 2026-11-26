@@ -22,7 +22,6 @@ export function StickyAncestorsOverlay({
       style={
         sticky.pushUpPx > 0
           ? {
-              clipPath: `inset(${sticky.pushUpPx}px 0 0 0)`,
               transform: `translateY(${-sticky.pushUpPx}px)`,
             }
           : undefined

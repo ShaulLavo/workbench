@@ -104,6 +104,8 @@ export function FileTreeView({
   const hoverOpenTimerRef = useRef<number | undefined>(undefined);
   const hoverOpenDirRef = useRef<string | undefined>(undefined);
   const optimisticSeqRef = useRef(0);
+  const draggingPathsRef = useRef<readonly string[]>([]);
+  const touchSuppressClickUntilRef = useRef(0);
   const touchDragRef = useRef<{
     timer: number | undefined;
     pointerId: number;
@@ -111,10 +113,14 @@ export function FileTreeView({
     startY: number;
     rowPath: string;
     element: HTMLElement;
+    active: boolean;
+    sources: readonly string[];
+    dropTarget: { readonly directory: string; readonly segmentPath?: string } | null;
   } | null>(null);
 
   const [filterVisible, setFilterVisible] = useState(showFilter);
   const [draggingPaths, setDraggingPaths] = useState<readonly string[]>([]);
+  const [touchDragY, setTouchDragY] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<{
     readonly directory: string;
     readonly segmentPath?: string;
@@ -135,6 +141,10 @@ export function FileTreeView({
 
   const adapterWritable = useSubscribable(adapter?.writable ?? ALWAYS_WRITABLE);
   const writable = !readOnly && adapterWritable;
+
+  function isCurrentlyWritable(): boolean {
+    return !readOnly && (adapter ? adapter.writable.getSnapshot() : true);
+  }
 
   function requestRowFocus(path: string): void {
     focusSeqRef.current += 1;
@@ -198,6 +208,10 @@ export function FileTreeView({
   }
 
   function handleActivateRow(row: TreeEntryRow, event: MouseEvent<HTMLElement>): void {
+    if (Date.now() < touchSuppressClickUntilRef.current) {
+      touchSuppressClickUntilRef.current = 0;
+      return;
+    }
     if (event.shiftKey) {
       model.select(row.path, "range", "pointer");
       return;
@@ -226,10 +240,15 @@ export function FileTreeView({
   }
 
   async function commitCreate(parent: string, kind: "file" | "directory", name: string): Promise<void> {
-    const fullPath = joinPath(parent, name);
     model.setDraft(undefined);
+    if (!isCurrentlyWritable()) return;
+    const fullPath = joinPath(parent, name);
     const optId = nextOptimisticId();
-    model.index.applyOptimistic(optId, { kind: "create", path: fullPath, entryKind: kind });
+    model.index.applyOptimistic(
+      optId,
+      { kind: "create", path: fullPath, entryKind: kind },
+      { inFlight: Boolean(adapter) },
+    );
     model.notifyIndexChange();
     model.select(fullPath, "replace", "keyboard");
     requestRowFocus(fullPath);
@@ -237,6 +256,8 @@ export function FileTreeView({
     try {
       if (kind === "directory") await adapter.createDirectory(fullPath);
       else await adapter.createFile(fullPath, "");
+      model.index.settleOptimistic(optId);
+      model.notifyIndexChange();
     } catch (error) {
       model.index.rollbackOptimistic(optId);
       model.notifyIndexChange();
@@ -247,22 +268,28 @@ export function FileTreeView({
   async function commitRename(fromPath: string, nextName: string): Promise<void> {
     const toPath = joinPath(parentOf(fromPath), nextName);
     model.setDraft(undefined);
-    if (toPath === fromPath) {
+    if (!isCurrentlyWritable() || toPath === fromPath) {
       requestRowFocus(fromPath);
       return;
     }
     const entryKind = model.index.getKind(fromPath) ?? "file";
     const optId = nextOptimisticId();
-    model.index.applyOptimistic(optId, {
-      kind: "move",
-      moves: [{ from: fromPath, to: toPath, entryKind }],
-    });
+    model.index.applyOptimistic(
+      optId,
+      {
+        kind: "move",
+        moves: [{ from: fromPath, to: toPath, entryKind }],
+      },
+      { inFlight: Boolean(adapter) },
+    );
     model.notifyIndexChange();
     model.select(toPath, "replace", "keyboard");
     requestRowFocus(toPath);
     if (!adapter) return;
     try {
       await adapter.move(fromPath, toPath);
+      model.index.settleOptimistic(optId);
+      model.notifyIndexChange();
     } catch (error) {
       model.index.rollbackOptimistic(optId);
       model.notifyIndexChange();
@@ -271,6 +298,7 @@ export function FileTreeView({
   }
 
   async function executeMove(sources: readonly string[], destinationDir: string): Promise<void> {
+    if (!isCurrentlyWritable()) return;
     const top = topLevelPaths(sources);
     if (!canMoveInto(top, destinationDir)) return;
     const moves = top.map((from) => ({
@@ -279,7 +307,7 @@ export function FileTreeView({
       entryKind: model.index.getKind(from) ?? ("file" as const),
     }));
     const optId = nextOptimisticId();
-    model.index.applyOptimistic(optId, { kind: "move", moves });
+    model.index.applyOptimistic(optId, { kind: "move", moves }, { inFlight: Boolean(adapter) });
     if (destinationDir) model.setExpanded(destinationDir, true);
     model.notifyIndexChange();
     if (!adapter) return;
@@ -287,6 +315,8 @@ export function FileTreeView({
       for (const move of moves) {
         await adapter.move(move.from, move.to);
       }
+      model.index.settleOptimistic(optId);
+      model.notifyIndexChange();
     } catch (error) {
       model.index.rollbackOptimistic(optId);
       model.notifyIndexChange();
@@ -297,13 +327,17 @@ export function FileTreeView({
 
   async function confirmDelete(): Promise<void> {
     if (!deleteTarget || deleteTarget.length === 0) return;
+    if (!isCurrentlyWritable()) {
+      setDeleteTarget(null);
+      return;
+    }
     const targets = topLevelPaths(deleteTarget);
     setDeleting(true);
     const optIds: string[] = [];
     for (const target of targets) {
       const id = nextOptimisticId();
       optIds.push(id);
-      model.index.applyOptimistic(id, { kind: "delete", path: target });
+      model.index.applyOptimistic(id, { kind: "delete", path: target }, { inFlight: Boolean(adapter) });
     }
     model.notifyIndexChange();
     try {
@@ -312,6 +346,8 @@ export function FileTreeView({
           await adapter.remove(target);
         }
       }
+      for (const id of optIds) model.index.settleOptimistic(id);
+      model.notifyIndexChange();
       setDeleteTarget(null);
       setDeleting(false);
     } catch (error) {
@@ -337,6 +373,10 @@ export function FileTreeView({
       }
       if (action.collapse) {
         model.setExpanded(action.collapse, false);
+        if (action.focus) {
+          model.select(action.focus, "replace", "keyboard");
+          requestRowFocus(action.focus);
+        }
         return;
       }
       if (action.focus) {
@@ -374,9 +414,44 @@ export function FileTreeView({
     }
   }
 
+  function resolveTouchDropTarget(
+    clientX: number,
+    clientY: number,
+    sources: readonly string[],
+  ): { readonly directory: string; readonly segmentPath?: string } | null {
+    if (typeof document.elementFromPoint !== "function") return null;
+    const hit = document.elementFromPoint(clientX, clientY);
+    if (!hit) return null;
+    const segEl = hit.closest<HTMLElement>("[data-wb-drop-segment]");
+    if (segEl?.dataset.wbDropSegment) {
+      const segPath = segEl.dataset.wbDropSegment;
+      return canMoveInto(sources, segPath) ? { directory: segPath, segmentPath: segPath } : null;
+    }
+    const rowEl = hit.closest<HTMLElement>("[data-wb-tree-row]");
+    if (rowEl?.dataset.path) {
+      const kind = rowEl.dataset.kind === "directory" ? "directory" : "file";
+      const destDir = targetDirectory(rowEl.dataset.path, kind);
+      return canMoveInto(sources, destDir) ? { directory: destDir } : null;
+    }
+    const scrollerEl = hit.closest<HTMLElement>("[data-wb-tree-scroller]");
+    if (scrollerEl && canMoveInto(sources, "")) {
+      return { directory: "" };
+    }
+    return null;
+  }
+
+  function clearDragState(): void {
+    clearHoverOpen();
+    draggingPathsRef.current = [];
+    setDraggingPaths([]);
+    setDropTarget(null);
+    setTouchDragY(null);
+  }
+
   function handleRowDragStart(row: TreeEntryRow, event: DragEvent<HTMLElement>): void {
-    if (!writable) return;
+    if (!isCurrentlyWritable()) return;
     const paths = state.selected.has(row.path) ? Array.from(state.selected) : [row.path];
+    draggingPathsRef.current = paths;
     setDraggingPaths(paths);
     event.dataTransfer.effectAllowed = "move";
     event.dataTransfer.setData(TREE_DRAG_MIME, JSON.stringify(paths));
@@ -387,10 +462,12 @@ export function FileTreeView({
     segmentPath: string | undefined,
     event: DragEvent<HTMLElement>,
   ): void {
-    if (!writable || draggingPaths.length === 0) return;
+    const sources = draggingPathsRef.current;
+    if (!isCurrentlyWritable() || sources.length === 0) return;
     const destDir = segmentPath ?? targetDirectory(row.path, row.kind);
-    if (!canMoveInto(draggingPaths, destDir)) return;
+    if (!canMoveInto(sources, destDir)) return;
     event.preventDefault();
+    event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
     setDropTarget({ directory: destDir, segmentPath });
     if (destDir) scheduleHoverOpen(destDir);
@@ -401,72 +478,128 @@ export function FileTreeView({
     segmentPath: string | undefined,
     event: DragEvent<HTMLElement>,
   ): void {
-    if (!writable || draggingPaths.length === 0) return;
+    const sources = draggingPathsRef.current;
+    if (!isCurrentlyWritable() || sources.length === 0) return;
     event.preventDefault();
-    clearHoverOpen();
+    event.stopPropagation();
     const destDir = segmentPath ?? targetDirectory(row.path, row.kind);
-    const sources = draggingPaths;
-    setDraggingPaths([]);
-    setDropTarget(null);
+    clearDragState();
     void executeMove(sources, destDir);
   }
 
   function handleDragEnd(): void {
-    clearHoverOpen();
-    setDraggingPaths([]);
-    setDropTarget(null);
+    clearDragState();
   }
 
   function handleTouchPointerDown(row: TreeEntryRow, event: PointerEvent<HTMLElement>): void {
-    if (!writable || event.pointerType !== "touch") return;
+    if (!isCurrentlyWritable() || event.pointerType !== "touch") return;
     const el = event.currentTarget;
     el.setAttribute("draggable", "false");
+    const pointerId = event.pointerId;
     const timer = window.setTimeout(() => {
-      el.setAttribute("draggable", "true");
+      const current = touchDragRef.current;
+      if (!current || current.pointerId !== pointerId) return;
       const currentSelected = model.getSnapshot().selected;
-      setDraggingPaths(currentSelected.has(row.path) ? Array.from(currentSelected) : [row.path]);
+      const sources = currentSelected.has(row.path) ? Array.from(currentSelected) : [row.path];
+      current.timer = undefined;
+      current.active = true;
+      current.sources = sources;
+      draggingPathsRef.current = sources;
+      setDraggingPaths(sources);
+      setTouchDragY(current.startY);
+      if (typeof el.setPointerCapture === "function") {
+        try {
+          el.setPointerCapture(pointerId);
+        } catch {
+          // Pointer capture is optional on synthetic events.
+        }
+      }
     }, TOUCH_DRAG_HOLD_MS);
     touchDragRef.current = {
       timer,
-      pointerId: event.pointerId,
+      pointerId,
       startX: event.clientX,
       startY: event.clientY,
       rowPath: row.path,
       element: el,
+      active: false,
+      sources: [],
+      dropTarget: null,
     };
   }
 
   function handleTouchPointerMove(event: PointerEvent<HTMLElement>): void {
     const active = touchDragRef.current;
-    if (!active || event.pointerId !== active.pointerId || active.timer === undefined) return;
-    if (Math.hypot(event.clientX - active.startX, event.clientY - active.startY) > TOUCH_DRAG_TOLERANCE_PX) {
-      window.clearTimeout(active.timer);
-      active.timer = undefined;
+    if (!active || event.pointerId !== active.pointerId) return;
+    if (!active.active) {
+      if (
+        active.timer !== undefined &&
+        Math.hypot(event.clientX - active.startX, event.clientY - active.startY) > TOUCH_DRAG_TOLERANCE_PX
+      ) {
+        window.clearTimeout(active.timer);
+        active.timer = undefined;
+      }
+      return;
+    }
+    event.preventDefault();
+    setTouchDragY(event.clientY);
+    const target = resolveTouchDropTarget(event.clientX, event.clientY, active.sources);
+    active.dropTarget = target;
+    setDropTarget(target);
+    if (target?.directory) scheduleHoverOpen(target.directory);
+    else clearHoverOpen();
+  }
+
+  function handleTouchPointerUp(event: PointerEvent<HTMLElement>): void {
+    const active = touchDragRef.current;
+    if (!active || event.pointerId !== active.pointerId) return;
+    if (active.timer !== undefined) window.clearTimeout(active.timer);
+    active.element.setAttribute("draggable", writable ? "true" : "false");
+    if (typeof active.element.releasePointerCapture === "function") {
+      try {
+        active.element.releasePointerCapture(active.pointerId);
+      } catch {
+        // Ignore if capture was not acquired.
+      }
+    }
+    touchDragRef.current = null;
+    if (!active.active) return;
+
+    touchSuppressClickUntilRef.current = Date.now() + 400;
+    const finalTarget =
+      resolveTouchDropTarget(event.clientX, event.clientY, active.sources) ?? active.dropTarget;
+    const sources = active.sources;
+    clearDragState();
+    if (finalTarget && sources.length > 0) {
+      void executeMove(sources, finalTarget.directory);
     }
   }
 
-  function handleTouchPointerUp(): void {
+  function handleTouchPointerCancel(): void {
     const active = touchDragRef.current;
     if (!active) return;
     if (active.timer !== undefined) window.clearTimeout(active.timer);
     active.element.setAttribute("draggable", writable ? "true" : "false");
     touchDragRef.current = null;
-    clearHoverOpen();
-    setDraggingPaths([]);
-    setDropTarget(null);
+    if (active.active) clearDragState();
   }
 
   const activeParentPath = state.focusedPath ? parentOf(state.focusedPath) : undefined;
   const activeIndex = state.rows.findIndex((row) => row.type === "entry" && row.focused);
+  const firstEntryIndex = state.rows.findIndex((row) => row.type === "entry");
+  const tabStopIndex = activeIndex >= 0 ? activeIndex : firstEntryIndex;
 
-  // Park focused, editing/draft, and dragged rows so scroll virtualization never unmounts them.
+  // Park focused, tab-stop, editing/draft, and dragged rows so scroll virtualization never unmounts them.
   const parkedIndices: number[] = [];
   for (let i = 0; i < state.rows.length; i += 1) {
     const row = state.rows[i];
     if (!row) continue;
     if (row.type === "draft") {
       parkedIndices.push(i);
-    } else if (row.type === "entry" && (row.focused || row.editing || draggingPaths.includes(row.path))) {
+    } else if (
+      row.type === "entry" &&
+      (row.focused || i === tabStopIndex || row.editing || draggingPaths.includes(row.path))
+    ) {
       parkedIndices.push(i);
     }
   }
@@ -555,26 +688,29 @@ export function FileTreeView({
         parkedIndices={parkedIndices}
         activeIndex={activeIndex}
         scrollSeq={scrollSeq}
+        hasEntryTabStop={tabStopIndex >= 0}
         label={label}
         focusModality={state.focusModality}
         iconPreset={iconPreset}
         dragging={draggingPaths.length > 0}
+        touchDragY={touchDragY}
         onKeyDown={handleTreeKeyDown}
         onSelectStickyAncestor={(dirPath) => model.select(dirPath, "replace", "pointer")}
         onRootDragOver={(event) => {
-          if (!writable || draggingPaths.length === 0) return;
-          if (!canMoveInto(draggingPaths, "")) return;
+          const sources = draggingPathsRef.current;
+          if (!isCurrentlyWritable() || sources.length === 0) return;
+          if (!canMoveInto(sources, "")) return;
           event.preventDefault();
           setDropTarget({ directory: "" });
         }}
         onRootDrop={(event) => {
-          if (!writable || draggingPaths.length === 0) return;
+          const sources = draggingPathsRef.current;
+          if (!isCurrentlyWritable() || sources.length === 0) return;
           event.preventDefault();
-          const sources = draggingPaths;
-          handleDragEnd();
+          clearDragState();
           void executeMove(sources, "");
         }}
-        renderRow={(row) => {
+        renderRow={(row, index) => {
           if (row.type === "draft") {
             const siblings = new Set(model.index.getChildren(row.parent).map((e) => e.name));
             return (
@@ -605,6 +741,7 @@ export function FileTreeView({
               dropTargetSegment={dropTarget?.segmentPath}
               canDrag={writable}
               siblingNames={siblings}
+              isTabStop={index === tabStopIndex}
               focusSeq={
                 focusRequest &&
                 (focusRequest.path === row.path ||
@@ -613,6 +750,18 @@ export function FileTreeView({
                   : undefined
               }
               onFocusHandled={handleFocusHandled}
+              onRowFocus={(focusedEntry) => {
+                const current = model.getSnapshot();
+                const alreadyFocused =
+                  current.focusedPath === focusedEntry.path ||
+                  (focusedEntry.segments?.some((seg) => seg.path === current.focusedPath) ?? false);
+                if (!alreadyFocused) {
+                  model.setFocusedPath(
+                    focusedEntry.path,
+                    current.focusedPath === undefined ? "keyboard" : current.focusModality,
+                  );
+                }
+              }}
               onActivate={handleActivateRow}
               onToggleDirectory={toggleDirectory}
               onSegmentClick={handleSegmentClick}
@@ -635,6 +784,7 @@ export function FileTreeView({
               onTouchPointerDown={handleTouchPointerDown}
               onTouchPointerMove={handleTouchPointerMove}
               onTouchPointerUp={handleTouchPointerUp}
+              onTouchPointerCancel={handleTouchPointerCancel}
             />
           );
         }}
