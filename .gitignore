@@ -1,0 +1,9 @@
+node_modules/
+dist/
+.turbo/
+*.tsbuildinfo
+playwright-report/
+test-results/
+.tmp/
+.env
+.env.local
