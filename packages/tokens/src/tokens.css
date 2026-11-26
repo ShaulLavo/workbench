@@ -158,8 +158,12 @@
   @media (pointer: coarse) {
     :root,
     :root[data-wb-theme],
+    :root[data-wb-density],
+    :root[data-density],
     [data-wb-theme-scope],
-    [data-wb-theme-scope][data-wb-theme] {
+    [data-wb-theme-scope][data-wb-theme],
+    [data-wb-theme-scope][data-wb-density],
+    [data-wb-theme-scope][data-density] {
       --wb-tree-row-height: 2.75rem;
     }
   }

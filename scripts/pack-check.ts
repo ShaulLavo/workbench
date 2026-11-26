@@ -100,8 +100,11 @@ try {
   );
   run("bun", ["install"], reactFreeDir);
 
-  if (existsSync(path.join(reactFreeDir, "node_modules/react"))) {
-    throw new Error("React-free consumer unexpectedly installed react");
+  const reactFreeReactDirs = findPhysicalPackageDirs(path.join(reactFreeDir, "node_modules"), "react");
+  if (reactFreeReactDirs.size !== 0) {
+    throw new Error(
+      `React-free consumer unexpectedly installed react (${Array.from(reactFreeReactDirs).join(", ")})`,
+    );
   }
   const reactFreeHotkeys = findPhysicalPackageDirs(
     path.join(reactFreeDir, "node_modules"),

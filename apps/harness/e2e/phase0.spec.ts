@@ -52,6 +52,15 @@ test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 
   );
   expect(compactFregatRow).toBe(expectedCompactRow);
 
+  // Compact density without any preset still respects desktop compact vs coarse 44px touch target.
+  await page.evaluate(() => {
+    delete document.documentElement.dataset.wbTheme;
+  });
+  const compactNoPresetRow = await page.evaluate(() =>
+    getComputedStyle(document.documentElement).getPropertyValue("--wb-tree-row-height").trim(),
+  );
+  expect(compactNoPresetRow).toBe(expectedCompactRow);
+
   // Tailwind v4 host (Fregat Graphite) + @theme inline bridge utility classes
   await page.goto("/tailwind.html");
   await expect(page.getByTestId("harness-ready")).toHaveAttribute("data-host-kind", "tailwind");
@@ -60,12 +69,25 @@ test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 
 
   const bridgeProbe = page.getByTestId("tailwind-bridge-probe");
   await expect(bridgeProbe).toBeVisible();
-  const bridgeColors = await bridgeProbe.evaluate((el) => {
+  const bridgeCheck = await bridgeProbe.evaluate((el) => {
     const style = getComputedStyle(el);
-    return { bg: style.backgroundColor, color: style.color };
+    const expectedProbe = document.createElement("span");
+    expectedProbe.style.color = "var(--wb-fg)";
+    expectedProbe.style.backgroundColor = "var(--wb-bg-well)";
+    document.body.appendChild(expectedProbe);
+    const expectedStyle = getComputedStyle(expectedProbe);
+    const result = {
+      actualBg: style.backgroundColor,
+      expectedBg: expectedStyle.backgroundColor,
+      actualColor: style.color,
+      expectedColor: expectedStyle.color,
+    };
+    expectedProbe.remove();
+    return result;
   });
-  expect(bridgeColors.bg).not.toBe("rgba(0, 0, 0, 0)");
-  expect(bridgeColors.bg).not.toBe(bridgeColors.color);
+  expect(bridgeCheck.actualBg).toBe(bridgeCheck.expectedBg);
+  expect(bridgeCheck.actualColor).toBe(bridgeCheck.expectedColor);
+  expect(bridgeCheck.actualColor).not.toBe("rgb(255, 0, 255)");
 
   expect(errors).toEqual([]);
 });

@@ -116,11 +116,13 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             <div>preset: {preset}</div>
           </div>
           {hostKind === "tailwind" ? (
-            <div
-              className="rounded border border-wb-border bg-wb-well p-2 text-xs text-wb-fg"
-              data-testid="tailwind-bridge-probe"
-            >
-              Tailwind @theme inline bridge active
+            <div style={{ color: "rgb(255, 0, 255)" }}>
+              <div
+                className="rounded border border-wb-border bg-wb-well p-2 text-xs text-wb-fg"
+                data-testid="tailwind-bridge-probe"
+              >
+                Tailwind @theme inline bridge active
+              </div>
             </div>
           ) : null}
         </section>
