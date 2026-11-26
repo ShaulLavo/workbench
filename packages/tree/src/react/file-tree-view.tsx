@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type DragEvent,
@@ -139,12 +140,17 @@ export function FileTreeView({
   );
   const [scrollSeq, setScrollSeq] = useState(0);
   const focusSeqRef = useRef(0);
+  const readOnlyRef = useRef(readOnly);
+
+  useLayoutEffect(() => {
+    readOnlyRef.current = readOnly;
+  }, [readOnly]);
 
   const adapterWritable = useSubscribable(adapter?.writable ?? ALWAYS_WRITABLE);
   const writable = !readOnly && adapterWritable;
 
   function isCurrentlyWritable(): boolean {
-    return !readOnly && (adapter ? adapter.writable.getSnapshot() : true);
+    return !readOnlyRef.current && (adapter ? adapter.writable.getSnapshot() : true);
   }
 
   function requestRowFocus(path: string): void {

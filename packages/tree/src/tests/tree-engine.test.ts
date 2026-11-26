@@ -395,15 +395,34 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(model.index.getKind("sub")).toBe("file");
     expect(model.index.hasPath("sub/child.ts")).toBe(false);
 
-    // A late lazy response for retired `sub` MUST NOT restore `sub` as a directory or resurrect children.
+    // A late lazy response for retired `sub` or nested `sub/nested` MUST NOT restore directory state.
     subState.set({ status: "loaded", entries: [{ name: "ghost.ts", kind: "file" }] });
     model.index.setLazyDirectoryState("sub", {
       status: "loaded",
       entries: [{ name: "ghost2.ts", kind: "file" }],
     });
+    model.index.setLazyDirectoryState("sub/nested", {
+      status: "loaded",
+      entries: [{ name: "deep.ts", kind: "file" }],
+    });
     expect(model.index.getKind("sub")).toBe("file");
     expect(model.index.hasPath("sub/ghost.ts")).toBe(false);
     expect(model.index.hasPath("sub/ghost2.ts")).toBe(false);
+    expect(model.index.hasPath("sub/nested/deep.ts")).toBe(false);
+
+    // Optimistic delete of `docs` must NOT retire `docs` lazy subscription on parent refresh.
+    await bound.ensureDirectoryLoaded("docs");
+    model.index.applyOptimistic("opt-del-docs", { kind: "delete", path: "docs" }, { inFlight: true });
+    rootState.set({
+      status: "loaded",
+      entries: [
+        { name: "docs", kind: "directory" },
+        { name: "sub", kind: "file" },
+      ],
+    });
+    model.index.rollbackOptimistic("opt-del-docs");
+    docsState.set({ status: "loaded", entries: [{ name: "after-rollback.md", kind: "file" }] });
+    expect(model.index.hasPath("docs/after-rollback.md")).toBe(true);
 
     // Invalidate collapsed `docs` while adapter still reports `loaded`; expanding it must force reload.
     for (const listener of invListeners) {

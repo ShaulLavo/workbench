@@ -8,7 +8,7 @@ import {
   type LazyInvalidationEvent,
   type OptimisticTreeMutation,
 } from "@shaulavo/workbench-core";
-import { baseName, compareDirEntries, joinPath, normalizeTreePath, parentOf } from "./paths";
+import { ancestorsOf, baseName, compareDirEntries, joinPath, normalizeTreePath, parentOf } from "./paths";
 
 export type RawTreeEntry = string | { readonly path: string; readonly kind: EntryKind };
 
@@ -422,6 +422,10 @@ export class FileTreeIndex {
     return this.activeKinds().get(treePath);
   }
 
+  getConfirmedKind(treePath: string): EntryKind | undefined {
+    return this.confirmedKinds().get(treePath);
+  }
+
   hasPath(treePath: string): boolean {
     return this.activeKinds().has(treePath);
   }
@@ -534,15 +538,29 @@ export class FileTreeIndex {
     this.rebuildOptimisticOverlay();
   }
 
+  private isStaleLazyDirectoryTarget(normalized: string): boolean {
+    if (normalized === "") return false;
+    const kinds = this.confirmedKinds();
+    const loaded = this.confirmedLoaded();
+    const currentKind = kinds.get(normalized);
+    if (currentKind && currentKind !== "directory") return true;
+
+    const chain = ancestorsOf(normalized).concat([normalized]);
+    for (let i = 0; i < chain.length; i += 1) {
+      const segmentPath = chain[i];
+      if (!segmentPath) continue;
+      const segKind = kinds.get(segmentPath);
+      if (segKind && segKind !== "directory") return true;
+      const parentPath = i === 0 ? "" : (chain[i - 1] ?? "");
+      if (loaded.has(parentPath) && segKind !== "directory") return true;
+    }
+    return false;
+  }
+
   /** Updates a single directory's lazy load state (Sprockt lazy mode). */
   setLazyDirectoryState(dirPath: string, state: DirectoryLoadState): void {
     const normalized = normalizeTreePath(dirPath);
-    if (normalized !== "") {
-      const currentKind = this.confirmedKinds().get(normalized);
-      const parentLoaded = this.confirmedLoaded().has(parentOf(normalized));
-      if (currentKind && currentKind !== "directory") return;
-      if (!currentKind && parentLoaded) return;
-    }
+    if (this.isStaleLazyDirectoryTarget(normalized)) return;
     this.lazyStates.set(normalized, state);
     if (state.status !== "loaded") return;
 

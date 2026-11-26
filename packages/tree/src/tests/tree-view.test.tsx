@@ -440,4 +440,64 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(removed).toEqual(["one.ts"]);
     expect(model.index.hasPath("two.ts")).toBe(true);
   });
+
+  it("stops a batch delete mid-loop when the readOnly prop flips to true", async () => {
+    const removed: string[] = [];
+    let flipReadOnly: (() => void) | undefined;
+    const adapter: FileSystemAdapter = {
+      workspaceId: "test-batch-readonly-prop",
+      writable: createSubscribable(true),
+      indexed: {
+        snapshot: createSubscribable({
+          revision: 1,
+          entries: [
+            { path: "alpha.ts", kind: "file" as const },
+            { path: "beta.ts", kind: "file" as const },
+          ],
+          loadedDirectoryPaths: new Set([""]),
+        }),
+        subscribePatches: () => () => {},
+        requestResync: async () => {},
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      async remove(target) {
+        removed.push(target);
+        flipReadOnly?.();
+      },
+    };
+
+    const model = new FileTreeModel();
+    const host = mount(<FileTreeView model={model} adapter={adapter} readOnly={false} />);
+    flipReadOnly = () => {
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            <FileTreeView model={model} adapter={adapter} readOnly />
+          </WorkbenchPortalProvider>,
+        );
+      });
+    };
+
+    const scroller = host.querySelector<HTMLElement>("[data-wb-tree-scroller]");
+    act(() => {
+      model.select("alpha.ts", "replace", "keyboard");
+      model.select("beta.ts", "range", "keyboard");
+    });
+    act(() => {
+      scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const confirmBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    expect(confirmBtn).not.toBeNull();
+
+    await act(async () => {
+      confirmBtn?.click();
+      await Promise.resolve();
+    });
+    expect(removed).toEqual(["alpha.ts"]);
+    expect(model.index.hasPath("beta.ts")).toBe(true);
+  });
 });

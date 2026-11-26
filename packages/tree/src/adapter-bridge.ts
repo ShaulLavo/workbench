@@ -61,7 +61,7 @@ export function bindFileSystemAdapter(
     for (const [subDir, unsub] of Array.from(lazyUnsubs.entries())) {
       if (subDir === "" || subDir === parentDir) continue;
       if (prefix && !subDir.startsWith(prefix)) continue;
-      if (model.index.getKind(subDir) !== "directory") {
+      if (model.index.getConfirmedKind(subDir) !== "directory") {
         unsub();
         lazyUnsubs.delete(subDir);
         staleLazyDirs.delete(subDir);
