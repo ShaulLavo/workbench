@@ -1,0 +1,66 @@
+{
+  "name": "workbench-monorepo",
+  "private": true,
+  "license": "MIT",
+  "workspaces": {
+    "packages": [
+      "packages/*",
+      "apps/*"
+    ],
+    "catalog": {
+      "@shaulavo/hotkeys": "0.0.4",
+      "@types/bun": "1.4.4",
+      "@types/react": "19.3.3",
+      "@types/react-dom": "19.3.0",
+      "@vitejs/plugin-react": "6.3.0",
+      "oxfmt": "0.70.0",
+      "oxlint": "1.88.0",
+      "oxc-transform-react": "0.151.0",
+      "playwright": "1.64.1",
+      "react": "19.3.1",
+      "react-dom": "19.3.1",
+      "turbo": "2.11.5",
+      "typescript": "7.0.2",
+      "vite": "8.3.4",
+      "vitest": "5.0.2"
+    }
+  },
+  "type": "module",
+  "scripts": {
+    "build": "turbo run build --filter='@shaulavo/*'",
+    "typecheck": "turbo run typecheck",
+    "lint": "bun scripts/check-javascript.ts && oxlint .",
+    "format": "oxfmt --write .",
+    "format:check": "oxfmt --check .",
+    "license:check": "bun scripts/license-check.ts",
+    "compiler:census": "bun scripts/compiler-census.ts",
+    "pack:check": "bun run build && bun scripts/pack-check.ts",
+    "gates": "bun run typecheck && bun run lint && bun run format:check && bun run license:check && bun run compiler:census",
+    "test:unit": "turbo run test",
+    "test:browser": "bun run build && bunx playwright test --config apps/harness/e2e/playwright.config.ts",
+    "verify:browser": "bun scripts/verify-browser.ts",
+    "verify": "bun run build && bun run gates && bun run test:unit && bun run pack:check && bun run test:browser"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.64.1",
+    "@tailwindcss/vite": "4.3.3",
+    "@types/bun": "catalog:",
+    "@types/node": "26.6.3",
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "oxc-plugin-react-compiler": "0.2.0",
+    "oxc-transform-react": "catalog:",
+    "oxfmt": "catalog:",
+    "oxlint": "catalog:",
+    "playwright": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:",
+    "tailwindcss": "4.3.3",
+    "turbo": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:",
+    "vitest": "catalog:"
+  },
+  "packageManager": "bun@1.4.4"
+}

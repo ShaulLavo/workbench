@@ -1,0 +1,10 @@
+{
+  "$schema": "./node_modules/oxlint/configuration_schema.json",
+  "plugins": ["typescript", "react", "import"],
+  "ignorePatterns": ["**/dist/**", "**/node_modules/**", "playwright-report/**", "test-results/**"],
+  "rules": {
+    "no-unused-vars": "error",
+    "no-debugger": "error",
+    "eqeqeq": ["error", "always", { "null": "ignore" }]
+  }
+}
