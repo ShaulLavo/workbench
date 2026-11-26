@@ -1,4 +1,4 @@
-import type { ComponentPropsWithoutRef, MouseEvent, ReactNode } from "react";
+import type { ComponentPropsWithoutRef, KeyboardEvent, MouseEvent, ReactNode } from "react";
 import { resolveActivationFocus, type ActivationFocusDecision } from "@shaulavo/workbench-core";
 import { StrokeIcon } from "@shaulavo/workbench-icons/react";
 import { cx } from "../utils/cx";
@@ -37,6 +37,7 @@ export interface BarTabProps extends Omit<ComponentPropsWithoutRef<"div">, "onSe
   readonly closeLabel?: string;
   readonly onActivate?: (focus: ActivationFocusDecision, event: MouseEvent<HTMLButtonElement>) => void;
   readonly onDoubleClickLabel?: () => void;
+  readonly onTabKeyDown?: (event: KeyboardEvent<HTMLButtonElement>) => void;
   readonly onClose?: (event: MouseEvent<HTMLButtonElement>) => void;
 }
 
@@ -52,6 +53,7 @@ export function BarTab({
   closeLabel,
   onActivate,
   onDoubleClickLabel,
+  onTabKeyDown,
   onClose,
   className,
   ...props
@@ -81,6 +83,7 @@ export function BarTab({
         title={title ?? label}
         onClick={handleActivate}
         onDoubleClick={onDoubleClickLabel}
+        onKeyDown={onTabKeyDown}
       >
         {icon ? (
           <span className="wb-tab-icon" aria-hidden="true">

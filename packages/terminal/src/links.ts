@@ -154,8 +154,10 @@ export function registerTerminalFileLinks(
   options: RegisterTerminalFileLinksOptions,
 ): LinkProviderRegistration {
   let clickSeq = 0;
+  let disposed = false;
 
   async function activateLink(link: TerminalSnapshotFileLink): Promise<void> {
+    if (disposed) return;
     clickSeq += 1;
     const mySeq = clickSeq;
     let resolved: string | null = null;
@@ -164,7 +166,7 @@ export function registerTerminalFileLinks(
     } catch {
       resolved = null;
     }
-    if (clickSeq !== mySeq) return;
+    if (disposed || clickSeq !== mySeq) return;
     if (!resolved) {
       options.onUnresolved?.(link.reference.path);
       return;
@@ -176,8 +178,9 @@ export function registerTerminalFileLinks(
     options.openFileLink(resolved, location, { shouldFocusEditor: true, origin: "mouse" });
   }
 
-  return terminal.registerLinkProvider({
+  const registration = terminal.registerLinkProvider({
     provideLinks(line): readonly ProvidedLink<Event>[] | undefined {
+      if (disposed) return undefined;
       const matches = findTerminalSnapshotFileLinks(line);
       if (matches.length === 0) return undefined;
       return matches.map((match) => ({
@@ -189,4 +192,13 @@ export function registerTerminalFileLinks(
       }));
     },
   });
+
+  return {
+    token: registration.token,
+    dispose() {
+      disposed = true;
+      clickSeq += 1;
+      registration.dispose();
+    },
+  };
 }

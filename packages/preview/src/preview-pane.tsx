@@ -6,6 +6,13 @@ import { normalizePreviewPath } from "./controllers";
 
 export type PreviewViewportPreset = "responsive" | "tablet" | "mobile";
 
+/**
+ * Default iframe sandbox omitting `allow-same-origin` so same-origin mounted previews stay
+ * isolated in an opaque origin and cannot read or modify the workbench DOM.
+ */
+export const DEFAULT_PREVIEW_SANDBOX =
+  "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
+
 export interface PreviewPaneProps {
   readonly adapter: PreviewAdapter;
   readonly initialPath?: string;
@@ -58,7 +65,7 @@ export function PreviewPane({
   viewportPreset: controlledViewport,
   onViewportPresetChange,
   dragging = false,
-  sandbox,
+  sandbox = DEFAULT_PREVIEW_SANDBOX,
   allow,
   emptyTitle = "No preview server running",
   emptyDescription = "Start a dev server in the terminal to preview your app here.",
@@ -185,9 +192,12 @@ export function PreviewPane({
       }
     };
 
-    const controller = adapter.attachFrame(frame, activePort, handleEvent);
+    const initialFramePath = committedPathRef.current;
+    const controller = adapter.attachFrame(frame, activePort, handleEvent, {
+      initialPath: initialFramePath,
+    });
     controllerRef.current = controller;
-    const initialSrc = adapter.frameUrl(activePort, committedPathRef.current);
+    const initialSrc = adapter.frameUrl(activePort, initialFramePath);
     // Always assign frame.src on controller attach so StrictMode remounts trigger a fresh load + handshake.
     frame.src = initialSrc;
 

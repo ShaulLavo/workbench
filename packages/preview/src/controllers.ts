@@ -30,6 +30,12 @@ export interface BridgelessPreviewControllerOptions {
   readonly onEvent: (event: PreviewFrameEvent) => void;
 }
 
+function isOpaqueSandboxedFrame(frame: HTMLIFrameElement): boolean {
+  const sandboxAttr = frame.getAttribute("sandbox");
+  if (sandboxAttr === null) return false;
+  return !sandboxAttr.split(/\s+/).includes("allow-same-origin");
+}
+
 /**
  * Bridge-less `PreviewFrameController` for remote sandboxes, localhost URLs, or cross-origin
  * dev servers where no script is injected into the preview document.
@@ -55,6 +61,7 @@ export function createBridgelessPreviewController({
     onFrameLoad() {
       if (disposed) return;
       onEvent({ type: "bridge-ready", supported: false });
+      if (isOpaqueSandboxedFrame(frame)) return;
       try {
         const title = frame.contentDocument?.title;
         if (title) onEvent({ type: "title", title });
@@ -75,13 +82,15 @@ export function createBridgelessPreviewController({
     reload() {
       if (disposed) return;
       const current = history[cursor] ?? "/";
-      try {
-        if (frame.contentWindow && frame.contentDocument) {
-          frame.contentWindow.location.reload();
-          return;
+      if (!isOpaqueSandboxedFrame(frame)) {
+        try {
+          if (frame.contentWindow && frame.contentDocument) {
+            frame.contentWindow.location.reload();
+            return;
+          }
+        } catch {
+          // Cross-origin frame: fall back to reassigning frame.src below.
         }
-      } catch {
-        // Cross-origin frame: fall back to reassigning frame.src below.
       }
       frame.src = frameUrl(port, current);
     },
@@ -125,6 +134,17 @@ interface BridgeIncomingMessage {
   readonly message?: unknown;
 }
 
+let globalHandshakeSeq = 0;
+
+function createHandshakeToken(port: number): string {
+  globalHandshakeSeq += 1;
+  const nonce =
+    typeof crypto !== "undefined" && typeof crypto.randomUUID === "function"
+      ? crypto.randomUUID()
+      : Math.random().toString(36).slice(2);
+  return `wb-hello-${port}-${globalHandshakeSeq}-${nonce}`;
+}
+
 function isConsoleLevel(value: unknown): value is "log" | "warn" | "error" {
   return value === "log" || value === "warn" || value === "error";
 }
@@ -148,19 +168,18 @@ export function createPreviewBridgeController({
   }
   let disposed = false;
   let bridgeReady = false;
-  let handshakeSeq = 0;
-  let activeToken = "";
+  let activeToken: string | null = null;
   let currentPath = normalizePreviewPath(initialPath);
   const targetOrigin = expectedOrigin === "null" ? "*" : expectedOrigin;
 
   function postToFrame(payload: Record<string, unknown>): boolean {
-    if (disposed || !frame.contentWindow) return false;
+    if (disposed || !frame.contentWindow || activeToken === null) return false;
     frame.contentWindow.postMessage({ channel, token: activeToken, ...payload }, targetOrigin);
     return true;
   }
 
   function handleMessage(event: MessageEvent): void {
-    if (disposed) return;
+    if (disposed || activeToken === null) return;
     if (event.source !== frame.contentWindow) return;
     if (event.origin !== expectedOrigin) return;
     const data = event.data as BridgeIncomingMessage | null;
@@ -206,8 +225,7 @@ export function createPreviewBridgeController({
     onFrameLoad() {
       if (disposed) return;
       bridgeReady = false;
-      handshakeSeq += 1;
-      activeToken = `wb-hello-${port}-${handshakeSeq}`;
+      activeToken = createHandshakeToken(port);
       postToFrame({ type: "hello", port });
     },
     navigate(rawPath) {

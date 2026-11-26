@@ -3,6 +3,7 @@ import { detectPlatform, type BrowserDispatcher, type FocusNode } from "@shaulav
 import {
   createReplayGate,
   type HotkeyAdapter,
+  type ReplayGate,
   type Subscribable,
   type TerminalAdapter,
   type TerminalAttachment,
@@ -121,6 +122,80 @@ async function waitForDocumentFonts(): Promise<void> {
 
 function exitDetail(exitCode: number | null): string {
   return exitCode === null ? "Process exited" : `Process exited (${exitCode})`;
+}
+
+export interface TerminalStreamTarget {
+  readonly gate: ReplayGate;
+  readonly terminal: Pick<Terminal, "write" | "writeln" | "reset"> & {
+    readonly appearance: { readonly grid: { readonly columns: number; readonly rows: number } };
+  };
+  readonly onResize: (cols: number, rows: number) => void;
+}
+
+/** Dispatches one `TerminalStreamEvent` onto a terminal + `ReplayGate`, keeping reconnects alive. */
+export function applyTerminalStreamEvent(event: TerminalStreamEvent, target: TerminalStreamTarget): void {
+  if (event.type === "ready") {
+    target.gate.begin();
+    if (event.restoredHistory) {
+      target.terminal.writeln("\r\n[Previous output restored. A new terminal process has started.]");
+    }
+    const grid = target.terminal.appearance.grid;
+    target.onResize(grid.columns, grid.rows);
+    return;
+  }
+  if (event.type === "output") {
+    target.terminal.write(event.data);
+    return;
+  }
+  if (event.type === "replay-complete") {
+    target.gate.complete();
+    return;
+  }
+  if (event.type === "cleared") {
+    target.terminal.reset();
+    return;
+  }
+  if (event.type === "exit") {
+    target.terminal.writeln("");
+    target.terminal.writeln(exitDetail(event.exitCode));
+    return;
+  }
+  if (event.type === "error") {
+    target.terminal.writeln("");
+    target.terminal.writeln(event.message);
+    return;
+  }
+  if (event.type === "disconnected") {
+    if (event.willReconnect) {
+      // Recoverable disconnect disables input until the next ready -> replay-complete -> paint cycle.
+      target.gate.begin();
+    } else {
+      target.gate.close();
+    }
+  }
+}
+
+export interface PasteClipboardSnapshotOptions {
+  readonly targetTerminal: Pick<Terminal, "paste"> | null;
+  readonly getCurrentTerminal: () => Pick<Terminal, "paste"> | null;
+  readonly targetSessionId: string;
+  readonly getCurrentSessionId: () => string;
+  readonly isInputReady: () => boolean;
+  readonly readClipboard: () => Promise<string | null>;
+}
+
+/**
+ * Reads clipboard text and forwards it through Ghostty's `terminal.paste()` (preserving
+ * bracketed-paste encoding), aborting if the terminal or active session changed mid-read.
+ */
+export async function pasteClipboardIntoTerminal(options: PasteClipboardSnapshotOptions): Promise<boolean> {
+  if (!options.targetTerminal) return false;
+  const text = await options.readClipboard();
+  if (!text || !options.isInputReady()) return false;
+  if (options.getCurrentTerminal() !== options.targetTerminal) return false;
+  if (options.getCurrentSessionId() !== options.targetSessionId) return false;
+  options.targetTerminal.paste(text);
+  return true;
 }
 
 /**
@@ -322,10 +397,11 @@ export function TerminalView({
       }
 
       if (adapter.resolveFileLink && adapter.openFileLink) {
+        const resolveFileLink = adapter.resolveFileLink.bind(adapter);
+        const openFileLink = adapter.openFileLink.bind(adapter);
         const reg = registerTerminalFileLinks(terminal, {
-          resolveFileLink: (rawPath) => propsRef.current.adapter.resolveFileLink!(rawPath),
-          openFileLink: (path, location, focus) =>
-            propsRef.current.adapter.openFileLink!(path, location, focus),
+          resolveFileLink,
+          openFileLink,
         });
         linkCleanup = () => reg.dispose();
       }
@@ -382,40 +458,13 @@ export function TerminalView({
 
       const handleStreamEvent = (event: TerminalStreamEvent): void => {
         if (cancelled || signal.aborted || !terminal) return;
-        if (event.type === "ready") {
-          gate.begin();
-          if (event.restoredHistory) {
-            terminal.writeln("\r\n[Previous output restored. A new terminal process has started.]");
-          }
-          const grid = terminal.appearance.grid;
-          attachment?.resize(grid.columns, grid.rows);
-          return;
-        }
-        if (event.type === "output") {
-          terminal.write(event.data);
-          return;
-        }
-        if (event.type === "replay-complete") {
-          gate.complete();
-          return;
-        }
-        if (event.type === "cleared") {
-          terminal.reset();
-          return;
-        }
-        if (event.type === "exit") {
-          terminal.writeln("");
-          terminal.writeln(exitDetail(event.exitCode));
-          return;
-        }
-        if (event.type === "error") {
-          terminal.writeln("");
-          terminal.writeln(event.message);
-          return;
-        }
-        if (event.type === "disconnected") {
-          gate.close();
-        }
+        applyTerminalStreamEvent(event, {
+          gate,
+          terminal,
+          onResize: (cols, rows) => {
+            attachment?.resize(cols, rows);
+          },
+        });
       };
 
       const grid = terminal.appearance.grid;
@@ -554,8 +603,15 @@ export function TerminalView({
       hint: "⌘V",
       testId: "wb-term-ctx-paste",
       onSelect: () => {
-        void readClipboardText().then((text) => {
-          if (text && inputReadyRef.current) attachmentRef.current?.write(text);
+        const targetTerminal = terminalRef.current;
+        const targetSessionId = propsRef.current.sessionId;
+        void pasteClipboardIntoTerminal({
+          targetTerminal,
+          getCurrentTerminal: () => terminalRef.current,
+          targetSessionId,
+          getCurrentSessionId: () => propsRef.current.sessionId,
+          isInputReady: () => inputReadyRef.current,
+          readClipboard: readClipboardText,
         });
       },
     },

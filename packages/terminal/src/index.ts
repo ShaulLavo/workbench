@@ -25,5 +25,12 @@ export {
   type TerminalKey,
 } from "./keys";
 export { TerminalAccessoryBar, type TerminalAccessoryBarProps } from "./terminal-accessory-bar";
-export { TerminalView, type TerminalViewProps } from "./terminal-view";
+export {
+  applyTerminalStreamEvent,
+  pasteClipboardIntoTerminal,
+  TerminalView,
+  type PasteClipboardSnapshotOptions,
+  type TerminalStreamTarget,
+  type TerminalViewProps,
+} from "./terminal-view";
 export { TerminalPanel, type TerminalPanelProps } from "./terminal-panel";

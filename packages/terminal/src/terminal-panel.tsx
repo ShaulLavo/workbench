@@ -105,7 +105,12 @@ export function TerminalPanel({
                 icon={<SessionStatusDot status={session.status} />}
                 data-testid={`wb-term-tab-${session.id}`}
                 onActivate={() => adapter.selectSession(session.id)}
-                onDoubleClick={() => setRenamingId(session.id)}
+                onDoubleClickLabel={() => setRenamingId(session.id)}
+                onTabKeyDown={(event) => {
+                  if (event.key !== "F2") return;
+                  event.preventDefault();
+                  setRenamingId(session.id);
+                }}
                 onClose={() => {
                   void adapter.closeSession(session.id);
                 }}
@@ -115,6 +120,21 @@ export function TerminalPanel({
         </BarTabStrip>
 
         <div className="wb-terminal-actions">
+          <button
+            type="button"
+            className="wb-terminal-action-btn"
+            aria-label="Rename terminal"
+            title="Rename terminal (F2)"
+            data-testid="wb-term-rename"
+            disabled={!primarySession}
+            onClick={() => {
+              if (primarySession) setRenamingId(primarySession.id);
+            }}
+          >
+            <svg aria-hidden="true" className="wb-stroke-icon" focusable="false" viewBox="0 0 24 24">
+              <path d="M16.5 4.5 19.5 7.5 8 19H5v-3L16.5 4.5z" />
+            </svg>
+          </button>
           <button
             type="button"
             className="wb-terminal-action-btn"

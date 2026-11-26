@@ -12,6 +12,7 @@ import {
   createBridgelessPreviewController,
   createPreviewBridgeController,
   DEFAULT_PREVIEW_BRIDGE_CHANNEL,
+  DEFAULT_PREVIEW_SANDBOX,
   normalizePreviewPath,
   PreviewPane,
 } from "../index";
@@ -112,6 +113,16 @@ describe("@shaulavo/workbench-preview", () => {
       onEvent: (event) => events.push(event),
     });
 
+    // Empty-token hello-ack arriving BEFORE onFrameLoad() must be rejected.
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: mockWindow,
+        origin: "http://localhost:5173",
+        data: { channel: DEFAULT_PREVIEW_BRIDGE_CHANNEL, type: "hello-ack", token: "" },
+      }),
+    );
+    expect(events).toHaveLength(0);
+
     controller.onFrameLoad();
     expect(posted).toHaveLength(1);
     const token = posted[0]?.payload.token as string;
@@ -177,6 +188,89 @@ describe("@shaulavo/workbench-preview", () => {
       token,
     });
     controller.dispose();
+
+    // Replacing the controller on the same iframe + port mints a distinct token and rejects old acks.
+    const events2: PreviewFrameEvent[] = [];
+    const controller2 = createPreviewBridgeController({
+      frame,
+      port: 5173,
+      frameUrl: (port, p) => `http://localhost:${port}${p}`,
+      expectedOrigin: "http://localhost:5173",
+      onEvent: (event) => events2.push(event),
+    });
+    controller2.onFrameLoad();
+    const token2 = posted.at(-1)?.payload.token as string;
+    expect(token2).not.toBe(token);
+    window.dispatchEvent(
+      new MessageEvent("message", {
+        source: mockWindow,
+        origin: "http://localhost:5173",
+        data: { channel: DEFAULT_PREVIEW_BRIDGE_CHANNEL, type: "hello-ack", token },
+      }),
+    );
+    expect(events2).toHaveLength(0);
+    controller2.dispose();
+  });
+
+  it("sandboxes preview iframes by default and preserves non-root initialPath across Back and Reload", async () => {
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 5173, label: "web" }]);
+    const adapter: PreviewAdapter = {
+      kind: "mounted",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, p) => `http://127.0.0.1:${port}${p}`,
+      tabUrl: (port, p) => `http://127.0.0.1:${port}${p}`,
+      locate: () => undefined,
+      attachFrame: (el, port, onEvent, options) =>
+        createBridgelessPreviewController({
+          frame: el,
+          port,
+          frameUrl: (p, path) => `http://127.0.0.1:${p}${path}`,
+          initialPath: options?.initialPath,
+          onEvent,
+        }),
+    };
+
+    const host = mount(<PreviewPane adapter={adapter} initialPath="/start" />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const iframe = host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]');
+    expect(iframe).not.toBeNull();
+    expect(iframe?.getAttribute("sandbox")).toBe(DEFAULT_PREVIEW_SANDBOX);
+    expect(iframe?.getAttribute("sandbox")).not.toContain("allow-same-origin");
+    expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/start");
+
+    // Cross-origin reload before any toolbar navigation must keep /start, not fall back to /.
+    Object.defineProperty(iframe, "contentDocument", {
+      get() {
+        throw new Error("cross-origin");
+      },
+      configurable: true,
+    });
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-reload"]')?.click();
+    });
+    expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/start");
+
+    // Navigate to /next then press Back -> returns to /start (not /).
+    const urlInput = host.querySelector<HTMLInputElement>('[data-testid="wb-preview-url-input"]');
+    const form = host.querySelector<HTMLFormElement>(".wb-preview-url-form");
+    act(() => {
+      if (urlInput) {
+        const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, "value")?.set;
+        setter?.call(urlInput, "/next");
+        urlInput.dispatchEvent(new Event("input", { bubbles: true }));
+      }
+      form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true }));
+    });
+    expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/next");
+
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-back"]')?.click();
+    });
+    expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:5173/start");
   });
 
   it("rejects wildcard expectedOrigin and strips unsafe open-in-tab URL schemes", async () => {

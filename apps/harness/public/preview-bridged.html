@@ -42,6 +42,7 @@
       let cursor = 0;
       let reloads = 0;
       let activeToken = "";
+      let parentOrigin = "";
 
       const heading = document.getElementById("heading");
       const portEl = document.getElementById("port");
@@ -57,11 +58,13 @@
       render();
 
       window.addEventListener("message", (event) => {
-        if (event.origin !== location.origin) return;
+        if (event.source !== window.parent) return;
         const data = event.data;
         if (!data || data.channel !== CHANNEL) return;
         if (data.type === "hello") {
           activeToken = data.token;
+          parentOrigin = event.origin;
+          const replyOrigin = parentOrigin && parentOrigin !== "null" ? parentOrigin : "*";
           event.source.postMessage(
             {
               channel: CHANNEL,
@@ -70,11 +73,13 @@
               path: historyStack[cursor],
               title: document.title,
             },
-            location.origin,
+            replyOrigin,
           );
           return;
         }
+        if (!parentOrigin || event.origin !== parentOrigin) return;
         if (data.token !== activeToken) return;
+        const replyOrigin = parentOrigin !== "null" ? parentOrigin : "*";
         if (data.type === "navigate" && typeof data.path === "string") {
           historyStack.splice(cursor + 1);
           historyStack.push(data.path);
@@ -82,25 +87,25 @@
           render();
           event.source.postMessage(
             { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
-            location.origin,
+            replyOrigin,
           );
           event.source.postMessage(
             { channel: CHANNEL, type: "title", token: activeToken, title: document.title },
-            location.origin,
+            replyOrigin,
           );
         } else if (data.type === "back" && cursor > 0) {
           cursor -= 1;
           render();
           event.source.postMessage(
             { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
-            location.origin,
+            replyOrigin,
           );
         } else if (data.type === "forward" && cursor < historyStack.length - 1) {
           cursor += 1;
           render();
           event.source.postMessage(
             { channel: CHANNEL, type: "navigate", token: activeToken, path: historyStack[cursor] },
-            location.origin,
+            replyOrigin,
           );
         } else if (data.type === "reload") {
           reloads += 1;

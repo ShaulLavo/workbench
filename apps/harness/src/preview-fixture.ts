@@ -48,12 +48,13 @@ export function createBridgedHarnessPreviewAdapter(): PreviewAdapter {
         return undefined;
       }
     },
-    attachFrame(frame, port, onEvent) {
+    attachFrame(frame, port, onEvent, options) {
       return createPreviewBridgeController({
         frame,
         port,
         frameUrl: makeUrl,
-        expectedOrigin: window.location.origin,
+        expectedOrigin: "null",
+        initialPath: options?.initialPath,
         onEvent,
       });
     },
@@ -83,11 +84,12 @@ export function createRemoteHarnessPreviewAdapter(): PreviewAdapter {
         return undefined;
       }
     },
-    attachFrame(frame, port, onEvent) {
+    attachFrame(frame, port, onEvent, options) {
       return createBridgelessPreviewController({
         frame,
         port,
         frameUrl: makeUrl,
+        initialPath: options?.initialPath,
         onEvent,
       });
     },

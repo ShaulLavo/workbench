@@ -1,14 +1,22 @@
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
-import type { Subscribable, TerminalAdapter, TerminalSessionInfo } from "@shaulavo/workbench-core";
+import {
+  createReplayGate,
+  type Subscribable,
+  type TerminalAdapter,
+  type TerminalSessionInfo,
+} from "@shaulavo/workbench-core";
 import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
-import type { TerminalTheme } from "ghostty-webgpu";
+import type { LinkProvider, Terminal, TerminalTheme } from "ghostty-webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyTerminalStreamEvent,
   buildGhosttyTheme,
   controlKeyFor,
   findTerminalSnapshotFileLinks,
   parseTerminalFileReference,
+  pasteClipboardIntoTerminal,
+  registerTerminalFileLinks,
   TerminalAccessoryBar,
   terminalCursorOptions,
   TerminalPanel,
@@ -240,5 +248,185 @@ describe("@shaulavo/workbench-terminal", () => {
       host.querySelector<HTMLButtonElement>('[data-testid="wb-term-empty-new"]')?.click();
     });
     expect(createSession).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps ReplayGate recoverable on willReconnect disconnect and closes it on permanent disconnect", () => {
+    const readyEvents: boolean[] = [];
+    const gate = createReplayGate({
+      terminal: { scrollBy: () => {}, refresh: () => {}, getRowCount: () => 24 },
+      getSavedScroll: () => null,
+      onReadyChange: (ready) => readyEvents.push(ready),
+    });
+    const fakeTerm = {
+      write: vi.fn(),
+      writeln: vi.fn(),
+      reset: vi.fn(),
+      appearance: { grid: { columns: 80, rows: 24 } },
+    };
+    const onResize = vi.fn();
+
+    // Initial connect -> ready -> replay-complete -> paint -> ready=true.
+    applyTerminalStreamEvent(
+      { type: "ready", restoredHistory: false },
+      { gate, terminal: fakeTerm, onResize },
+    );
+    applyTerminalStreamEvent({ type: "replay-complete" }, { gate, terminal: fakeTerm, onResize });
+    gate.paint();
+    expect(gate.phase()).toBe("ready");
+    expect(readyEvents.at(-1)).toBe(true);
+
+    // Recoverable disconnect disables input without permanently closing the gate.
+    applyTerminalStreamEvent(
+      { type: "disconnected", willReconnect: true },
+      { gate, terminal: fakeTerm, onResize },
+    );
+    expect(gate.phase()).toBe("replaying");
+    expect(readyEvents.at(-1)).toBe(false);
+
+    // Reconnect cycle re-enables input cleanly.
+    applyTerminalStreamEvent(
+      { type: "ready", restoredHistory: false },
+      { gate, terminal: fakeTerm, onResize },
+    );
+    applyTerminalStreamEvent({ type: "replay-complete" }, { gate, terminal: fakeTerm, onResize });
+    gate.paint();
+    expect(gate.phase()).toBe("ready");
+    expect(readyEvents.at(-1)).toBe(true);
+
+    // Permanent disconnect closes the gate so later ready events are ignored.
+    applyTerminalStreamEvent(
+      { type: "disconnected", willReconnect: false },
+      { gate, terminal: fakeTerm, onResize },
+    );
+    expect(gate.phase()).toBe("closed");
+    applyTerminalStreamEvent(
+      { type: "ready", restoredHistory: false },
+      { gate, terminal: fakeTerm, onResize },
+    );
+    expect(gate.phase()).toBe("closed");
+  });
+
+  it("routes context-menu Paste through terminal.paste and aborts if the session changes mid-read", async () => {
+    const pasteA = vi.fn();
+    const pasteB = vi.fn();
+    const termA = { paste: pasteA } as unknown as Pick<Terminal, "paste">;
+    const termB = { paste: pasteB } as unknown as Pick<Terminal, "paste">;
+
+    let currentTerm = termA;
+    let currentSession = "bash-1";
+    const ok = await pasteClipboardIntoTerminal({
+      targetTerminal: termA,
+      getCurrentTerminal: () => currentTerm,
+      targetSessionId: "bash-1",
+      getCurrentSessionId: () => currentSession,
+      isInputReady: () => true,
+      readClipboard: async () => "echo hi\n",
+    });
+    expect(ok).toBe(true);
+    expect(pasteA).toHaveBeenCalledWith("echo hi\n");
+
+    // Simulate switching sessions while clipboard read is pending.
+    const clipDeferred = Promise.withResolvers<string | null>();
+    const pendingPaste = pasteClipboardIntoTerminal({
+      targetTerminal: termA,
+      getCurrentTerminal: () => currentTerm,
+      targetSessionId: "bash-1",
+      getCurrentSessionId: () => currentSession,
+      isInputReady: () => true,
+      readClipboard: () => clipDeferred.promise,
+    });
+    currentTerm = termB;
+    currentSession = "logs-2";
+    clipDeferred.resolve("rm -rf /");
+    const cancelled = await pendingPaste;
+    expect(cancelled).toBe(false);
+    expect(pasteA).toHaveBeenCalledTimes(1);
+    expect(pasteB).not.toHaveBeenCalled();
+  });
+
+  it("cancels pending workspace file-link opens when the link provider is disposed", async () => {
+    const providerHolder: { current: LinkProvider | null } = { current: null };
+    const innerDispose = vi.fn();
+    const fakeTerminal = {
+      registerLinkProvider(provider: LinkProvider) {
+        providerHolder.current = provider;
+        return { token: Symbol("test-link-provider"), dispose: innerDispose };
+      },
+    } as unknown as Terminal;
+
+    const pathDeferred = Promise.withResolvers<string | null>();
+    const openFileLink = vi.fn();
+    const reg = registerTerminalFileLinks(fakeTerminal, {
+      resolveFileLink: () => pathDeferred.promise,
+      openFileLink,
+    });
+
+    const text = "src/App.tsx:10:2";
+    const links = await providerHolder.current?.provideLinks(
+      {
+        lineIndex: 0,
+        text,
+        startCellByTextBoundary: Array.from({ length: text.length + 1 }, (_, i) => i),
+        endCellByTextBoundary: Array.from({ length: text.length + 1 }, (_, i) => Math.max(0, i - 1)),
+      } as unknown as Parameters<LinkProvider["provideLinks"]>[0],
+      0,
+    );
+    expect(links).toHaveLength(1);
+    links?.[0]?.activate(new MouseEvent("click"));
+
+    // Dispose before resolver finishes -> openFileLink must NOT be called.
+    reg.dispose();
+    expect(innerDispose).toHaveBeenCalledTimes(1);
+    pathDeferred.resolve("src/App.tsx");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(openFileLink).not.toHaveBeenCalled();
+  });
+
+  it("opens TerminalPanel inline rename via keyboard F2 on a focused tab and via Rename button", () => {
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "bash-1", title: "bash", status: "running" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("bash-1");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const renameSession = vi.fn();
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "bash-2",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession,
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    const host = mount(<TerminalPanel adapter={adapter} onError={() => {}} />);
+    const tabButton = host.querySelector<HTMLButtonElement>(
+      '[data-testid="wb-term-tab-bash-1"] button[role="tab"]',
+    );
+    expect(tabButton).not.toBeNull();
+
+    // Press F2 on the focused tab button -> inline rename input opens.
+    act(() => {
+      tabButton?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true, cancelable: true }));
+    });
+    const renameInput = host.querySelector<HTMLInputElement>('[data-testid="wb-term-rename-input-bash-1"]');
+    expect(renameInput).not.toBeNull();
+
+    act(() => {
+      renameInput?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(host.querySelector('[data-testid="wb-term-rename-input-bash-1"]')).toBeNull();
+
+    // Clicking the Rename button in the header also opens inline rename.
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
+    });
+    expect(host.querySelector('[data-testid="wb-term-rename-input-bash-1"]')).not.toBeNull();
   });
 });

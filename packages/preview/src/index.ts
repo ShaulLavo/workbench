@@ -6,4 +6,9 @@ export {
   type BridgelessPreviewControllerOptions,
   type PreviewBridgeControllerOptions,
 } from "./controllers";
-export { PreviewPane, type PreviewPaneProps, type PreviewViewportPreset } from "./preview-pane";
+export {
+  DEFAULT_PREVIEW_SANDBOX,
+  PreviewPane,
+  type PreviewPaneProps,
+  type PreviewViewportPreset,
+} from "./preview-pane";

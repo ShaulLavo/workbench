@@ -73,6 +73,16 @@ for (const host of [
 
       await page.getByTestId("wb-term-split").click();
       await expect(page.locator("[data-wb-terminal]")).toHaveCount(2);
+
+      // Keyboard F2 on focused terminal tab enters inline rename and commits cleanly.
+      const tabButton = page.locator('[data-testid="wb-term-tab-logs-2"] button[role="tab"]');
+      await tabButton.focus();
+      await page.keyboard.press("F2");
+      const renameInput = page.getByTestId("wb-term-rename-input-logs-2");
+      await expect(renameInput).toBeVisible();
+      await renameInput.fill("api logs");
+      await renameInput.press("Enter");
+      await expect(page.getByTestId("wb-term-tab-logs-2")).toContainText("api logs");
     }
 
     expect(errors).toEqual([]);
@@ -93,8 +103,11 @@ for (const host of [
       await page.getByTestId("mobile-pane-preview").tap();
     }
 
-    // Bridged mode: completes per-document hello handshake (`data-bridge-state="bridged"`).
+    // Bridged mode: completes per-document hello handshake inside default opaque sandbox (no allow-same-origin).
     const previewPane = page.locator("[data-wb-preview]");
+    const iframeEl = page.getByTestId("wb-preview-iframe");
+    await expect(iframeEl).toHaveAttribute("sandbox", /allow-scripts/);
+    expect(await iframeEl.getAttribute("sandbox")).not.toContain("allow-same-origin");
     await expect(previewPane).toHaveAttribute("data-bridge-state", "bridged", { timeout: 10000 });
     const frame = page.frameLocator('[data-testid="wb-preview-iframe"]');
     await expect(frame.locator("#heading")).toHaveText("Preview route: /");
