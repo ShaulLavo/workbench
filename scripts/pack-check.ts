@@ -175,6 +175,13 @@ try {
     }
   }
 
+  const tsxTranspiler = new Bun.Transpiler({ loader: "tsx" });
+  const jsTranspiler = new Bun.Transpiler({ loader: "js" });
+  const scanImportsInFile = (filePath: string): Set<string> => {
+    const transpiler = filePath.endsWith(".js") ? jsTranspiler : tsxTranspiler;
+    return new Set(transpiler.scanImports(readFileSync(filePath, "utf8")).map((item) => item.path));
+  };
+
   for (const [label, relPath, mustImportReact] of [
     ["@shaulavo/workbench-core root", "node_modules/@shaulavo/workbench-core/dist/index.js", false],
     ["@shaulavo/workbench-core/react", "node_modules/@shaulavo/workbench-core/dist/react/index.js", true],
@@ -182,8 +189,9 @@ try {
     ["@shaulavo/workbench-icons/react", "node_modules/@shaulavo/workbench-icons/dist/react/index.js", true],
     ["@shaulavo/workbench-ui root", "node_modules/@shaulavo/workbench-ui/dist/index.js", true],
   ] as const) {
-    const content = readFileSync(path.join(fullPeerDir, relPath), "utf8");
-    const importsReact = /from\s+["']react(?:\/jsx-runtime)?["']/.test(content);
+    const imported = scanImportsInFile(path.join(fullPeerDir, relPath));
+    const importsReact =
+      imported.has("react") || imported.has("react/jsx-runtime") || imported.has("react/jsx-dev-runtime");
     if (mustImportReact && !importsReact) {
       throw new Error(`${label} must keep react externalized`);
     }
@@ -192,12 +200,10 @@ try {
     }
   }
 
-  const uiEntry = readFileSync(
+  const uiDistImports = scanImportsInFile(
     path.join(fullPeerDir, "node_modules/@shaulavo/workbench-ui/dist/index.js"),
-    "utf8",
   );
   const expectedBaseUiSubpaths = new Set<string>();
-  const baseUiImportRe = /(?:from\s+|import\s*\(?\s*)["'](@base-ui\/react(?:\/[^"']+)?)["']/g;
   const collectUiImports = (dir: string): void => {
     for (const entry of readdirSync(dir, { withFileTypes: true })) {
       if (entry.name === "tests") continue;
@@ -207,9 +213,10 @@ try {
         continue;
       }
       if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
-      const srcText = readFileSync(full, "utf8");
-      for (const match of srcText.matchAll(baseUiImportRe)) {
-        if (match[1]) expectedBaseUiSubpaths.add(match[1]);
+      for (const specifier of scanImportsInFile(full)) {
+        if (specifier === "@base-ui/react" || specifier.startsWith("@base-ui/react/")) {
+          expectedBaseUiSubpaths.add(specifier);
+        }
       }
     }
   };
@@ -218,8 +225,7 @@ try {
     throw new Error("Expected @shaulavo/workbench-ui to import at least one @base-ui/react specifier");
   }
   for (const subpath of expectedBaseUiSubpaths) {
-    const escaped = subpath.replaceAll("/", "\\/");
-    if (!new RegExp(`(?:from\\s+|import\\s*\\(?\\s*)["']${escaped}["']`).test(uiEntry)) {
+    if (!uiDistImports.has(subpath)) {
       throw new Error(`@shaulavo/workbench-ui bundled instead of externalizing ${subpath}`);
     }
   }
