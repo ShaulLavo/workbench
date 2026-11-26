@@ -45,6 +45,7 @@ export interface FileTreeViewportProps {
   readonly focusModality: "pointer" | "keyboard";
   readonly iconPreset: "rich" | "stroke";
   readonly dragging: boolean;
+  readonly touchDragging: boolean;
   readonly touchDragY: number | null;
   readonly renderRow: (row: TreeRow, index: number) => ReactNode;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
@@ -68,6 +69,7 @@ export function FileTreeViewport({
   focusModality,
   iconPreset,
   dragging,
+  touchDragging,
   touchDragY,
   renderRow,
   onKeyDown,
@@ -197,9 +199,13 @@ export function FileTreeViewport({
         tabIndex={hasEntryTabStop ? -1 : 0}
         data-wb-tree-scroller=""
         data-focus-modality={focusModality}
+        data-touch-dragging={touchDragging ? "true" : undefined}
         className="wb-tree-scroller"
         onScroll={handleScroll}
         onKeyDown={onKeyDown}
+        onDragOverCapture={(event) => {
+          dragPointerYRef.current = event.clientY;
+        }}
         onDragOver={(event) => {
           dragPointerYRef.current = event.clientY;
           onRootDragOver?.(event);

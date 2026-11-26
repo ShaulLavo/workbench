@@ -338,8 +338,106 @@ describe("@shaulavo/workbench-tree React view", () => {
       expect(move).toHaveBeenCalledTimes(1);
       expect(move).toHaveBeenCalledWith("note.md", "dest/note.md");
       elementFromPointSpy.mockRestore();
+
+      // Touch drag hovered over dest but released outside tree MUST NOT commit a move.
+      move.mockClear();
+      const movedNoteRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dest/note.md"]');
+      const outsideSpy = vi
+        .spyOn(document, "elementFromPoint")
+        .mockReturnValueOnce(host.querySelector('[data-testid="wb-tree-row-a"]') as Element)
+        .mockReturnValueOnce(document.body);
+      act(() => {
+        movedNoteRow?.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 8,
+            pointerType: "touch",
+            clientX: 20,
+            clientY: 80,
+            bubbles: true,
+          }),
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+      act(() => {
+        movedNoteRow?.dispatchEvent(
+          new PointerEvent("pointermove", {
+            pointerId: 8,
+            pointerType: "touch",
+            clientX: 20,
+            clientY: 20,
+            bubbles: true,
+          }),
+        );
+      });
+      await act(async () => {
+        movedNoteRow?.dispatchEvent(
+          new PointerEvent("pointerup", {
+            pointerId: 8,
+            pointerType: "touch",
+            clientX: 500,
+            clientY: 500,
+            bubbles: true,
+          }),
+        );
+        await Promise.resolve();
+      });
+      expect(move).not.toHaveBeenCalled();
+      outsideSpy.mockRestore();
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("stops a batch delete mid-loop when adapter.writable turns false", async () => {
+    const writableSub = createSubscribable(true);
+    const removed: string[] = [];
+    const adapter: FileSystemAdapter = {
+      workspaceId: "test-batch-writable",
+      writable: writableSub,
+      indexed: {
+        snapshot: createSubscribable({
+          revision: 1,
+          entries: [
+            { path: "one.ts", kind: "file" as const },
+            { path: "two.ts", kind: "file" as const },
+          ],
+          loadedDirectoryPaths: new Set([""]),
+        }),
+        subscribePatches: () => () => {},
+        requestResync: async () => {},
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      async remove(target) {
+        removed.push(target);
+        writableSub.set(false);
+      },
+    };
+
+    const model = new FileTreeModel();
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+    const scroller = host.querySelector<HTMLElement>("[data-wb-tree-scroller]");
+
+    act(() => {
+      model.select("one.ts", "replace", "keyboard");
+      model.select("two.ts", "range", "keyboard");
+    });
+    act(() => {
+      scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const confirmBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    expect(confirmBtn).not.toBeNull();
+
+    await act(async () => {
+      confirmBtn?.click();
+      await Promise.resolve();
+    });
+    expect(removed).toEqual(["one.ts"]);
+    expect(model.index.hasPath("two.ts")).toBe(true);
   });
 });

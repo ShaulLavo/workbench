@@ -38,6 +38,11 @@
     outline: none;
   }
 
+  .wb-tree-scroller[data-touch-dragging="true"],
+  .wb-tree-scroller[data-touch-dragging="true"] .wb-tree-row {
+    touch-action: none;
+  }
+
   .wb-tree-canvas {
     position: relative;
     width: 100%;

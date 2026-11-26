@@ -56,17 +56,34 @@ export function bindFileSystemAdapter(
     );
   }
 
+  function pruneRetiredLazySubscriptions(parentDir: string): void {
+    const prefix = parentDir === "" ? "" : `${parentDir}/`;
+    for (const [subDir, unsub] of Array.from(lazyUnsubs.entries())) {
+      if (subDir === "" || subDir === parentDir) continue;
+      if (prefix && !subDir.startsWith(prefix)) continue;
+      if (model.index.getKind(subDir) !== "directory") {
+        unsub();
+        lazyUnsubs.delete(subDir);
+        staleLazyDirs.delete(subDir);
+      }
+    }
+  }
+
   function subscribeLazyDir(dirPath: string): void {
     const lazy = adapter.lazy;
     const normalized = normalizeTreePath(dirPath);
     if (!lazy || lazyUnsubs.has(normalized)) return;
     const stateSub = lazy.getDirectoryState(normalized);
-    model.index.setLazyDirectoryState(normalized, stateSub.getSnapshot());
-    model.notifyIndexChange();
+    const applyState = (): void => {
+      const nextState = stateSub.getSnapshot();
+      model.index.setLazyDirectoryState(normalized, nextState);
+      if (nextState.status === "loaded") pruneRetiredLazySubscriptions(normalized);
+      model.notifyIndexChange();
+    };
+    applyState();
     const unsub = stateSub.subscribe(() => {
       if (disposed) return;
-      model.index.setLazyDirectoryState(normalized, stateSub.getSnapshot());
-      model.notifyIndexChange();
+      applyState();
     });
     lazyUnsubs.set(normalized, unsub);
   }

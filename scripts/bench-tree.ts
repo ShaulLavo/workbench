@@ -62,22 +62,32 @@ function ratio(delta: number, baseline: number): number {
   return baseline === 0 ? 0 : delta / baseline;
 }
 
+function collectGarbage(): void {
+  if (typeof Bun !== "undefined" && typeof Bun.gc === "function") {
+    Bun.gc(true);
+  }
+}
+
 function measureRound(paths: readonly string[]): TimingSample {
+  collectGarbage();
   const rawColdStart = performance.now();
-  new FileTreeModel({ paths });
+  new FileTreeModel({ paths }).getSnapshot();
   const rawColdMs = performance.now() - rawColdStart;
 
+  collectGarbage();
   const rawRemountStart = performance.now();
-  new FileTreeModel({ paths });
+  new FileTreeModel({ paths }).getSnapshot();
   const rawRemountMs = performance.now() - rawRemountStart;
 
+  collectGarbage();
   const preparedColdStart = performance.now();
   const preparedInput = prepareFileTreeInput(paths);
-  new FileTreeModel({ preparedInput });
+  new FileTreeModel({ preparedInput }).getSnapshot();
   const preparedColdMs = performance.now() - preparedColdStart;
 
+  collectGarbage();
   const preparedRemountStart = performance.now();
-  new FileTreeModel({ preparedInput });
+  new FileTreeModel({ preparedInput }).getSnapshot();
   const preparedRemountMs = performance.now() - preparedRemountStart;
 
   return { preparedColdMs, preparedRemountMs, rawColdMs, rawRemountMs };

@@ -332,6 +332,7 @@ describe("@shaulavo/workbench-tree engine", () => {
       status: "loaded",
       entries: [{ name: "old.md", kind: "file" }],
     });
+    const subState = createSubscribable<DirectoryLoadState>({ status: "idle" });
     const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
     const loadCalls: { readonly dir: string; readonly force?: boolean }[] = [];
 
@@ -339,7 +340,7 @@ describe("@shaulavo/workbench-tree engine", () => {
       workspaceId: "test-lazy-edge",
       writable: createSubscribable(true),
       lazy: {
-        getDirectoryState: (dir) => (dir === "" ? rootState : docsState),
+        getDirectoryState: (dir) => (dir === "" ? rootState : dir === "sub" ? subState : docsState),
         async loadDirectory(dir, options) {
           loadCalls.push({ dir, force: options?.force });
           if (dir === "") {
@@ -352,6 +353,8 @@ describe("@shaulavo/workbench-tree engine", () => {
             });
           } else if (dir === "docs") {
             docsState.set({ status: "loaded", entries: [{ name: "fresh.md", kind: "file" }] });
+          } else if (dir === "sub") {
+            subState.set({ status: "loading" });
           }
         },
         subscribeInvalidation(listener) {
@@ -377,13 +380,12 @@ describe("@shaulavo/workbench-tree engine", () => {
     await bound.ensureDirectoryLoaded("", { force: true });
     expect(model.index.hasPath("docs")).toBe(true);
 
-    // Seed sub/child.ts, then replace directory `sub` with a file named `sub`: old child must be pruned.
-    model.index.setLazyDirectoryState("sub", {
-      status: "loaded",
-      entries: [{ name: "child.ts", kind: "file" }],
-    });
+    // Subscribe & begin loading `sub`, then parent refresh replaces `sub` dir with `sub` file.
+    await bound.ensureDirectoryLoaded("sub");
+    subState.set({ status: "loaded", entries: [{ name: "child.ts", kind: "file" }] });
     expect(model.index.hasPath("sub/child.ts")).toBe(true);
-    model.index.setLazyDirectoryState("", {
+
+    rootState.set({
       status: "loaded",
       entries: [
         { name: "docs", kind: "directory" },
@@ -392,6 +394,16 @@ describe("@shaulavo/workbench-tree engine", () => {
     });
     expect(model.index.getKind("sub")).toBe("file");
     expect(model.index.hasPath("sub/child.ts")).toBe(false);
+
+    // A late lazy response for retired `sub` MUST NOT restore `sub` as a directory or resurrect children.
+    subState.set({ status: "loaded", entries: [{ name: "ghost.ts", kind: "file" }] });
+    model.index.setLazyDirectoryState("sub", {
+      status: "loaded",
+      entries: [{ name: "ghost2.ts", kind: "file" }],
+    });
+    expect(model.index.getKind("sub")).toBe("file");
+    expect(model.index.hasPath("sub/ghost.ts")).toBe(false);
+    expect(model.index.hasPath("sub/ghost2.ts")).toBe(false);
 
     // Invalidate collapsed `docs` while adapter still reports `loaded`; expanding it must force reload.
     for (const listener of invListeners) {

@@ -537,6 +537,12 @@ export class FileTreeIndex {
   /** Updates a single directory's lazy load state (Sprockt lazy mode). */
   setLazyDirectoryState(dirPath: string, state: DirectoryLoadState): void {
     const normalized = normalizeTreePath(dirPath);
+    if (normalized !== "") {
+      const currentKind = this.confirmedKinds().get(normalized);
+      const parentLoaded = this.confirmedLoaded().has(parentOf(normalized));
+      if (currentKind && currentKind !== "directory") return;
+      if (!currentKind && parentLoaded) return;
+    }
     this.lazyStates.set(normalized, state);
     if (state.status !== "loaded") return;
 
@@ -547,7 +553,13 @@ export class FileTreeIndex {
     for (const old of previous) {
       const nextKind = nextKindByName.get(old.name);
       if (nextKind === undefined || (old.kind === "directory" && nextKind !== "directory")) {
-        deleteSubtreeInLayer(layer, joinPath(normalized, old.name));
+        const oldPath = joinPath(normalized, old.name);
+        deleteSubtreeInLayer(layer, oldPath);
+        for (const key of Array.from(this.lazyStates.keys())) {
+          if (key === oldPath || key.startsWith(`${oldPath}/`)) {
+            this.lazyStates.delete(key);
+          }
+        }
       }
     }
 

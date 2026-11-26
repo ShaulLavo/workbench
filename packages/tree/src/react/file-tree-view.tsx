@@ -120,6 +120,7 @@ export function FileTreeView({
 
   const [filterVisible, setFilterVisible] = useState(showFilter);
   const [draggingPaths, setDraggingPaths] = useState<readonly string[]>([]);
+  const [touchDragging, setTouchDragging] = useState(false);
   const [touchDragY, setTouchDragY] = useState<number | null>(null);
   const [dropTarget, setDropTarget] = useState<{
     readonly directory: string;
@@ -169,6 +170,18 @@ export function FileTreeView({
       boundRef.current = null;
     };
   }, [model, adapter]);
+
+  // Prevent native touch scroll/pan takeover while an active touch long-press drag is in progress.
+  useEffect(() => {
+    if (!touchDragging) return;
+    const preventTouchScroll = (event: TouchEvent): void => {
+      if (event.cancelable) event.preventDefault();
+    };
+    window.addEventListener("touchmove", preventTouchScroll, { passive: false });
+    return () => {
+      window.removeEventListener("touchmove", preventTouchScroll);
+    };
+  }, [touchDragging]);
 
   useEffect(() => {
     return () => {
@@ -297,6 +310,13 @@ export function FileTreeView({
     }
   }
 
+  function rollbackOptimisticFrom(optIds: readonly string[], startIndex: number): void {
+    for (let j = startIndex; j < optIds.length; j += 1) {
+      const pendingId = optIds[j];
+      if (pendingId) model.index.rollbackOptimistic(pendingId);
+    }
+  }
+
   async function executeMove(sources: readonly string[], destinationDir: string): Promise<void> {
     if (!isCurrentlyWritable()) return;
     const top = topLevelPaths(sources);
@@ -306,21 +326,36 @@ export function FileTreeView({
       to: joinPath(destinationDir, baseName(from)),
       entryKind: model.index.getKind(from) ?? ("file" as const),
     }));
-    const optId = nextOptimisticId();
-    model.index.applyOptimistic(optId, { kind: "move", moves }, { inFlight: Boolean(adapter) });
+    const optIds: string[] = [];
+    for (const move of moves) {
+      const id = nextOptimisticId();
+      optIds.push(id);
+      model.index.applyOptimistic(id, { kind: "move", moves: [move] }, { inFlight: Boolean(adapter) });
+    }
     if (destinationDir) model.setExpanded(destinationDir, true);
     model.notifyIndexChange();
     if (!adapter) return;
+    let completed = 0;
     try {
-      for (const move of moves) {
+      for (let i = 0; i < moves.length; i += 1) {
+        const move = moves[i];
+        if (!move) continue;
+        if (!isCurrentlyWritable()) {
+          rollbackOptimisticFrom(optIds, i);
+          model.notifyIndexChange();
+          if (completed > 0) void adapter.indexed?.requestResync();
+          return;
+        }
         await adapter.move(move.from, move.to);
+        const doneId = optIds[i];
+        if (doneId) model.index.settleOptimistic(doneId);
+        completed += 1;
       }
-      model.index.settleOptimistic(optId);
       model.notifyIndexChange();
     } catch (error) {
-      model.index.rollbackOptimistic(optId);
+      rollbackOptimisticFrom(optIds, completed);
       model.notifyIndexChange();
-      if (moves.length > 1) void adapter.indexed?.requestResync();
+      if (completed > 0) void adapter.indexed?.requestResync();
       onError?.("Unable to move selected items", error);
     }
   }
@@ -340,21 +375,32 @@ export function FileTreeView({
       model.index.applyOptimistic(id, { kind: "delete", path: target }, { inFlight: Boolean(adapter) });
     }
     model.notifyIndexChange();
+    let completed = 0;
     try {
-      if (adapter) {
-        for (const target of targets) {
-          await adapter.remove(target);
+      for (let i = 0; adapter && i < targets.length; i += 1) {
+        const target = targets[i];
+        if (!target) continue;
+        if (!isCurrentlyWritable()) {
+          rollbackOptimisticFrom(optIds, i);
+          model.notifyIndexChange();
+          if (completed > 0) void adapter.indexed?.requestResync();
+          setDeleteTarget(null);
+          setDeleting(false);
+          return;
         }
+        await adapter.remove(target);
+        const doneId = optIds[i];
+        if (doneId) model.index.settleOptimistic(doneId);
+        completed += 1;
       }
-      for (const id of optIds) model.index.settleOptimistic(id);
       model.notifyIndexChange();
       setDeleteTarget(null);
       setDeleting(false);
     } catch (error) {
-      for (const id of optIds) model.index.rollbackOptimistic(id);
+      rollbackOptimisticFrom(optIds, completed);
       model.notifyIndexChange();
       setDeleting(false);
-      if (targets.length > 1) void adapter?.indexed?.requestResync();
+      if (completed > 0) void adapter?.indexed?.requestResync();
       onError?.("Unable to delete selected items", error);
     }
   }
@@ -444,6 +490,7 @@ export function FileTreeView({
     clearHoverOpen();
     draggingPathsRef.current = [];
     setDraggingPaths([]);
+    setTouchDragging(false);
     setDropTarget(null);
     setTouchDragY(null);
   }
@@ -506,6 +553,7 @@ export function FileTreeView({
       current.sources = sources;
       draggingPathsRef.current = sources;
       setDraggingPaths(sources);
+      setTouchDragging(true);
       setTouchDragY(current.startY);
       if (typeof el.setPointerCapture === "function") {
         try {
@@ -566,8 +614,7 @@ export function FileTreeView({
     if (!active.active) return;
 
     touchSuppressClickUntilRef.current = Date.now() + 400;
-    const finalTarget =
-      resolveTouchDropTarget(event.clientX, event.clientY, active.sources) ?? active.dropTarget;
+    const finalTarget = resolveTouchDropTarget(event.clientX, event.clientY, active.sources);
     const sources = active.sources;
     clearDragState();
     if (finalTarget && sources.length > 0) {
@@ -693,6 +740,7 @@ export function FileTreeView({
         focusModality={state.focusModality}
         iconPreset={iconPreset}
         dragging={draggingPaths.length > 0}
+        touchDragging={touchDragging}
         touchDragY={touchDragY}
         onKeyDown={handleTreeKeyDown}
         onSelectStickyAncestor={(dirPath) => model.select(dirPath, "replace", "pointer")}
