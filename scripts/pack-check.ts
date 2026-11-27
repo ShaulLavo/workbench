@@ -418,13 +418,30 @@ try {
     "bun",
     [
       "-e",
-      `import * as coreReact from "@shaulavo/workbench-core/react";
+      `import { createRequire } from "node:module";
+       import * as coreReact from "@shaulavo/workbench-core/react";
        import * as iconsReact from "@shaulavo/workbench-icons/react";
        import * as ui from "@shaulavo/workbench-ui";
        import * as tree from "@shaulavo/workbench-tree";
        import * as treeReact from "@shaulavo/workbench-tree/react";
        import * as terminal from "@shaulavo/workbench-terminal";
        import * as preview from "@shaulavo/workbench-preview";
+       const req = createRequire(process.cwd() + "/package.json");
+       for (const name of [
+         "@shaulavo/workbench-tokens",
+         "@shaulavo/workbench-core",
+         "@shaulavo/workbench-icons",
+         "@shaulavo/workbench-ui",
+         "@shaulavo/workbench-tree",
+         "@shaulavo/workbench-terminal",
+         "@shaulavo/workbench-preview",
+         "@shaulavo/workbench-editor",
+       ]) {
+         const resolved = req.resolve(name);
+         if (!resolved.includes("/dist/")) {
+           throw new Error("createRequire.resolve did not land in dist for " + name + ": " + resolved);
+         }
+       }
        if (!coreReact.useSubscribable || !iconsReact.FileTypeIcon || !ui.WorkbenchShell || !ui.CommandPalette) process.exit(1);
        if (!tree.prepareFileTreeInput || !tree.FileTreeModel || !treeReact.FileTreeView) process.exit(1);
        if (!terminal.TerminalPanel || !terminal.TerminalView || !terminal.TerminalAccessoryBar) process.exit(1);
