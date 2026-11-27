@@ -120,7 +120,7 @@ export function VirtualList<T>({
   // Plan 181 hard constraint: directDomUpdates is strictly disabled for flow layout.
   // A/B measurements (benchmarks/virtual-direct-dom-ab.json) showed commit/render wins on measured absolute lists.
   const effectiveDirectDom = layout === "absolute" && (directDomUpdates ?? measureItems);
-  const modeKey = `${layout}:${effectiveDirectDom ? "direct" : "react"}`;
+  const modeKey = `${layout}:${effectiveDirectDom ? "direct" : "react"}:${measureItems ? "measured" : "fixed"}`;
 
   // Keep key identity bound to items so virtual-core does not discard cached measurements per render.
   // oxlint-disable-next-line react/exhaustive-deps

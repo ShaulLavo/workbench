@@ -466,7 +466,7 @@ describe("@shaulavo/workbench-ui", () => {
       expect(absDirectRows.length).toBeGreaterThan(5);
       expect(absDirectRows[1]?.style.transform).toContain("translate3d");
 
-      // Switch back to flow from a scrolled absolute list: preserve scrollTop and clear inline height/transforms.
+      // Switch back to flow from a scrolled absolute list: preserve scroller/inner identity + scrollTop and clear inline height/transforms.
       const scroller = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
       expect(scroller).not.toBeNull();
       if (scroller) scroller.scrollTop = 1000;
@@ -481,14 +481,17 @@ describe("@shaulavo/workbench-ui", () => {
           />,
         );
       });
-      expect(scroller?.scrollTop).toBe(1000);
+      const flowAgainScroller = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(flowAgainScroller).toBe(scroller);
+      expect(flowAgainScroller?.scrollTop).toBe(1000);
       const flowAgainInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(flowAgainInner).toBe(absDirectInner);
       expect(flowAgainInner?.style.height).toBe("");
       const flowAgainRow = flowHost.querySelector<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
       expect(flowAgainRow?.style.transform).toBe("");
       expect(flowAgainRow?.style.height).toBe("26px");
 
-      // Toggle directDomUpdates off then back on for absolute list: transforms must be restored cleanly.
+      // Toggling measureItems off on absolute directDomUpdates={false} replaces row DOM nodes so ResizeObserver detaches.
       act(() => {
         activeRoot?.render(
           <VirtualList
@@ -496,6 +499,23 @@ describe("@shaulavo/workbench-ui", () => {
             getKey={(item) => item.id}
             layout="absolute"
             directDomUpdates={false}
+            measureItems={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const measuredRowNode = flowHost.querySelector<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={false}
+            measureItems={false}
             initialRect={{ width: 320, height: 260 }}
             renderRow={(item) => <div>{item.label}</div>}
           />,
@@ -504,6 +524,7 @@ describe("@shaulavo/workbench-ui", () => {
       const absOffRows = flowHost.querySelectorAll<HTMLDivElement>(
         '.wb-virtual-list-row[data-layout="absolute"]',
       );
+      expect(absOffRows[0]).not.toBe(measuredRowNode);
       expect(absOffRows[1]?.style.transform).toBe("translateY(26px)");
 
       act(() => {
