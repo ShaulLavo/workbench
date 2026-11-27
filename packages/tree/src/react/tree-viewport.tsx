@@ -35,6 +35,15 @@ function makeKeyReader(rows: readonly TreeRow[]) {
   return (index: number): string => rows[index]?.key ?? String(index);
 }
 
+function stickyStackKey(rows: StickyAncestorsState["rows"]): string {
+  return rows.map((row) => `${row.depth}:${row.path}:${row.name}`).join("\0");
+}
+
+function applyStickyPushUp(overlay: HTMLDivElement | null, pushUpPx: number): void {
+  if (!overlay) return;
+  overlay.style.transform = pushUpPx > 0 ? `translateY(${-pushUpPx}px)` : "";
+}
+
 export interface FileTreeViewportProps {
   readonly rows: readonly TreeRow[];
   readonly parkedIndices: readonly number[];
@@ -47,6 +56,7 @@ export interface FileTreeViewportProps {
   readonly dragging: boolean;
   readonly touchDragging: boolean;
   readonly touchDragY: number | null;
+  readonly directDomUpdates?: boolean;
   readonly renderRow: (row: TreeRow, index: number) => ReactNode;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onSelectStickyAncestor: (dirPath: string) => void;
@@ -56,8 +66,8 @@ export interface FileTreeViewportProps {
 
 /**
  * Windowed tree scroller wrapping `@tanstack/react-virtual` with parked focused/editing/dragged
- * rows, synchronous `data-is-scrolling` hover suppression, sticky ancestors with push-up clipping,
- * and edge auto-scrolling during drags.
+ * rows, synchronous `data-is-scrolling` hover suppression, DOM-driven sticky ancestor push-up
+ * (re-rendering React only when the sticky stack changes), and edge auto-scrolling during drags.
  */
 export function FileTreeViewport({
   rows,
@@ -71,6 +81,7 @@ export function FileTreeViewport({
   dragging,
   touchDragging,
   touchDragY,
+  directDomUpdates = false,
   renderRow,
   onKeyDown,
   onSelectStickyAncestor,
@@ -81,11 +92,14 @@ export function FileTreeViewport({
   "use no memo";
 
   const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const stickyOverlayRef = useRef<HTMLDivElement | null>(null);
+  const stickyKeyRef = useRef("");
+  const stickyPushUpRef = useRef(0);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const dragPointerYRef = useRef<number | null>(null);
   const lastScrolledSeqRef = useRef(0);
   const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_HEIGHT);
-  const [scrollTop, setScrollTop] = useState(0);
+  const [stickyRows, setStickyRows] = useState<StickyAncestorsState["rows"]>([]);
 
   useEffect(() => {
     const node = scrollerRef.current;
@@ -141,8 +155,12 @@ export function FileTreeViewport({
     count: rows.length,
     getScrollElement: () => scrollerRef.current,
     estimateSize: () => rowHeight,
+    // Fixed-height rows: register in elementsCache without triggering getBoundingClientRect reads.
+    measureElement: directDomUpdates ? () => rowHeight : undefined,
     getItemKey,
     overscan: 12,
+    directDomUpdates,
+    directDomUpdatesMode: "transform",
     rangeExtractor: (range) => {
       const base = defaultRangeExtractor(range);
       if (parkedIndices.length === 0) return base;
@@ -154,9 +172,25 @@ export function FileTreeViewport({
     },
   });
 
+  function syncStickyFromScrollTop(scrollTop: number): void {
+    const next = computeStickyAncestors(rows, scrollTop, rowHeight, 3);
+    stickyPushUpRef.current = next.pushUpPx;
+    applyStickyPushUp(stickyOverlayRef.current, next.pushUpPx);
+    const nextKey = stickyStackKey(next.rows);
+    if (nextKey !== stickyKeyRef.current) {
+      stickyKeyRef.current = nextKey;
+      setStickyRows(next.rows);
+    }
+  }
+
   useLayoutEffect(() => {
     virtualizer.measure();
   }, [rowHeight, virtualizer]);
+
+  useLayoutEffect(() => {
+    syncStickyFromScrollTop(scrollerRef.current?.scrollTop ?? 0);
+    // oxlint-disable-next-line react/exhaustive-deps
+  }, [rows, rowHeight]);
 
   useLayoutEffect(() => {
     if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
@@ -166,7 +200,6 @@ export function FileTreeViewport({
   }, [activeIndex, scrollSeq, rows.length, virtualizer]);
 
   const virtualRows = virtualizer.getVirtualItems();
-  const sticky: StickyAncestorsState = computeStickyAncestors(rows, scrollTop, rowHeight, 3);
 
   function handleScroll(): void {
     const node = scrollerRef.current;
@@ -177,13 +210,15 @@ export function FileTreeViewport({
       scrollTimerRef.current = undefined;
       delete node.dataset.isScrolling;
     }, SCROLL_IDLE_MS);
-    setScrollTop(node.scrollTop);
+    syncStickyFromScrollTop(node.scrollTop);
   }
 
   return (
     <div className="wb-tree-viewport-wrap">
       <StickyAncestorsOverlay
-        sticky={sticky}
+        rows={stickyRows}
+        initialPushUpPx={stickyPushUpRef.current}
+        overlayRef={stickyOverlayRef}
         iconPreset={iconPreset}
         onSelectAncestor={(dirPath) => {
           const idx = rows.findIndex((r) => r.type === "entry" && r.path === dirPath);
@@ -215,7 +250,11 @@ export function FileTreeViewport({
           onRootDrop?.(event);
         }}
       >
-        <div className="wb-tree-canvas" style={{ height: `${virtualizer.getTotalSize()}px` }}>
+        <div
+          ref={directDomUpdates ? virtualizer.containerRef : undefined}
+          className="wb-tree-canvas"
+          style={directDomUpdates ? undefined : { height: `${virtualizer.getTotalSize()}px` }}
+        >
           {virtualRows.map((vRow) => {
             const row = rows[vRow.index];
             if (!row) return null;
@@ -223,8 +262,13 @@ export function FileTreeViewport({
               <div
                 key={vRow.key}
                 data-index={vRow.index}
+                ref={directDomUpdates ? virtualizer.measureElement : undefined}
                 className="wb-tree-slot"
-                style={{ transform: `translateY(${vRow.start}px)`, height: `${rowHeight}px` }}
+                style={
+                  directDomUpdates
+                    ? { height: `${rowHeight}px` }
+                    : { transform: `translateY(${vRow.start}px)`, height: `${rowHeight}px` }
+                }
               >
                 {renderRow(row, vRow.index)}
               </div>

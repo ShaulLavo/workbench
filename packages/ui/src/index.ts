@@ -60,7 +60,12 @@ export {
 } from "./components/tool-pane";
 export { Tooltip, TooltipLayer, type TooltipLayerProps, type TooltipProps } from "./components/tooltip-layer";
 export { UnsavedChangesDialog, type UnsavedChangesDialogProps } from "./components/unsaved-changes-dialog";
-export { VirtualList, type VirtualListHandle, type VirtualListProps } from "./components/virtual-list";
+export {
+  VirtualList,
+  type VirtualListHandle,
+  type VirtualListLayoutMode,
+  type VirtualListProps,
+} from "./components/virtual-list";
 export {
   WorkbenchShell,
   type WorkbenchDensity,

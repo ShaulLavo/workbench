@@ -1,33 +1,43 @@
+import type { Ref } from "react";
 import { FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
 import type { StickyAncestorsState } from "../model";
 
 export interface StickyAncestorsOverlayProps {
-  readonly sticky: StickyAncestorsState;
+  readonly rows: StickyAncestorsState["rows"];
+  readonly initialPushUpPx?: number;
+  readonly overlayRef?: Ref<HTMLDivElement>;
   readonly iconPreset: "rich" | "stroke";
   readonly onSelectAncestor: (dirPath: string) => void;
 }
 
-/** Renders pinned ancestor folder rows at the top of a scrolled tree with smooth push-up clipping. */
+/**
+ * Renders pinned ancestor folder rows at the top of a scrolled tree.
+ * Receives an `overlayRef` so smooth push-up offsets update directly in the DOM during scrolling
+ * without triggering React re-renders on every scroll pixel.
+ */
 export function StickyAncestorsOverlay({
-  sticky,
+  rows,
+  initialPushUpPx = 0,
+  overlayRef,
   iconPreset,
   onSelectAncestor,
 }: StickyAncestorsOverlayProps) {
-  if (sticky.rows.length === 0) return null;
+  if (rows.length === 0) return null;
 
   return (
     <div
+      ref={overlayRef}
       className="wb-tree-sticky"
       data-wb-tree-sticky=""
       style={
-        sticky.pushUpPx > 0
+        initialPushUpPx > 0
           ? {
-              transform: `translateY(${-sticky.pushUpPx}px)`,
+              transform: `translateY(${-initialPushUpPx}px)`,
             }
           : undefined
       }
     >
-      {sticky.rows.map((row) => (
+      {rows.map((row) => (
         <button
           key={row.path}
           type="button"

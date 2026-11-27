@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Sandbox Remote Preview</title>
+    <style>
+      body {
+        margin: 0;
+        padding: 24px;
+        font-family:
+          system-ui,
+          -apple-system,
+          sans-serif;
+        background: #ffffff;
+        color: #111827;
+      }
+      .badge {
+        display: inline-block;
+        padding: 2px 8px;
+        border-radius: 999px;
+        font-size: 12px;
+        font-weight: 600;
+        background: #eef2ff;
+        color: #1e40af;
+      }
+      code {
+        padding: 2px 6px;
+        border-radius: 4px;
+        background: #f3f4f6;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="badge">Bridge-less remote preview</div>
+    <h1 id="route-heading">Route: /</h1>
+    <p>Sandbox port: <code id="port-label">3000</code></p>
+    <p id="status-note">Served without a postMessage bridge inside an opaque sandboxed iframe.</p>
+    <script>
+      const params = new URLSearchParams(window.location.search);
+      const route = params.get("path") || "/";
+      const port = params.get("port") || "3000";
+      document.getElementById("route-heading").textContent = "Route: " + route;
+      document.getElementById("port-label").textContent = port;
+    </script>
+  </body>
+</html>

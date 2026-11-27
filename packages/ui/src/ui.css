@@ -1153,10 +1153,17 @@
   }
 
   .wb-virtual-list-row {
+    width: 100%;
+  }
+
+  .wb-virtual-list-row[data-layout="absolute"] {
     position: absolute;
     top: 0;
     left: 0;
-    width: 100%;
+  }
+
+  .wb-virtual-list-row[data-layout="flow"] {
+    position: relative;
   }
 
   /* ── TooltipLayer & Tooltip ── */

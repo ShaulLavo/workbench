@@ -55,6 +55,7 @@ export interface FileTreeViewProps {
   readonly iconPreset?: "rich" | "stroke";
   readonly showFilter?: boolean;
   readonly readOnly?: boolean;
+  readonly directDomUpdates?: boolean;
   readonly onOpenFile?: (path: string, focus: ActivationFocusDecision) => void;
   readonly onError?: (message: string, error: unknown) => void;
   readonly extraContextMenuItems?: (row: TreeEntryRow) => readonly ContextMenuItem[];
@@ -91,6 +92,7 @@ export function FileTreeView({
   iconPreset = "rich",
   showFilter = true,
   readOnly = false,
+  directDomUpdates,
   onOpenFile,
   onError,
   extraContextMenuItems,
@@ -748,6 +750,7 @@ export function FileTreeView({
         dragging={draggingPaths.length > 0}
         touchDragging={touchDragging}
         touchDragY={touchDragY}
+        directDomUpdates={directDomUpdates}
         onKeyDown={handleTreeKeyDown}
         onSelectStickyAncestor={(dirPath) => model.select(dirPath, "replace", "pointer")}
         onRootDragOver={(event) => {

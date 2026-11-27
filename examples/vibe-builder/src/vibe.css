@@ -1,0 +1,46 @@
+@layer workbench-app {
+  html,
+  body,
+  #root {
+    height: 100%;
+    margin: 0;
+  }
+
+  .vibe-center-column {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    min-height: 0;
+    background: var(--wb-bg-well);
+  }
+
+  .vibe-editor-slot {
+    flex: 1 1 auto;
+    min-height: 180px;
+    display: flex;
+    flex-direction: column;
+  }
+
+  .vibe-agent-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 10px 12px;
+    border-top: 1px solid var(--wb-border);
+    background: var(--wb-bg-panel);
+  }
+
+  .vibe-agent-timeline {
+    max-height: 110px;
+    overflow: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 12px;
+    color: var(--wb-fg-muted);
+  }
+
+  .vibe-agent-msg[data-role="assistant"] {
+    color: var(--wb-fg);
+  }
+}

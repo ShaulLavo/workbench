@@ -16,6 +16,7 @@ import {
   ToastHost,
   ToolPane,
   UnsavedChangesDialog,
+  VirtualList,
   WorkbenchPortalProvider,
   WorkbenchShell,
 } from "../index";
@@ -373,5 +374,88 @@ describe("@shaulavo/workbench-ui", () => {
     expect(resolveListboxKeyAction({ key: "Enter", count: 3, activeIndex: 1 })).toEqual({
       kind: "commit",
     });
+  });
+
+  it("supports VirtualList flow layout (Plan 181: never directDomUpdates) and measured absolute directDomUpdates", () => {
+    const items = Array.from({ length: 40 }, (_, i) => ({ id: `item-${i}`, label: `Row ${i}` }));
+    const origRect = HTMLElement.prototype.getBoundingClientRect;
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-wb-virtual-list") ? 260 : 30;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return 320;
+      },
+    });
+    HTMLElement.prototype.getBoundingClientRect = function mockRect() {
+      const h = this.hasAttribute("data-wb-virtual-list") ? 260 : 30;
+      return {
+        width: 320,
+        height: h,
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: h,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+
+    try {
+      // Flow layout keeps normal flow (paddingTop/paddingBottom + marginTop) even if directDomUpdates={true} is passed.
+      const flowHost = mount(
+        <VirtualList
+          items={items}
+          getKey={(item) => item.id}
+          layout="flow"
+          directDomUpdates={true}
+          initialRect={{ width: 320, height: 260 }}
+          renderRow={(item) => <div>{item.label}</div>}
+        />,
+      );
+      const flowList = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(flowList?.dataset.layout).toBe("flow");
+      const flowInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(flowInner?.style.height).toBe("");
+      expect(flowInner?.style.paddingTop).toBe("0px");
+      const flowRows = flowHost.querySelectorAll<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
+      expect(flowRows.length).toBeGreaterThan(5);
+      expect(flowRows[0]?.style.transform).toBe("");
+
+      act(() => {
+        activeRoot?.unmount();
+      });
+      activeHost?.remove();
+
+      // Measured absolute layout defaults directDomUpdates to true (virtualizer owns container height and row transforms).
+      const measuredHost = mount(
+        <VirtualList
+          items={items}
+          getKey={(item) => item.id}
+          layout="absolute"
+          measureItems={true}
+          initialRect={{ width: 320, height: 260 }}
+          renderRow={(item) => <div>{item.label}</div>}
+        />,
+      );
+      const measuredInner = measuredHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(measuredInner?.style.height).toMatch(/^\d+px$/);
+      const measuredRows = measuredHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(measuredRows.length).toBeGreaterThan(5);
+      expect(measuredRows[1]?.style.transform).toContain("translate3d");
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = origRect;
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
+      if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
+    }
   });
 });
