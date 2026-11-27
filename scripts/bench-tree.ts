@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { FileTreeModel, prepareFileTreeInput } from "../packages/tree/src/index";
+import { FileTreeModel, prepareFileTreeInput } from "../packages/workbench/src/tree/model";
 
 const PATH_COUNTS = [10_000, 50_000] as const;
 const WARMUP_ROUNDS = 3;

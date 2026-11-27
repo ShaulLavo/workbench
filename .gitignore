@@ -4,6 +4,7 @@ dist/
 *.tsbuildinfo
 playwright-report/
 test-results/
+release-candidate/
 .tmp/
 .env
 .env.local

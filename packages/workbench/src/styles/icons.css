@@ -1,0 +1,103 @@
+@layer theme, base, components, workbench, utilities, workbench-app;
+
+@layer workbench {
+  :where(:root, [data-wb-theme-scope]) {
+    --wb-icon-gray: light-dark(#84848a, #adadb1);
+    --wb-icon-red: light-dark(#d52c36, #ff6762);
+    --wb-icon-vermilion: light-dark(#d5512f, #ff8c5b);
+    --wb-icon-orange: light-dark(#ac6023, #ffa359);
+    --wb-icon-yellow: light-dark(#ac8816, #ffd452);
+    --wb-icon-green: light-dark(#199f43, #5ecc71);
+    --wb-icon-mint: light-dark(#1d8978, #61d5c0);
+    --wb-icon-teal: light-dark(#1e858e, #64d1db);
+    --wb-icon-cyan: light-dark(#2182a1, #68cdf2);
+    --wb-icon-blue: light-dark(#1a85d4, #69b1ff);
+    --wb-icon-indigo: light-dark(#693acf, #9d6afb);
+    --wb-icon-purple: light-dark(#a631be, #d568ea);
+    --wb-icon-pink: light-dark(#d32a61, #ff678d);
+    --wb-icon-brown: light-dark(#956b4f, #c3987b);
+    --wb-icon-mauve: light-dark(#594c5b, #79697b);
+    --wb-icon-neutral: light-dark(#6c6c71, #adadb1);
+  }
+
+  .wb-icon {
+    display: inline-block;
+    width: var(--wb-icon-size-sm, 0.875rem);
+    height: var(--wb-icon-size-sm, 0.875rem);
+    flex-shrink: 0;
+    vertical-align: middle;
+  }
+
+  .wb-icon .bg {
+    color: var(--wb-icon-back, currentColor);
+  }
+
+  .wb-stroke-icon {
+    display: inline-block;
+    width: var(--wb-icon-size-sm, 0.875rem);
+    height: var(--wb-icon-size-sm, 0.875rem);
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    vertical-align: middle;
+  }
+
+  [data-wb-icon-hue="gray"] {
+    color: var(--wb-icon-gray);
+  }
+  [data-wb-icon-hue="red"] {
+    color: var(--wb-icon-red);
+  }
+  [data-wb-icon-hue="vermilion"] {
+    color: var(--wb-icon-vermilion);
+  }
+  [data-wb-icon-hue="orange"] {
+    color: var(--wb-icon-orange);
+  }
+  [data-wb-icon-hue="yellow"] {
+    color: var(--wb-icon-yellow);
+  }
+  [data-wb-icon-hue="green"] {
+    color: var(--wb-icon-green);
+  }
+  [data-wb-icon-hue="mint"] {
+    color: var(--wb-icon-mint);
+  }
+  [data-wb-icon-hue="teal"] {
+    color: var(--wb-icon-teal);
+  }
+  [data-wb-icon-hue="cyan"] {
+    color: var(--wb-icon-cyan);
+  }
+  [data-wb-icon-hue="blue"] {
+    color: var(--wb-icon-blue);
+  }
+  [data-wb-icon-hue="indigo"] {
+    color: var(--wb-icon-indigo);
+  }
+  [data-wb-icon-hue="purple"] {
+    color: var(--wb-icon-purple);
+  }
+  [data-wb-icon-hue="pink"] {
+    color: var(--wb-icon-pink);
+  }
+  [data-wb-icon-hue="brown"] {
+    color: var(--wb-icon-brown);
+  }
+  [data-wb-icon-hue="mauve"] {
+    color: var(--wb-icon-mauve);
+  }
+
+  [data-wb-icon-back="pink"] {
+    --wb-icon-back: var(--wb-icon-pink);
+  }
+  [data-wb-icon-back="yellow"] {
+    --wb-icon-back: var(--wb-icon-yellow);
+  }
+  [data-wb-icon-back="cyan"] {
+    --wb-icon-back: var(--wb-icon-cyan);
+  }
+}

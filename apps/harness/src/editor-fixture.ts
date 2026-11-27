@@ -12,9 +12,9 @@ import type {
   LspServerStatus,
   Subscribable,
   TabId,
-} from "@shaulavo/workbench-core";
-import type { ComposerMentionItem, ComposerSlashCommand } from "@shaulavo/workbench-editor/composer";
-import { applyTabPlacement } from "@shaulavo/workbench-editor/groups";
+} from "@shaulavo/workbench/core";
+import type { ComposerMentionItem, ComposerSlashCommand } from "@shaulavo/workbench/editor/composer";
+import { applyTabPlacement } from "@shaulavo/workbench/editor/groups";
 
 function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): void } {
   let value = initial;
@@ -72,7 +72,7 @@ const INITIAL_DOCS: Readonly<Record<string, { readonly text: string; readonly la
   "src/App.tsx": {
     languageId: "tsx",
     text: [
-      'import { WorkbenchShell } from "@shaulavo/workbench-ui";',
+      'import { WorkbenchShell } from "@shaulavo/workbench";',
       "",
       "export function App() {",
       '  const greeting = "Shared Workbench Ready";',

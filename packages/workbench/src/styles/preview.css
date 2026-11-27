@@ -1,0 +1,237 @@
+@layer theme, base, components, workbench, utilities, workbench-app;
+
+@layer workbench {
+  .wb-preview-pane {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    background: var(--wb-bg-well);
+    color: var(--wb-fg);
+  }
+
+  .wb-preview-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    min-height: var(--wb-bar-height);
+    padding: 0.25rem 0.5rem;
+    background: var(--wb-bg-chrome);
+    border-bottom: 1px solid var(--wb-border-subtle);
+    flex-shrink: 0;
+  }
+
+  .wb-preview-toolbar-scroll {
+    display: flex;
+    align-items: center;
+    gap: 0.375rem;
+    flex: 1;
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .wb-preview-toolbar-scroll::-webkit-scrollbar {
+    display: none;
+  }
+
+  .wb-preview-toolbar-trailing {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.25rem;
+    flex-shrink: 0;
+  }
+
+  .wb-preview-error-list {
+    margin: 0;
+    padding: 0.375rem 0.75rem 0.375rem 1.5rem;
+    max-height: 9rem;
+    overflow-y: auto;
+    background: var(--wb-bg-panel);
+    border-bottom: 1px solid var(--wb-border-subtle);
+    color: var(--wb-danger);
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-text-xs);
+    flex-shrink: 0;
+  }
+
+  .wb-preview-nav-group,
+  .wb-preview-viewport-group {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.125rem;
+    flex-shrink: 0;
+  }
+
+  .wb-preview-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.75rem;
+    height: 1.75rem;
+    padding: 0 0.375rem;
+    border: 1px solid transparent;
+    border-radius: var(--wb-radius-sm);
+    background: transparent;
+    color: var(--wb-fg-muted);
+    font-family: var(--wb-font-ui);
+    font-size: var(--wb-text-xs);
+    text-decoration: none;
+    cursor: pointer;
+    touch-action: manipulation;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  .wb-preview-btn:hover:not(:disabled) {
+    background: var(--wb-row-hover);
+    color: var(--wb-fg);
+  }
+
+  .wb-preview-btn[data-active="true"] {
+    background: var(--wb-row-selected);
+    border-color: var(--wb-border);
+    color: var(--wb-fg);
+  }
+
+  .wb-preview-btn:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+  }
+
+  .wb-preview-port-select,
+  .wb-preview-port-badge {
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-sm);
+    background: var(--wb-bg-elevated);
+    color: var(--wb-fg-muted);
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-text-xs);
+    display: inline-flex;
+    align-items: center;
+    flex-shrink: 0;
+  }
+
+  .wb-preview-url-form {
+    flex: 1;
+    min-width: 7rem;
+    display: flex;
+  }
+
+  .wb-preview-url-input {
+    width: 100%;
+    height: 1.75rem;
+    padding: 0 0.5rem;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-sm);
+    background: var(--wb-bg-well);
+    color: var(--wb-fg);
+    font-family: var(--wb-font-mono);
+    font-size: var(--wb-text-xs);
+  }
+
+  .wb-preview-url-input:focus-visible {
+    outline: 1.5px solid var(--wb-focus-ring);
+    outline-offset: -1px;
+  }
+
+  .wb-preview-banner-error {
+    padding: 0.375rem 0.625rem;
+    background: var(--wb-bg-panel);
+    border-bottom: 1px solid var(--wb-border-subtle);
+    color: var(--wb-danger);
+    font-size: var(--wb-text-xs);
+    flex-shrink: 0;
+  }
+
+  .wb-preview-stage {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    overflow: auto;
+    background: var(--wb-bg-panel);
+  }
+
+  .wb-preview-stage[data-viewport-preset="mobile"],
+  .wb-preview-stage[data-viewport-preset="tablet"] {
+    justify-content: center;
+    padding: 0.75rem;
+  }
+
+  .wb-preview-frame-wrap {
+    position: relative;
+    display: flex;
+    flex: 1;
+    min-width: 0;
+    min-height: 0;
+    background: #ffffff;
+  }
+
+  .wb-preview-frame-wrap[data-viewport-preset="tablet"] {
+    flex: 0 0 auto;
+    width: min(100%, 768px);
+    height: 100%;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-md);
+    overflow: hidden;
+  }
+
+  .wb-preview-frame-wrap[data-viewport-preset="mobile"] {
+    flex: 0 0 auto;
+    width: min(100%, 390px);
+    height: 100%;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-md);
+    overflow: hidden;
+  }
+
+  .wb-preview-iframe {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #ffffff;
+  }
+
+  .wb-preview-drag-shield {
+    position: absolute;
+    inset: 0;
+    z-index: 20;
+    background: transparent;
+  }
+
+  /* Also shield automatically whenever a parent DesktopSplitGrid splitter is dragging. */
+  [data-wb-dragging="true"] .wb-preview-iframe {
+    pointer-events: none;
+  }
+
+  .wb-preview-state {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 0.375rem;
+    flex: 1;
+    padding: 1.5rem;
+    text-align: center;
+    color: var(--wb-fg-muted);
+    font-size: var(--wb-text-sm);
+  }
+
+  @media (pointer: coarse) {
+    .wb-preview-btn {
+      min-width: 2.75rem;
+      height: 2.75rem;
+    }
+
+    .wb-preview-url-input,
+    .wb-preview-port-select {
+      font-size: 16px;
+      height: 2.75rem;
+    }
+  }
+}

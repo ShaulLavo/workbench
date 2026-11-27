@@ -4,8 +4,8 @@ import type {
   TerminalSavedScroll,
   TerminalSessionInfo,
   TerminalStreamEvent,
-} from "@shaulavo/workbench-core";
-import type { TerminalThemeInput } from "@shaulavo/workbench-terminal";
+} from "@shaulavo/workbench/core";
+import type { TerminalThemeInput } from "@shaulavo/workbench/terminal";
 
 function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): void } {
   let value = initial;
@@ -104,6 +104,8 @@ export function createHarnessTerminalBundle(onOpenFileLink?: (path: string) => v
       if (activeId.getSnapshot() === id) activeId.set(remaining[0]?.id);
     },
     selectSession(id) {
+      if (id === activeId.getSnapshot() || id === splitId.getSnapshot()) return;
+      splitId.set(undefined);
       activeId.set(id);
     },
     renameSession(id, title) {

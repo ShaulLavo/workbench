@@ -1,12 +1,13 @@
 import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { generateApprovedGlyphs } from "../packages/icons/scripts/icon-generator";
+import { generateApprovedGlyphs } from "../packages/workbench/scripts/icon-generator";
 import {
   EXCLUDED_VSCODE_ICON_SOURCES,
   FILE_ICON_GLYPHS,
   FILE_ICON_MANIFEST,
   type FileIconGlyphName,
-} from "../packages/icons/src/index";
+} from "../packages/workbench/src/icons/core";
 
 const ROOT = process.cwd();
 const SCAN_DIRS = ["packages", "scripts", "apps"];
@@ -19,7 +20,13 @@ const FORBIDDEN_PATTERNS: readonly { readonly label: string; readonly re: RegExp
 ];
 const ALLOWED_LICENSES = new Set(["MIT", "ISC", "0BSD", "BSD-2-Clause", "BSD-3-Clause", "CC0-1.0"]);
 const BUILD_ASSET_DEV_DEPS: Readonly<Record<string, readonly string[]>> = {
-  "@shaulavo/workbench-icons": ["@pierre/vscode-icons", "@iconify-json/catppuccin", "simple-icons"],
+  "@shaulavo/workbench": [
+    "@pierre/vscode-icons",
+    "@iconify-json/catppuccin",
+    "simple-icons",
+    "@tanstack/react-virtual",
+    "@tanstack/virtual-core",
+  ],
 };
 
 const violations: string[] = [];
@@ -136,9 +143,9 @@ function checkIconManifestAndPayload(): void {
     );
   }
 
-  const noticesPath = path.join(ROOT, "packages/icons/THIRD_PARTY_NOTICES.txt");
+  const noticesPath = path.join(ROOT, "packages/workbench/THIRD_PARTY_NOTICES.txt");
   if (!existsSync(noticesPath)) {
-    violations.push("packages/icons/THIRD_PARTY_NOTICES.txt is missing");
+    violations.push("packages/workbench/THIRD_PARTY_NOTICES.txt is missing");
   } else {
     const notices = readFileSync(noticesPath, "utf8");
     for (const required of [
@@ -147,15 +154,33 @@ function checkIconManifestAndPayload(): void {
       "Copyright (c) 2023 Catppuccin",
       "Copyright (c) 2023 thang-nm",
       "simple-icons",
+      "@tanstack/react-virtual",
+      "@tanstack/virtual-core",
     ]) {
       if (!notices.includes(required)) {
-        violations.push(`packages/icons/THIRD_PARTY_NOTICES.txt missing attribution for ${required}`);
+        violations.push(`packages/workbench/THIRD_PARTY_NOTICES.txt missing attribution for ${required}`);
       }
     }
   }
 }
 
 function resolveNodeModuleManifest(startDir: string, pkgName: string): string | undefined {
+  try {
+    const req = createRequire(path.join(startDir, "package.json"));
+    return req.resolve(`${pkgName}/package.json`);
+  } catch {
+    // Fall through to workspace/transitive lookup below.
+  }
+  if (pkgName === "@tanstack/virtual-core") {
+    try {
+      const reactVirtualPkg = createRequire(path.join(startDir, "package.json")).resolve(
+        "@tanstack/react-virtual/package.json",
+      );
+      return createRequire(reactVirtualPkg).resolve(`${pkgName}/package.json`);
+    } catch {
+      // Fall through to directory walk.
+    }
+  }
   let current = startDir;
   while (true) {
     const candidate = path.join(current, "node_modules", pkgName, "package.json");

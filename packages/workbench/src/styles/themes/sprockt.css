@@ -1,0 +1,102 @@
+/* Sprockt Sheet and Biro preset: pure paper ground (#ffffff) + biro blue (#1a4be0) in light,
+ * Night Shift ink sibling (#0a0d14) + cornflower blue (#5ab9fc) in dark. */
+@layer theme, base, components, workbench, utilities, workbench-app;
+
+@layer workbench {
+  /* Single-attribute specificity (0,1,0): beats :where() defaults (0,0,0), yields to density/shell (0,2,0). */
+  [data-wb-theme="sprockt"] {
+    --wb-font-ui:
+      "Schibsted Grotesk Variable", "Schibsted Grotesk", -apple-system, BlinkMacSystemFont, "Segoe UI",
+      sans-serif;
+    --wb-font-mono:
+      "JetBrains Mono Variable", "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+    --wb-bg: light-dark(#ffffff, #0a0d14);
+    --wb-bg-chrome: light-dark(#fafafa, #10141d);
+    --wb-bg-panel: light-dark(#fafafa, #10141d);
+    --wb-bg-well: light-dark(#ffffff, #0a0d14);
+    --wb-bg-elevated: light-dark(#ffffff, #161b26);
+    --wb-bg-input: light-dark(#ffffff, #0d111a);
+    --wb-bg-line: light-dark(#f5f7fc, #111722);
+    --wb-scrim: light-dark(rgb(17 17 17 / 0.24), rgb(0 0 0 / 0.6));
+
+    --wb-row-hover: light-dark(#f1f3f7, #1c2333);
+    --wb-row-active: light-dark(#e8eeff, #16263b);
+    --wb-row-selected: light-dark(#cfe0ff, #1f3b5c);
+
+    --wb-border: light-dark(#e5e7eb, #1f2636);
+    --wb-border-subtle: light-dark(#eef0f3, #171d29);
+    --wb-fg: light-dark(#111111, #e9edf3);
+    --wb-fg-muted: light-dark(#4a4e57, #b2bac8);
+    --wb-fg-subtle: light-dark(#5c616b, #8893a6);
+
+    --wb-accent: light-dark(#1a4be0, #5ab9fc);
+    --wb-accent-fg: light-dark(#ffffff, #0a0d14);
+    --wb-accent-soft: light-dark(#eaf0ff, #13263c);
+    --wb-focus-ring: light-dark(#1a4be0, #5ab9fc);
+    --wb-caret: light-dark(#1a4be0, #5ab9fc);
+
+    --wb-ok: light-dark(#15803d, #4ade80);
+    --wb-warn: light-dark(#9a5b00, #f2c779);
+    --wb-danger: light-dark(#c81e2b, #f87171);
+    --wb-danger-fg: light-dark(#ffffff, #0a0d14);
+    --wb-info: light-dark(#1a4be0, #5ab9fc);
+
+    --wb-bar-height: 2.25rem;
+    --wb-tree-indent: 14px;
+    --wb-tree-row-height: 26px;
+    --wb-tree-guide: var(--wb-border);
+    --wb-tree-guide-active: var(--wb-accent);
+
+    /* Multicolor tab accents */
+    --wb-tab-ts: light-dark(#1a4be0, #5ab9fc);
+    --wb-tab-css: light-dark(#c42856, #f472b6);
+    --wb-tab-json: light-dark(#b45309, #f2c779);
+    --wb-tab-html: light-dark(#c2410c, #ff9f7a);
+    --wb-tab-md: light-dark(#0f766e, #5eead4);
+    --wb-tab-shell: light-dark(#15803d, #4ade80);
+    --wb-tab-server: light-dark(#1a4be0, #5ab9fc);
+    --wb-tab-task: light-dark(#b45309, #f2c779);
+    --wb-tab-aux: light-dark(#0f766e, #5eead4);
+    --wb-tab-default: light-dark(#475569, #94a3b8);
+
+    /* Sheet & Biro terminal palette */
+    --wb-term-bg: light-dark(#ffffff, #0a0d14);
+    --wb-term-fg: light-dark(#111111, #e9edf3);
+    --wb-term-cursor: light-dark(#1a4be0, #5ab9fc);
+    --wb-term-cursor-accent: light-dark(#ffffff, #0a0d14);
+    --wb-term-selection: light-dark(#cfe0ff, #1f3b5c);
+    --wb-term-selection-fg: light-dark(#111111, #e9edf3);
+  }
+
+  [data-wb-theme="sprockt"] [data-tab-tone="ts"] {
+    --wb-tab-accent: var(--wb-tab-ts);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="css"] {
+    --wb-tab-accent: var(--wb-tab-css);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="json"] {
+    --wb-tab-accent: var(--wb-tab-json);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="html"] {
+    --wb-tab-accent: var(--wb-tab-html);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="md"] {
+    --wb-tab-accent: var(--wb-tab-md);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="shell"] {
+    --wb-tab-accent: var(--wb-tab-shell);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="server"] {
+    --wb-tab-accent: var(--wb-tab-server);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="task"] {
+    --wb-tab-accent: var(--wb-tab-task);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="aux"] {
+    --wb-tab-accent: var(--wb-tab-aux);
+  }
+  [data-wb-theme="sprockt"] [data-tab-tone="default"] {
+    --wb-tab-accent: var(--wb-tab-default);
+  }
+}

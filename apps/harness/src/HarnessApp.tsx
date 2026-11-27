@@ -1,25 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import {
-  DEFAULT_PANE_GEOMETRY,
-  dismissSoftKeyboardOnTouchActivation,
-  ensurePointerModalityTracking,
-  type ActivationFocusDecision,
-  type GlobalPaneGeometry,
-  type LayoutAdapter,
-  type WorkbenchCommand,
-  type WorkbenchPaneId,
-} from "@shaulavo/workbench-core";
-import { useSubscribable, useWorkbenchTheme } from "@shaulavo/workbench-core/react";
-import { MarkdownComposer } from "@shaulavo/workbench-editor/composer";
-import { DiffEditorView } from "@shaulavo/workbench-editor/diff";
-import { EditorGroupLayout } from "@shaulavo/workbench-editor/groups";
-import { DiagnosticPeek, LspStatusBadge, type DiagnosticPeekModel } from "@shaulavo/workbench-editor/lsp";
-import { FileIconSprite, FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
-import { PreviewPane } from "@shaulavo/workbench-preview";
-import { TerminalPanel } from "@shaulavo/workbench-terminal";
-import { observeWorkbenchTheme, readTerminalTokenColors } from "@shaulavo/workbench-tokens";
-import { FileTreeView } from "@shaulavo/workbench-tree/react";
-import {
   ActivityBar,
   BarTab,
   BarTabStrip,
@@ -27,19 +7,41 @@ import {
   ConfirmDialog,
   createToastStore,
   DesktopSplitGrid,
+  FileTypeIcon,
   Kbd,
   MobilePaneShell,
   PointContextMenu,
   SearchPanel,
   StatusBar,
+  StrokeIcon,
   TitleBar,
   ToolPane,
   UnsavedChangesDialog,
+  useSubscribable,
+  useViewportMode,
+  useWorkbenchTheme,
   WorkbenchShell,
   type ContextMenuItem,
   type SearchMatch,
   type SearchQueryOptions,
-} from "@shaulavo/workbench-ui";
+} from "@shaulavo/workbench";
+import {
+  DEFAULT_PANE_GEOMETRY,
+  dismissSoftKeyboardOnTouchActivation,
+  type ActivationFocusDecision,
+  type GlobalPaneGeometry,
+  type LayoutAdapter,
+  type WorkbenchCommand,
+  type WorkbenchPaneId,
+} from "@shaulavo/workbench/core";
+import { MarkdownComposer } from "@shaulavo/workbench/editor/composer";
+import { DiffEditorView } from "@shaulavo/workbench/editor/diff";
+import { EditorGroupLayout } from "@shaulavo/workbench/editor/groups";
+import { DiagnosticPeek, LspStatusBadge, type DiagnosticPeekModel } from "@shaulavo/workbench/editor/lsp";
+import { PreviewPane } from "@shaulavo/workbench/preview";
+import { TerminalPanel } from "@shaulavo/workbench/terminal";
+import { observeWorkbenchTheme, readTerminalTokenColors } from "@shaulavo/workbench/tokens";
+import { FileTreeView } from "@shaulavo/workbench/tree";
 import type { Terminal } from "ghostty-webgpu";
 import { createHarnessEditorBundle, HARNESS_DIFF_MODIFIED, HARNESS_DIFF_ORIGINAL } from "./editor-fixture";
 import { createBridgedHarnessPreviewAdapter, createRemoteHarnessPreviewAdapter } from "./preview-fixture";
@@ -128,11 +130,6 @@ function readRootTerminalBg(): string {
   return `rgb(${colors.background.r}, ${colors.background.g}, ${colors.background.b})`;
 }
 
-function isPhoneViewport(): boolean {
-  if (typeof window === "undefined" || typeof window.matchMedia !== "function") return false;
-  return window.matchMedia("(max-width: 768px)").matches;
-}
-
 export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppProps) {
   const [layout] = useState<LayoutAdapter>(() => createInMemoryLayoutAdapter());
   const [toastStore] = useState(() => createToastStore());
@@ -142,8 +139,9 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [mode, setMode] = useState<"light" | "dark">(initialMode);
   const [density, setDensity] = useState<"default" | "compact">("default");
   const [scopedMode, setScopedMode] = useState<"light" | "dark">(initialMode === "light" ? "dark" : "light");
-  const [phoneShell, setPhoneShell] = useState<boolean>(() => isPhoneViewport());
+  const phoneShell = useViewportMode() === "phone";
   const [keyboardOpen, setKeyboardOpen] = useState(false);
+  const [terminalCollapsed, setTerminalCollapsed] = useState(false);
 
   const [activeTab, setActiveTab] = useState<string>(SAMPLE_FILES[0].id);
   const [sidebarView, setSidebarView] = useState<"explorer" | "search">("explorer");
@@ -198,18 +196,9 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const scopedTheme = useWorkbenchTheme(scopedNode);
 
   useEffect(() => {
-    ensurePointerModalityTracking();
-    const stopTheme = observeWorkbenchTheme(document.documentElement, () => {
+    return observeWorkbenchTheme(document.documentElement, () => {
       setTermBg(readRootTerminalBg());
     });
-    const mq = window.matchMedia("(max-width: 768px)");
-    const syncViewport = (): void => setPhoneShell(mq.matches);
-    syncViewport();
-    mq.addEventListener("change", syncViewport);
-    return () => {
-      stopTheme();
-      mq.removeEventListener("change", syncViewport);
-    };
   }, []);
 
   useEffect(() => {
@@ -632,7 +621,7 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     <PreviewPane
       key={previewMode}
       adapter={previewMode === "bridged" ? bridgedPreview : remotePreview}
-      actions={
+      toolbarActions={
         <button
           type="button"
           className="harness-btn"
@@ -659,7 +648,9 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
     <TerminalPanel
       adapter={terminalBundle.adapter}
       active={!phoneShell || mobilePane === "terminal"}
-      themeOverride={terminalTransparent ? terminalBundle.transparentOverride : undefined}
+      collapsed={terminalCollapsed}
+      onToggleCollapsed={() => setTerminalCollapsed((c) => !c)}
+      theme={terminalTransparent ? terminalBundle.transparentOverride : undefined}
       showAccessoryBar
       onTerminalReady={(_id, term) => {
         activeGhosttyRef.current = term;
@@ -764,7 +755,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
       }
       overlays={
         <>
-          <FileIconSprite />
           <CommandPalette
             open={paletteOpen}
             onOpenChange={setPaletteOpen}
