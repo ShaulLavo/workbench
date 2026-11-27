@@ -1779,4 +1779,91 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(loadOrder).toEqual(["", "area", "area/inner"]);
     expect(host.querySelector('[data-testid="wb-tree-row-area/inner/new.txt"]')).not.toBeNull();
   });
+
+  it("force-reloads preloaded nested expanded directories after a lazy reset invalidation", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const invalidationListeners = new Set<
+      (event: {
+        readonly directories: readonly string[];
+        readonly reset: boolean;
+        readonly moves: readonly { readonly from: string; readonly to: string; readonly operation: number }[];
+        readonly removed: readonly string[];
+      }) => void
+    >();
+    let phase: "before" | "after" = "before";
+    const reloaded: string[] = [];
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-reset-nested",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => [phase === "before" ? "area/inner/old.txt" : "area/inner/fresh.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          if (phase === "after") reloaded.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loaded", entries: [{ name: "area", kind: "directory" }] };
+          } else if (dirPath === "area") {
+            slot.state = { status: "loaded", entries: [{ name: "inner", kind: "directory" }] };
+          } else if (dirPath === "area/inner") {
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: phase === "before" ? "old.txt" : "fresh.txt", kind: "file" }],
+            };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation(listener) {
+          invalidationListeners.add(listener);
+          return () => invalidationListeners.delete(listener);
+        },
+      },
+    };
+
+    const model = new FileTreeModel({ compactFolders: true, initialExpanded: ["area", "area/inner"] });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).not.toBeNull();
+
+    phase = "after";
+    await act(async () => {
+      for (const listener of invalidationListeners) {
+        listener({ directories: [], reset: true, moves: [], removed: [] });
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reloaded).toEqual(["", "area", "area/inner"]);
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/fresh.txt"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).toBeNull();
+  });
 });

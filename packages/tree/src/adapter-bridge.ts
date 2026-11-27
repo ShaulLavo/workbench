@@ -1,6 +1,6 @@
 import type { FileSystemAdapter, LazyInvalidationEvent } from "@shaulavo/workbench-core";
 import type { FileTreeModel } from "./model";
-import { normalizeTreePath } from "./paths";
+import { ancestorsOf, normalizeTreePath } from "./paths";
 
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
@@ -61,12 +61,25 @@ export function bindFileSystemAdapter(
     );
   }
 
+  function isDirectoryConfirmedAbsent(dirPath: string): boolean {
+    const chain = ancestorsOf(dirPath).concat([dirPath]);
+    for (let i = 0; i < chain.length; i += 1) {
+      const seg = chain[i];
+      if (!seg) continue;
+      const parent = i === 0 ? "" : (chain[i - 1] ?? "");
+      if (staleLazyDirs.has(parent)) return false;
+      if (model.index.getDirectoryLoadState(parent).status !== "loaded") return false;
+      if (model.index.getConfirmedKind(seg) !== "directory") return true;
+    }
+    return false;
+  }
+
   function pruneRetiredLazySubscriptions(parentDir: string): void {
     const prefix = parentDir === "" ? "" : `${parentDir}/`;
     for (const [subDir, unsub] of Array.from(lazyUnsubs.entries())) {
       if (subDir === "" || subDir === parentDir) continue;
       if (prefix && !subDir.startsWith(prefix)) continue;
-      if (model.index.getConfirmedKind(subDir) !== "directory") {
+      if (isDirectoryConfirmedAbsent(subDir)) {
         unsub();
         lazyUnsubs.delete(subDir);
         staleLazyDirs.delete(subDir);
