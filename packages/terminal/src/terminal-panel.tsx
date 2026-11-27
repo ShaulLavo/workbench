@@ -271,6 +271,11 @@ export function TerminalPanel({
           terminalsByIdRef.current.set(session.id, term);
           onTerminalReady?.(session.id, term);
         }}
+        onBeforeDispose={(term, sid) => {
+          if (terminalsByIdRef.current.get(sid) === term) {
+            terminalsByIdRef.current.delete(sid);
+          }
+        }}
         onAttached={(term, att) => {
           terminalsByIdRef.current.set(session.id, term);
           onAttached?.(session.id, term, att);

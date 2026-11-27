@@ -1368,4 +1368,321 @@ describe("@shaulavo/workbench-terminal", () => {
       createSpy.mockRestore();
     }
   });
+
+  it("removes disposed terminals from the focus map when keepAlive is false so switching and splitting never focus a disposed terminal", async () => {
+    const liveFocusBySession = new Map<string, ReturnType<typeof vi.fn>>();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      let disposed = false;
+      const focusSpy = vi.fn(() => {
+        if (disposed) throw new Error("Terminal is not open; lifecycle is disposed");
+      });
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        {
+          focus: focusSpy,
+          dispose: vi.fn(() => {
+            disposed = true;
+          }),
+        },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "a", title: "bash 1", status: "ready" },
+      { id: "b", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("a");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "c",
+      closeSession: async () => {},
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {
+        splitId.set(splitId.getSnapshot() ? undefined : "a");
+      },
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive={false}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            liveFocusBySession.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // Switch A -> B (unmounts and disposes A).
+      const tabBBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabBBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(liveFocusBySession.get("b")).toHaveBeenCalledTimes(1);
+
+      // Click Split to show A beside B: must not call focus() on disposed A, and must focus the fresh A once attached.
+      const firstAFocus = liveFocusBySession.get("a")!;
+      const splitBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-split"]')!;
+      act(() => {
+        splitBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const freshAFocus = liveFocusBySession.get("a")!;
+      expect(freshAFocus).not.toBe(firstAFocus);
+      expect(freshAFocus).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("invokes onBeforeDispose while host is connected and preserves outgoing session callback on session switch", async () => {
+    const events: string[] = [];
+    let disposed = false;
+    let hostElement: HTMLElement | null = null;
+    let hostConnectedAtCapture = false;
+    const fakeRuntime = {} as GhosttyRuntime;
+
+    const makeFakeTerminal = () => {
+      const base = createMockPanelTerminal(new Set(), () => {});
+      return Object.assign(base, {
+        open: vi.fn(async (host: HTMLElement) => {
+          hostElement = host;
+        }),
+        dispose: vi.fn(() => {
+          disposed = true;
+          events.push("dispose");
+        }),
+        captureViewport: vi.fn(() => {
+          if (disposed) throw new Error("Terminal has been disposed");
+          hostConnectedAtCapture = Boolean(hostElement?.isConnected);
+          events.push("capture");
+          return "snapshot";
+        }),
+      });
+    };
+
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => makeFakeTerminal() as unknown as Terminal);
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([]),
+      activeId: createSubscribable<string | undefined>(undefined),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({
+        write: () => {},
+        resize: () => {},
+        detach: () => {
+          events.push("detach");
+        },
+      }),
+    };
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const reactRoot = createRoot(container);
+    try {
+      const seenOne: Array<{ readonly terminal: Terminal; readonly sessionId: string }> = [];
+      const seenTwo: Array<{ readonly terminal: Terminal; readonly sessionId: string }> = [];
+      let terminalOne: Terminal | null = null;
+      let terminalTwo: Terminal | null = null;
+
+      act(() => {
+        reactRoot.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="one"
+            loadRuntime={async () => fakeRuntime}
+            onTerminalReady={(t) => {
+              terminalOne = t;
+            }}
+            onBeforeDispose={(t, sid) => {
+              seenOne.push({ terminal: t, sessionId: sid });
+              events.push("before-dispose");
+              (t as unknown as { captureViewport(): string }).captureViewport();
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(terminalOne).not.toBeNull();
+
+      // Switching sessionId on one mounted view must deliver terminalOne to one's callback, not two's.
+      act(() => {
+        reactRoot.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="two"
+            loadRuntime={async () => fakeRuntime}
+            onTerminalReady={(t) => {
+              terminalTwo = t;
+            }}
+            onBeforeDispose={(t, sid) => {
+              seenTwo.push({ terminal: t, sessionId: sid });
+              events.push("before-dispose-two");
+              (t as unknown as { captureViewport(): string }).captureViewport();
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(seenOne).toEqual([{ terminal: terminalOne, sessionId: "one" }]);
+      expect(seenTwo).toEqual([]);
+      expect(hostConnectedAtCapture).toBe(true);
+      expect(events).toEqual(["detach", "before-dispose", "capture", "dispose"]);
+      expect(terminalTwo).not.toBeNull();
+
+      // Unmounting runs onBeforeDispose while host is still connected to the document.
+      events.length = 0;
+      disposed = false;
+      hostConnectedAtCapture = false;
+      act(() => {
+        reactRoot.unmount();
+      });
+      expect(seenTwo).toEqual([{ terminal: terminalTwo, sessionId: "two" }]);
+      expect(hostConnectedAtCapture).toBe(true);
+      expect(events).toEqual(["detach", "before-dispose-two", "capture", "dispose"]);
+    } finally {
+      createSpy.mockRestore();
+      container.remove();
+    }
+  });
+
+  it("skips onBeforeDispose when onTerminalReady was not supplied", async () => {
+    const onBeforeDispose = vi.fn();
+    const disposeSpy = vi.fn();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () =>
+      Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { dispose: disposeSpy },
+      ),
+    );
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([]),
+      activeId: createSubscribable<string | undefined>(undefined),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const reactRoot = createRoot(container);
+    try {
+      act(() => {
+        reactRoot.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="s1"
+            loadRuntime={async () => ({}) as GhosttyRuntime}
+            onBeforeDispose={onBeforeDispose}
+          />,
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      act(() => {
+        reactRoot.unmount();
+      });
+      expect(onBeforeDispose).not.toHaveBeenCalled();
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
+      container.remove();
+    }
+  });
+
+  it("still disposes terminal and clears host when onBeforeDispose throws", async () => {
+    const events: string[] = [];
+    const disposeSpy = vi.fn(() => {
+      events.push("dispose");
+    });
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () =>
+      Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { dispose: disposeSpy },
+      ),
+    );
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([]),
+      activeId: createSubscribable<string | undefined>(undefined),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({
+        write: () => {},
+        resize: () => {},
+        detach: () => {
+          events.push("detach");
+        },
+      }),
+    };
+
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const reactRoot = createRoot(container);
+    try {
+      act(() => {
+        reactRoot.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="s1"
+            loadRuntime={async () => ({}) as GhosttyRuntime}
+            onTerminalReady={() => {}}
+            onBeforeDispose={() => {
+              events.push("before-dispose-throw");
+              throw new Error("consumer capture error");
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(() => {
+        act(() => {
+          reactRoot.unmount();
+        });
+      }).toThrow("consumer capture error");
+      expect(disposeSpy).toHaveBeenCalledTimes(1);
+      expect(events).toEqual(["detach", "before-dispose-throw", "dispose"]);
+    } finally {
+      createSpy.mockRestore();
+      container.remove();
+    }
+  });
 });

@@ -65,6 +65,8 @@ export interface TerminalViewProps {
   readonly canvasHostClassName?: string;
   readonly dataPosition?: "single" | "left" | "right" | "hidden";
   readonly onTerminalReady?: (terminal: Terminal) => void;
+  /** Called immediately before `TerminalView` disposes a terminal reported via `onTerminalReady`. */
+  readonly onBeforeDispose?: (terminal: Terminal, sessionId: string) => void;
   readonly onAttached?: (terminal: Terminal, attachment: TerminalAttachment) => void;
   readonly onReadyChange?: (ready: boolean) => void;
   readonly onFramePainted?: (terminal: Terminal) => void;
@@ -273,6 +275,21 @@ function exitDetail(exitCode: number | null): string {
   return exitCode === null ? "Process exited" : `Process exited (${exitCode})`;
 }
 
+function disposeTerminalHost(
+  terminal: Terminal | null,
+  notifyBeforeDispose: ((terminal: Terminal) => void) | null,
+  host: HTMLDivElement,
+): void {
+  try {
+    if (terminal && notifyBeforeDispose) {
+      notifyBeforeDispose(terminal);
+    }
+  } finally {
+    terminal?.dispose();
+    host.replaceChildren();
+  }
+}
+
 export interface TerminalStreamTarget {
   readonly gate: ReplayGate;
   readonly terminal: Pick<Terminal, "write" | "writeln" | "reset"> & {
@@ -393,6 +410,7 @@ export function TerminalView({
   canvasHostClassName,
   dataPosition,
   onTerminalReady,
+  onBeforeDispose,
   onAttached,
   onReadyChange,
   onFramePainted,
@@ -421,6 +439,7 @@ export function TerminalView({
   const activeRef = useRef(active);
   const pasteGenerationRef = useRef(0);
   const latestScrollRef = useRef<TerminalSavedScroll | null>(null);
+  const teardownRef = useRef<(() => void) | null>(null);
 
   useLayoutEffect(() => {
     activeRef.current = active;
@@ -445,6 +464,7 @@ export function TerminalView({
     loadRuntime,
     onPasteFailed,
     onTerminalReady,
+    onBeforeDispose,
     onAttached,
     onReadyChange,
     onFramePainted,
@@ -476,6 +496,7 @@ export function TerminalView({
       loadRuntime,
       onPasteFailed,
       onTerminalReady,
+      onBeforeDispose,
       onAttached,
       onReadyChange,
       onFramePainted,
@@ -551,6 +572,15 @@ export function TerminalView({
     terminal.setCursorInactiveStyle(mode === "none" ? undefined : mode);
   }
 
+  // Run teardown during layout cleanup while `host` is still connected with live dimensions and
+  // `propsRef.current` still holds the outgoing session's callbacks.
+  useLayoutEffect(
+    () => () => {
+      teardownRef.current?.();
+    },
+    [adapter, sessionId, scrollbackLimit, lowLatency],
+  );
+
   // Primary Ghostty mount + ordered stream attachment lifecycle (StrictMode-safe).
   useEffect(() => {
     const host = hostRef.current;
@@ -559,7 +589,9 @@ export function TerminalView({
     const controller = new AbortController();
     const { signal } = controller;
     let cancelled = false;
+    let cleanedUp = false;
     let terminal: Terminal | null = null;
+    let terminalNotified = false;
     let attachment: TerminalAttachment | null = null;
     let hotkeyCleanup: (() => void) | null = null;
     let linkCleanup: (() => void) | null = null;
@@ -618,10 +650,8 @@ export function TerminalView({
       }
 
       terminal = nextTerminal;
-      await terminal.open(host);
+      await nextTerminal.open(host);
       if (cancelled || signal.aborted) {
-        terminal.dispose();
-        terminal = null;
         return;
       }
 
@@ -733,7 +763,11 @@ export function TerminalView({
       };
 
       const grid = terminal.appearance.grid;
-      propsRef.current.onTerminalReady?.(terminal);
+      const notifyReady = propsRef.current.onTerminalReady;
+      if (notifyReady) {
+        terminalNotified = true;
+        notifyReady(terminal);
+      }
       const nextAttachment = await adapter.attach(sessionId, {
         initialSize: { cols: grid.columns, rows: grid.rows },
         signal,
@@ -761,7 +795,10 @@ export function TerminalView({
       propsRef.current.onError?.(msg, cause);
     });
 
-    return () => {
+    const teardown = (): void => {
+      if (cleanedUp) return;
+      cleanedUp = true;
+      if (teardownRef.current === teardown) teardownRef.current = null;
       cancelled = true;
       controller.abort();
       if (latestScrollRef.current) {
@@ -774,11 +811,19 @@ export function TerminalView({
       // View detach NEVER kills the underlying PTY session.
       attachment?.detach();
       attachmentRef.current = null;
-      terminal?.dispose();
+      const terminalToDispose = terminal;
+      terminal = null;
       terminalRef.current = null;
       inputReadyRef.current = false;
-      host.replaceChildren();
+      const onBeforeDisposeHandler = propsRef.current.onBeforeDispose;
+      const notifyBeforeDispose =
+        terminalNotified && onBeforeDisposeHandler
+          ? (instance: Terminal) => onBeforeDisposeHandler(instance, sessionId)
+          : null;
+      disposeTerminalHost(terminalToDispose, notifyBeforeDispose, host);
     };
+    teardownRef.current = teardown;
+    return teardown;
   }, [adapter, sessionId, scrollbackLimit, lowLatency]);
 
   // Reactive theme, viewport font size, and optional typed-override subscriptions.
