@@ -117,6 +117,68 @@ function createDeferredClosedDirAdapter() {
   };
 }
 
+function createInvalidatingFilterAdapter() {
+  const rootListeners = new Set<() => void>();
+  const closedListeners = new Set<() => void>();
+  const invalidationListeners = new Set<(event: LazyInvalidationEvent) => void>();
+  let listCalls = 0;
+  let pendingList: ReturnType<typeof Promise.withResolvers<readonly string[]>> | null = null;
+  const rootState: DirectoryLoadState = {
+    status: "loaded",
+    entries: [{ name: "closed", kind: "directory" }],
+  };
+  const closedState: DirectoryLoadState = { status: "idle" };
+
+  function getDirectoryState(dirPath: string): Subscribable<DirectoryLoadState> {
+    const isRoot = dirPath === "";
+    const listeners = isRoot ? rootListeners : closedListeners;
+    return {
+      getSnapshot: () => (isRoot ? rootState : closedState),
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+    };
+  }
+
+  async function listFiles(): Promise<readonly string[]> {
+    listCalls += 1;
+    if (listCalls === 1) return ["closed/needle.txt"];
+    pendingList = Promise.withResolvers<readonly string[]>();
+    return pendingList.promise;
+  }
+
+  const adapter: FileSystemAdapter = {
+    workspaceId: "ws-filter-focus",
+    writable: { getSnapshot: () => true, subscribe: () => () => {} },
+    listFiles,
+    readText: async () => "",
+    createFile: async () => {},
+    createDirectory: async () => {},
+    move: async () => {},
+    remove: async () => {},
+    lazy: {
+      getDirectoryState,
+      loadDirectory: async () => {},
+      subscribeInvalidation(listener) {
+        invalidationListeners.add(listener);
+        return () => invalidationListeners.delete(listener);
+      },
+    },
+  };
+
+  return {
+    adapter,
+    emitInvalidation(event: LazyInvalidationEvent) {
+      for (const listener of invalidationListeners) listener(event);
+    },
+    resolveNextListFiles(paths: readonly string[]) {
+      pendingList?.resolve(paths);
+      pendingList = null;
+    },
+  };
+}
+
 beforeEach(() => {
   heightSpy = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
   widthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(280);
@@ -1974,5 +2036,41 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(getClosedLoads()).toBe(1);
     expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/needle.txt" });
     expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
+  });
+
+  it("preserves DOM focus on a filtered lazy row across background invalidations", async () => {
+    const { adapter, emitInvalidation, resolveNextListFiles } = createInvalidatingFilterAdapter();
+    const model = new FileTreeModel({ compactFolders: true });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const rowEl = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-closed/needle.txt"]');
+    expect(rowEl).not.toBeNull();
+    act(() => {
+      rowEl?.focus();
+    });
+    expect(document.activeElement).toBe(rowEl);
+
+    // Background root invalidation while listFiles() is still pending must not unmount the focused filtered row.
+    await act(async () => {
+      emitInvalidation({ directories: [""], reset: false, moves: [], removed: [] });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-closed/needle.txt"]')).toBe(rowEl);
+    expect(document.activeElement).toBe(rowEl);
+
+    await act(async () => {
+      resolveNextListFiles(["closed/needle.txt", "other.txt"]);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-closed/needle.txt"]')).toBe(rowEl);
+    expect(document.activeElement).toBe(rowEl);
   });
 });

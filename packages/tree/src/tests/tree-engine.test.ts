@@ -662,11 +662,16 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(matchedPaths).toEqual(["closed", "closed/needle.txt"]);
     expect(model.getEntryKind("closed/needle.txt")).toBe("file");
 
-    // Invalidation while filtering refreshes listFiles and reflects newly created files.
+    // Invalidation while filtering keeps existing filtered rows mounted until listFiles resolves, then reflects updates.
     workspaceFiles = ["open.ts", "closed/needle.txt", "closed/needle-two.txt"];
     for (const listener of invListeners) {
       listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
     }
+    const whileRefreshingPaths = model
+      .getSnapshot()
+      .rows.filter((row) => row.type === "entry")
+      .map((row) => row.path);
+    expect(whileRefreshingPaths).toEqual(["closed", "closed/needle.txt"]);
     await Promise.resolve();
     await Promise.resolve();
     const updatedPaths = model

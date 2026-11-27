@@ -121,7 +121,7 @@ export function bindFileSystemAdapter(
     await lazy.loadDirectory(normalized, force ? { force: true } : options);
   }
 
-  function refreshFilterFiles(): void {
+  function refreshFilterFiles(options?: { readonly clearOnError?: boolean }): void {
     if (disposed || !adapter.lazy) return;
     const isFiltering = model.getSnapshot().filter.trim().length > 0;
     if (!isFiltering) {
@@ -138,7 +138,8 @@ export function bindFileSystemAdapter(
         model.setFilterPaths(paths);
       })
       .catch(() => {
-        // Keep currently loaded entries filterable if workspace listing fails.
+        if (disposed || gen !== filterListGen) return;
+        if (options?.clearOnError) model.setFilterPaths(undefined);
       });
   }
 
@@ -195,10 +196,12 @@ export function bindFileSystemAdapter(
 
   function handleLazyInvalidation(event: LazyInvalidationEvent): void {
     if (disposed) return;
+    const wasActiveFilter = model.getSnapshot().filter.trim().length > 0;
     handlingInvalidation = true;
     try {
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      // Preserve filtered rows while re-listing so surviving entries stay mounted and retain focus.
+      if (!wasActiveFilter) model.setFilterPaths(undefined);
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange(
         event.moves.length > 0 || event.removed.length > 0
@@ -211,7 +214,7 @@ export function bindFileSystemAdapter(
     }
     syncExpandedLazyDirectories();
     if (model.getSnapshot().filter.trim().length > 0) {
-      refreshFilterFiles();
+      refreshFilterFiles({ clearOnError: true });
     }
   }
 
