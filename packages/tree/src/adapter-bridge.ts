@@ -24,13 +24,15 @@ function applyInvalidationToFilterPaths(paths: readonly string[], event: LazyInv
   const next: string[] = [];
   const seen = new Set<string>();
   for (const rawPath of paths) {
+    const isExplicitDir = rawPath.endsWith("/");
     const normalized = normalizeTreePath(rawPath);
     if (!normalized) continue;
     if (removed.some((target) => isSameOrInside(normalized, target))) continue;
     const rebased = moves.length > 0 ? rebaseFilterPath(normalized, moves) : normalized;
+    if (removed.some((target) => isSameOrInside(rebased, target))) continue;
     if (seen.has(rebased)) continue;
     seen.add(rebased);
-    next.push(rebased);
+    next.push(isExplicitDir ? `${rebased}/` : rebased);
   }
   return next;
 }
@@ -233,17 +235,23 @@ export function bindFileSystemAdapter(
     }
   }
 
+  function syncFilterPathsForInvalidation(event: LazyInvalidationEvent, wasActiveFilter: boolean): void {
+    if (!wasActiveFilter || event.reset) {
+      setFilterPaths(undefined);
+      return;
+    }
+    if (!cachedFilterPaths) return;
+    if (event.removed.length === 0 && event.moves.length === 0) return;
+    setFilterPaths(applyInvalidationToFilterPaths(cachedFilterPaths, event));
+  }
+
   function handleLazyInvalidation(event: LazyInvalidationEvent): void {
     if (disposed) return;
     const wasActiveFilter = model.getSnapshot().filter.trim().length > 0;
     handlingInvalidation = true;
     try {
       filterListGen += 1;
-      if (!wasActiveFilter || event.reset) {
-        setFilterPaths(undefined);
-      } else if (cachedFilterPaths && (event.removed.length > 0 || event.moves.length > 0)) {
-        setFilterPaths(applyInvalidationToFilterPaths(cachedFilterPaths, event));
-      }
+      syncFilterPathsForInvalidation(event, wasActiveFilter);
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange(
         event.moves.length > 0 || event.removed.length > 0

@@ -8,7 +8,15 @@ import {
   type LazyInvalidationEvent,
   type OptimisticTreeMutation,
 } from "@shaulavo/workbench-core";
-import { ancestorsOf, baseName, compareDirEntries, joinPath, normalizeTreePath, parentOf } from "./paths";
+import {
+  ancestorsOf,
+  baseName,
+  compareDirEntries,
+  isSameOrInside,
+  joinPath,
+  normalizeTreePath,
+  parentOf,
+} from "./paths";
 
 export type RawTreeEntry = string | { readonly path: string; readonly kind: EntryKind };
 
@@ -325,6 +333,44 @@ function applyMutationToLayer(layer: MutableLayer, mutation: OptimisticTreeMutat
   }
 }
 
+function deleteLazyStatesUnder(lazyStates: Map<string, DirectoryLoadState>, rootPath: string): void {
+  for (const key of Array.from(lazyStates.keys())) {
+    if (isSameOrInside(key, rootPath)) lazyStates.delete(key);
+  }
+}
+
+function moveSubtreeInLayerPreservingLoaded(
+  layer: MutableLayer,
+  lazyStates: Map<string, DirectoryLoadState>,
+  from: string,
+  to: string,
+): void {
+  const subtree = collectSubtreeFromLayer(layer, from);
+  if (subtree.length === 0) return;
+
+  const loadedRelDirs = new Set<string>();
+  const savedLazyStates = new Map<string, DirectoryLoadState>();
+  for (const item of subtree) {
+    if (item.kind !== "directory") continue;
+    const srcPath = item.rel ? `${from}/${item.rel}` : from;
+    if (layer.loaded.has(srcPath)) loadedRelDirs.add(item.rel);
+    const lazyState = lazyStates.get(srcPath);
+    if (lazyState) savedLazyStates.set(item.rel, lazyState);
+  }
+
+  deleteSubtreeInLayer(layer, from);
+  deleteLazyStatesUnder(lazyStates, from);
+
+  for (const item of subtree) {
+    const destPath = item.rel ? `${to}/${item.rel}` : to;
+    createPathInLayer(layer, destPath, item.kind);
+    if (item.kind !== "directory") continue;
+    if (!loadedRelDirs.has(item.rel)) layer.loaded.delete(destPath);
+    const savedState = savedLazyStates.get(item.rel);
+    if (savedState) lazyStates.set(destPath, savedState);
+  }
+}
+
 /**
  * Clean-room MIT tree index keeping confirmed state strictly separated from pending optimistic
  * overlays so concurrent confirmed patches survive optimistic rollbacks without loss.
@@ -634,16 +680,21 @@ export class FileTreeIndex {
       return;
     }
     const layer = this.ensureConfirmedMutable();
-    for (const removed of event.removed) {
-      deleteSubtreeInLayer(layer, normalizeTreePath(removed));
+    const removed = event.removed.map(normalizeTreePath).filter(Boolean);
+    for (const target of removed) {
+      deleteSubtreeInLayer(layer, target);
+      deleteLazyStatesUnder(this.lazyStates, target);
     }
     for (const move of event.moves) {
       const from = normalizeTreePath(move.from);
       const to = normalizeTreePath(move.to);
       if (!from || !to || from === to) continue;
-      const entryKind = layer.kinds.get(from);
-      if (!entryKind) continue;
-      applyMutationToLayer(layer, { kind: "move", moves: [{ from, to, entryKind }] });
+      if (removed.some((target) => isSameOrInside(to, target))) {
+        deleteSubtreeInLayer(layer, from);
+        deleteLazyStatesUnder(this.lazyStates, from);
+        continue;
+      }
+      moveSubtreeInLayerPreservingLoaded(layer, this.lazyStates, from, to);
     }
     for (const dir of event.directories) {
       const normalized = normalizeTreePath(dir);
