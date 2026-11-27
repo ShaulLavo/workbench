@@ -1131,4 +1131,75 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(onFilteredDelete).not.toHaveBeenCalled();
   });
+
+  it("preflights multi-select move collisions before moving any item and restores initialScrollTop after lazy rows load", async () => {
+    const moveCalls: { from: string; to: string }[] = [];
+    const onMoveError = vi.fn();
+    const collisionModel = new FileTreeModel({
+      paths: ["a.txt", "b.txt", "dest/b.txt"],
+      initialExpanded: ["dest"],
+    });
+    const collisionAdapter: FileSystemAdapter = {
+      workspaceId: "move-preflight",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["a.txt", "b.txt", "dest/b.txt"],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async (from, to) => {
+        moveCalls.push({ from, to });
+      },
+      remove: async () => {},
+    };
+    const host = mount(
+      <FileTreeView model={collisionModel} adapter={collisionAdapter} onError={onMoveError} />,
+    );
+    act(() => {
+      collisionModel.setSelectedPaths(["a.txt", "b.txt"], {
+        focusedPath: "a.txt",
+        modality: "pointer",
+      });
+    });
+    const aRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a.txt"]');
+    const destRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dest"]');
+    const dt = { effectAllowed: "", dropEffect: "", types: [] as string[], setData: vi.fn() };
+    const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStart, "dataTransfer", { value: dt });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: dt });
+    await act(async () => {
+      aRow?.dispatchEvent(dragStart);
+      destRow?.dispatchEvent(drop);
+      await Promise.resolve();
+    });
+    expect(moveCalls).toEqual([]);
+    expect(onMoveError).toHaveBeenCalledTimes(1);
+    expect(collisionModel.index.hasPath("a.txt")).toBe(true);
+    expect(collisionModel.index.hasPath("dest/a.txt")).toBe(false);
+
+    // Deferred initialScrollTop restoration waits until lazy rows arrive.
+    const lazyScrollModel = new FileTreeModel();
+    const onScrollTopChange = vi.fn();
+    const scrollHost = mount(
+      <FileTreeView
+        model={lazyScrollModel}
+        rowHeight={26}
+        initialScrollTop={800}
+        onScrollTopChange={onScrollTopChange}
+      />,
+    );
+    const scroller = scrollHost.querySelector<HTMLDivElement>("[data-wb-tree-scroller]")!;
+    expect(scroller.scrollTop).toBe(0);
+
+    const manyFiles = Array.from({ length: 100 }, (_, i) => ({
+      name: `file-${String(i).padStart(3, "0")}.txt`,
+      kind: "file" as const,
+    }));
+    act(() => {
+      lazyScrollModel.index.setLazyDirectoryState("", { status: "loaded", entries: manyFiles });
+      lazyScrollModel.notifyIndexChange();
+    });
+    expect(scroller.scrollTop).toBe(800);
+  });
 });

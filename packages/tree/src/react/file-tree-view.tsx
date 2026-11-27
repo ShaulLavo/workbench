@@ -566,8 +566,30 @@ export function FileTreeView({
     const moves = top.map((from) => ({
       from,
       to: joinPath(destinationDir, baseName(from)),
-      entryKind: model.index.getKind(from) ?? ("file" as const),
+      entryKind: model.getEntryKind(from) ?? ("file" as const),
     }));
+    const seenDestinations = new Set<string>();
+    for (const move of moves) {
+      if (seenDestinations.has(move.to)) {
+        onError?.(
+          `Cannot move multiple items named ${baseName(move.to)} into the same folder`,
+          new Error(`Duplicate destination: ${move.to}`),
+        );
+        return;
+      }
+      seenDestinations.add(move.to);
+    }
+    if (!onMove && model.index.getDirectoryLoadState(destinationDir).status === "loaded") {
+      const sourceSet = new Set(top);
+      const collision = moves.find((move) => !sourceSet.has(move.to) && model.index.hasPath(move.to));
+      if (collision) {
+        onError?.(
+          `${baseName(collision.to)} already exists in destination`,
+          new Error(`Destination already exists: ${collision.to}`),
+        );
+        return;
+      }
+    }
     if (onMove) {
       if (destinationDir) model.setExpanded(destinationDir, true);
       try {

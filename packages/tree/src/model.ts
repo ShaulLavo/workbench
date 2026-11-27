@@ -71,6 +71,7 @@ export type TreeRow = TreeEntryRow | TreeDraftRow | TreeStatusRow;
 export interface VisibleTreeOptions {
   readonly compactFolders?: boolean;
   readonly filter?: string;
+  readonly filterIndex?: FileTreeIndex | null;
   readonly includeIgnoredInFilter?: boolean;
   readonly git?: FileTreeGitState;
   readonly selected?: ReadonlySet<string>;
@@ -138,18 +139,27 @@ function compactDirectoryChain(
   return { segments, path: currentPath, open: currentOpen };
 }
 
+function childrenForFilter(index: FileTreeIndex, filterIndex: FileTreeIndex | null | undefined, dir: string) {
+  if (!filterIndex) return index.getChildren(dir);
+  if (index.getDirectoryLoadState(dir).status !== "loaded") {
+    return filterIndex.getChildren(dir);
+  }
+  return index.getChildren(dir);
+}
+
 function computeFilterSets(
   index: FileTreeIndex,
   needle: string,
   git: FileTreeGitState | undefined,
   includeIgnored: boolean,
+  filterIndex?: FileTreeIndex | null,
 ): { readonly matched: Set<string>; readonly contextDirs: Set<string> } {
   const matched = new Set<string>();
   const contextDirs = new Set<string>();
   const ignoredDirs = !includeIgnored ? git?.ignoredDirectories : undefined;
 
   const walk = (dir: string): void => {
-    for (const entry of index.getChildren(dir)) {
+    for (const entry of childrenForFilter(index, filterIndex, dir)) {
       const path = joinPath(dir, entry.name);
       if (ignoredDirs?.has(path)) continue;
       if (path.toLocaleLowerCase().includes(needle) || entry.name.toLocaleLowerCase().includes(needle)) {
@@ -192,8 +202,9 @@ export function computeVisibleRows(
   const git = options?.git;
   const selected = options?.selected;
   const focusedPath = options?.focusedPath;
+  const filterIndex = options?.filterIndex;
   const filterSets = needle
-    ? computeFilterSets(index, needle, git, options?.includeIgnoredInFilter ?? false)
+    ? computeFilterSets(index, needle, git, options?.includeIgnoredInFilter ?? false, filterIndex)
     : null;
 
   const rows: TreeRow[] = [];
@@ -235,7 +246,8 @@ export function computeVisibleRows(
       return;
     }
 
-    for (const entry of index.getChildren(dir)) {
+    const children = filterSets ? childrenForFilter(index, filterIndex, dir) : index.getChildren(dir);
+    for (const entry of children) {
       const startPath = joinPath(dir, entry.name);
       if (filterSets && !filterSets.matched.has(startPath) && !filterSets.contextDirs.has(startPath)) {
         continue;
@@ -460,6 +472,7 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   private selectionAnchor: string | undefined;
   private focusedPath: string | undefined;
   private filter = "";
+  private filterIndex: FileTreeIndex | null = null;
   private draft: TreeDraft | undefined;
   private git: FileTreeGitState | undefined;
   private compactFolders: boolean;
@@ -488,6 +501,7 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     const rows = computeVisibleRows(this.index, this.expanded, this.draft, {
       compactFolders: this.compactFolders,
       filter: this.filter,
+      filterIndex: this.filterIndex,
       git: this.git,
       selected: this.selected,
       focusedPath: this.focusedPath,
@@ -588,7 +602,21 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   setFilter(next: string): void {
     if (this.filter === next) return;
     this.filter = next;
+    if (next.trim().length === 0) this.filterIndex = null;
     this.emit();
+  }
+
+  /** Supplies an auxiliary full-workspace path list used while filtering lazy trees. */
+  setFilterPaths(paths: readonly string[] | undefined): void {
+    const nextIndex = paths ? new FileTreeIndex(prepareFileTreeInput(paths)) : null;
+    if (nextIndex === null && this.filterIndex === null) return;
+    this.filterIndex = nextIndex;
+    if (this.filter.trim().length > 0) this.emit();
+  }
+
+  /** Resolves an entry's kind from the primary index or active lazy filter index. */
+  getEntryKind(path: string): EntryKind | undefined {
+    return this.index.getKind(path) ?? this.filterIndex?.getKind(path);
   }
 
   setDraft(draft: TreeDraft | undefined): void {

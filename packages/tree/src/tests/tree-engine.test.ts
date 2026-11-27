@@ -600,4 +600,85 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(model.getSelectedPaths()).toEqual(["other.ts"]);
     expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "other.ts" });
   });
+
+  it("filters files inside unopened lazy directories via adapter.listFiles and refreshes on invalidation", async () => {
+    const model = new FileTreeModel();
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
+    const rootListeners = new Set<() => void>();
+    const closedListeners = new Set<() => void>();
+    const rootState: DirectoryLoadState = {
+      status: "loaded",
+      entries: [
+        { name: "closed", kind: "directory" },
+        { name: "open.ts", kind: "file" },
+      ],
+    };
+    const closedState: DirectoryLoadState = { status: "idle" };
+    let workspaceFiles = ["open.ts", "closed/needle.txt"];
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "lazy-filter",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => workspaceFiles.slice(),
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const isRoot = dirPath === "";
+          const listeners = isRoot ? rootListeners : closedListeners;
+          return {
+            getSnapshot: () => (isRoot ? rootState : closedState),
+            subscribe(listener) {
+              listeners.add(listener);
+              return () => listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory() {},
+        subscribeInvalidation(listener) {
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
+        },
+      },
+    };
+
+    const bound = bindFileSystemAdapter(model, adapter);
+    // Filter discovers closed/needle.txt even though "closed" was never opened or loaded.
+    model.setFilter("needle");
+    await Promise.resolve();
+    await Promise.resolve();
+    const matchedPaths = model
+      .getSnapshot()
+      .rows.filter((row) => row.type === "entry")
+      .map((row) => row.path);
+    expect(matchedPaths).toEqual(["closed", "closed/needle.txt"]);
+    expect(model.getEntryKind("closed/needle.txt")).toBe("file");
+
+    // Invalidation while filtering refreshes listFiles and reflects newly created files.
+    workspaceFiles = ["open.ts", "closed/needle.txt", "closed/needle-two.txt"];
+    for (const listener of invListeners) {
+      listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    const updatedPaths = model
+      .getSnapshot()
+      .rows.filter((row) => row.type === "entry")
+      .map((row) => row.path);
+    expect(updatedPaths).toEqual(["closed", "closed/needle-two.txt", "closed/needle.txt"]);
+
+    // Clearing filter leaves "closed" collapsed.
+    model.setFilter("");
+    const collapsedPaths = model
+      .getSnapshot()
+      .rows.filter((row) => row.type === "entry")
+      .map((row) => row.path);
+    expect(collapsedPaths).toEqual(["closed", "open.ts"]);
+
+    bound.dispose();
+  });
 });
