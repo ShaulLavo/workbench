@@ -6,7 +6,15 @@ import { defineConfig } from "vite";
 export default defineConfig({
   plugins: [react({ compiler: true }), tailwindcss()],
   resolve: {
-    dedupe: ["react", "react-dom", "@shaulavo/hotkeys", "@base-ui/react", "ghostty-webgpu"],
+    dedupe: [
+      "react",
+      "react-dom",
+      "@shaulavo/hotkeys",
+      "@base-ui/react",
+      "ghostty-webgpu",
+      "@singapore-editor/core",
+      "@singapore-editor/react",
+    ],
   },
   optimizeDeps: {
     exclude: ["ghostty-webgpu"],

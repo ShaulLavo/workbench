@@ -7,6 +7,7 @@ import "@shaulavo/workbench-ui/ui.css";
 import "@shaulavo/workbench-tree/tree.css";
 import "@shaulavo/workbench-terminal/terminal.css";
 import "@shaulavo/workbench-preview/preview.css";
+import "@shaulavo/workbench-editor/editor.css";
 import "./harness.css";
 
 import { StrictMode } from "react";

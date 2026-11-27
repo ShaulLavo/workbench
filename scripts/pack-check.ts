@@ -21,6 +21,7 @@ const PACKAGES = [
   "packages/tree",
   "packages/terminal",
   "packages/preview",
+  "packages/editor",
 ] as const;
 const REQUIRED_TOKEN_CSS_EXPORTS = [
   "@shaulavo/workbench-tokens/tokens.css",
@@ -56,9 +57,11 @@ function findPhysicalPackageDirs(nodeModulesDir: string, pkgName: string): Set<s
 const tempRoot = mkdtempSync(path.join(os.tmpdir(), "workbench-pack-check-"));
 const tarDir = path.join(tempRoot, "tarballs");
 const reactFreeDir = path.join(tempRoot, "consumer-react-free");
+const bareSprocktDir = path.join(tempRoot, "consumer-bare-sprockt");
 const fullPeerDir = path.join(tempRoot, "consumer-full-peers");
 mkdirSync(tarDir, { recursive: true });
 mkdirSync(reactFreeDir, { recursive: true });
+mkdirSync(bareSprocktDir, { recursive: true });
 mkdirSync(fullPeerDir, { recursive: true });
 
 try {
@@ -86,8 +89,8 @@ try {
         throw new Error(`${manifest.name} tarball missing ${required}`);
       }
     }
-    if (listing.some((file) => /node_modules\/(?:react|@base-ui\/react)\b/.test(file))) {
-      throw new Error(`${manifest.name} tarball unexpectedly bundled react or @base-ui/react`);
+    if (listing.some((file) => /node_modules\/(?:react|@base-ui\/react|@singapore-editor)\b/.test(file))) {
+      throw new Error(`${manifest.name} tarball unexpectedly bundled react, @base-ui/react, or singapore`);
     }
   }
 
@@ -102,6 +105,7 @@ try {
     "@shaulavo/workbench-tree": `file:${tarballs.get("@shaulavo/workbench-tree")}`,
     "@shaulavo/workbench-terminal": `file:${tarballs.get("@shaulavo/workbench-terminal")}`,
     "@shaulavo/workbench-preview": `file:${tarballs.get("@shaulavo/workbench-preview")}`,
+    "@shaulavo/workbench-editor": `file:${tarballs.get("@shaulavo/workbench-editor")}`,
   };
 
   // Fixture A: React-free root consumer (tokens + core + icons, ZERO react installed).
@@ -156,7 +160,64 @@ try {
     reactFreeDir,
   );
 
-  // Fixture B: Full React 19 + @base-ui/react + @shaulavo/hotkeys peer consumer.
+  // Fixture B: Bare Sprockt-like consumer (editor root without @dnd-kit/*, diff, markdown, or lsp peers).
+  writeFileSync(
+    path.join(bareSprocktDir, "package.json"),
+    JSON.stringify(
+      {
+        name: "pack-consumer-bare-sprockt",
+        private: true,
+        type: "module",
+        dependencies: {
+          ...allOverrides,
+          "@base-ui/react": "1.9.0",
+          "@shaulavo/hotkeys": "0.0.4",
+          "@singapore-editor/core": "0.2.13",
+          "@singapore-editor/find": "0.2.13",
+          "@singapore-editor/gutters": "0.2.13",
+          "@singapore-editor/highlighting": "0.2.16",
+          "@singapore-editor/plugin-ui": "0.2.13",
+          "@singapore-editor/react": "0.2.13",
+          "ghostty-webgpu": "0.3.34",
+          react: "19.3.1",
+          "react-dom": "19.3.1",
+        },
+        overrides: allOverrides,
+      },
+      null,
+      2,
+    ),
+  );
+  run("bun", ["install"], bareSprocktDir);
+
+  for (const absentOptional of [
+    "@dnd-kit/core",
+    "@dnd-kit/sortable",
+    "@singapore-editor/markdown",
+    "@singapore-editor/lsp-plugin",
+    "@singapore-editor/minimap",
+    "@singapore-editor/scope-lines",
+  ]) {
+    const dirs = findPhysicalPackageDirs(path.join(bareSprocktDir, "node_modules"), absentOptional);
+    if (dirs.size !== 0) {
+      throw new Error(`Bare Sprockt fixture unexpectedly installed optional peer ${absentOptional}`);
+    }
+  }
+  run(
+    "bun",
+    [
+      "-e",
+      `import { existsSync } from "node:fs";
+       import { fileURLToPath } from "node:url";
+       const rootEntry = fileURLToPath(import.meta.resolve("@shaulavo/workbench-editor"));
+       const cssEntry = fileURLToPath(import.meta.resolve("@shaulavo/workbench-editor/editor.css"));
+       if (!existsSync(rootEntry) || !existsSync(cssEntry)) process.exit(1);
+       console.log("bare-sprockt-editor-root-ok");`,
+    ],
+    bareSprocktDir,
+  );
+
+  // Fixture C: Full Fregat-like peer consumer (all 8 packages + all editor subpaths).
   writeFileSync(
     path.join(fullPeerDir, "package.json"),
     JSON.stringify(
@@ -167,7 +228,22 @@ try {
         dependencies: {
           ...allOverrides,
           "@base-ui/react": "1.9.0",
+          "@dnd-kit/core": "6.3.1",
+          "@dnd-kit/sortable": "10.0.0",
+          "@dnd-kit/utilities": "3.2.2",
           "@shaulavo/hotkeys": "0.0.4",
+          "@singapore-editor/core": "0.2.13",
+          "@singapore-editor/diff": "0.2.13",
+          "@singapore-editor/find": "0.2.13",
+          "@singapore-editor/gutters": "0.2.13",
+          "@singapore-editor/highlighting": "0.2.16",
+          "@singapore-editor/lsp": "0.2.13",
+          "@singapore-editor/lsp-plugin": "0.2.16",
+          "@singapore-editor/markdown": "0.2.13",
+          "@singapore-editor/minimap": "0.2.13",
+          "@singapore-editor/plugin-ui": "0.2.13",
+          "@singapore-editor/react": "0.2.13",
+          "@singapore-editor/scope-lines": "0.2.13",
           "ghostty-webgpu": "0.3.34",
           react: "19.3.1",
           "react-dom": "19.3.1",
@@ -180,7 +256,7 @@ try {
   );
   run("bun", ["install"], fullPeerDir);
 
-  for (const peerPkg of ["@shaulavo/hotkeys", "@base-ui/react", "ghostty-webgpu"]) {
+  for (const peerPkg of ["@shaulavo/hotkeys", "@base-ui/react", "ghostty-webgpu", "@singapore-editor/core"]) {
     const dirs = findPhysicalPackageDirs(path.join(fullPeerDir, "node_modules"), peerPkg);
     if (dirs.size !== 1) {
       throw new Error(`Expected 1 deduplicated ${peerPkg} in full-peer fixture, got ${dirs.size}`);
@@ -204,6 +280,19 @@ try {
     ["@shaulavo/workbench-tree/react", "node_modules/@shaulavo/workbench-tree/dist/react/index.js", true],
     ["@shaulavo/workbench-terminal root", "node_modules/@shaulavo/workbench-terminal/dist/index.js", true],
     ["@shaulavo/workbench-preview root", "node_modules/@shaulavo/workbench-preview/dist/index.js", true],
+    ["@shaulavo/workbench-editor root", "node_modules/@shaulavo/workbench-editor/dist/index.js", true],
+    [
+      "@shaulavo/workbench-editor/groups",
+      "node_modules/@shaulavo/workbench-editor/dist/groups/index.js",
+      true,
+    ],
+    ["@shaulavo/workbench-editor/lsp", "node_modules/@shaulavo/workbench-editor/dist/lsp/index.js", true],
+    [
+      "@shaulavo/workbench-editor/composer",
+      "node_modules/@shaulavo/workbench-editor/dist/composer/index.js",
+      true,
+    ],
+    ["@shaulavo/workbench-editor/diff", "node_modules/@shaulavo/workbench-editor/dist/diff/index.js", true],
   ] as const) {
     const imported = scanImportsInFile(path.join(fullPeerDir, relPath));
     const importsReact =
@@ -216,34 +305,27 @@ try {
     }
   }
 
-  const uiDistImports = scanImportsInFile(
-    path.join(fullPeerDir, "node_modules/@shaulavo/workbench-ui/dist/index.js"),
+  const editorRootImports = scanImportsInFile(
+    path.join(fullPeerDir, "node_modules/@shaulavo/workbench-editor/dist/index.js"),
   );
-  const expectedBaseUiSubpaths = new Set<string>();
-  const collectUiImports = (dir: string): void => {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.name === "tests") continue;
-      const full = path.join(dir, entry.name);
-      if (entry.isDirectory()) {
-        collectUiImports(full);
-        continue;
-      }
-      if (!entry.name.endsWith(".tsx") && !entry.name.endsWith(".ts")) continue;
-      for (const specifier of scanImportsInFile(full)) {
-        if (specifier === "@base-ui/react" || specifier.startsWith("@base-ui/react/")) {
-          expectedBaseUiSubpaths.add(specifier);
-        }
-      }
+  for (const forbidden of [
+    "@dnd-kit/core",
+    "@singapore-editor/diff",
+    "@singapore-editor/markdown",
+    "@singapore-editor/lsp-plugin",
+  ]) {
+    if (editorRootImports.has(forbidden)) {
+      throw new Error(`@shaulavo/workbench-editor root must not import optional subpath dep ${forbidden}`);
     }
-  };
-  collectUiImports(path.join(ROOT, "packages/ui/src"));
-  if (expectedBaseUiSubpaths.size === 0) {
-    throw new Error("Expected @shaulavo/workbench-ui to import at least one @base-ui/react specifier");
   }
-  for (const subpath of expectedBaseUiSubpaths) {
-    if (!uiDistImports.has(subpath)) {
-      throw new Error(`@shaulavo/workbench-ui bundled instead of externalizing ${subpath}`);
-    }
+
+  const groupsImports = scanImportsInFile(
+    path.join(fullPeerDir, "node_modules/@shaulavo/workbench-editor/dist/groups/index.js"),
+  );
+  if (!groupsImports.has("@dnd-kit/core") || !groupsImports.has("@dnd-kit/sortable")) {
+    throw new Error(
+      "@shaulavo/workbench-editor/groups must keep @dnd-kit/core and @dnd-kit/sortable externalized",
+    );
   }
 
   const terminalDistImports = scanImportsInFile(
@@ -282,22 +364,33 @@ try {
        if (!tree.prepareFileTreeInput || !tree.FileTreeModel || !treeReact.FileTreeView) process.exit(1);
        if (!terminal.TerminalPanel || !terminal.TerminalView || !terminal.TerminalAccessoryBar) process.exit(1);
        if (!preview.PreviewPane || !preview.createPreviewBridgeController || !preview.createBridgelessPreviewController) process.exit(1);
+       for (const entry of [
+         "@shaulavo/workbench-editor",
+         "@shaulavo/workbench-editor/groups",
+         "@shaulavo/workbench-editor/lsp",
+         "@shaulavo/workbench-editor/composer",
+         "@shaulavo/workbench-editor/diff",
+       ]) {
+         const resolved = fileURLToPath(import.meta.resolve(entry));
+         if (!existsSync(resolved)) throw new Error("Missing editor subpath: " + entry);
+       }
        for (const css of [
          "@shaulavo/workbench-ui/ui.css",
          "@shaulavo/workbench-tree/tree.css",
          "@shaulavo/workbench-terminal/terminal.css",
          "@shaulavo/workbench-preview/preview.css",
+         "@shaulavo/workbench-editor/editor.css",
        ]) {
          const resolved = fileURLToPath(import.meta.resolve(css));
          if (!existsSync(resolved)) throw new Error("Missing CSS export: " + css);
        }
-       console.log("full-peer-react-ui-tree-terminal-preview-ok");`,
+       console.log("full-peer-8-packages-ok");`,
     ],
     fullPeerDir,
   );
 
   console.log(
-    "pack-check: ok (7 packages: react-free + full-peer fixtures, CSS subpaths, single @shaulavo/hotkeys, @base-ui/react & ghostty-webgpu, LICENSE/NOTICE/THIRD_PARTY_NOTICES verified)",
+    "pack-check: ok (8 packages: react-free + bare-sprockt + full-peer fixtures, all editor subpaths & CSS exports, single @shaulavo/hotkeys, @base-ui/react, ghostty-webgpu & @singapore-editor/core, LICENSE/NOTICE/THIRD_PARTY_NOTICES verified)",
   );
 } finally {
   rmSync(tempRoot, { recursive: true, force: true });
