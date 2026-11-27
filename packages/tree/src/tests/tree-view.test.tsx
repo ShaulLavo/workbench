@@ -1,4 +1,4 @@
-import { act, createRef } from "react";
+import { act, createRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   DirectoryLoadState,
@@ -1865,5 +1865,110 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(reloaded).toEqual(["", "area", "area/inner"]);
     expect(host.querySelector('[data-testid="wb-tree-row-area/inner/fresh.txt"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).toBeNull();
+  });
+
+  it("keeps pending lazy rename active when parent re-renders with a fresh inline onError callback", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const closedDeferred = Promise.withResolvers<void>();
+    let closedLoads = 0;
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-inline-onerror",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["closed/needle.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loaded", entries: [{ name: "closed", kind: "directory" }] };
+            for (const listener of slot.listeners) listener();
+            return;
+          }
+          if (dirPath === "closed") {
+            closedLoads += 1;
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await closedDeferred.promise;
+            slot.state = { status: "loaded", entries: [{ name: "needle.txt", kind: "file" }] };
+            for (const listener of slot.listeners) listener();
+          }
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+
+    const model = new FileTreeModel({ compactFolders: true });
+    const handleRef: { current: FileTreeViewHandle | null } = { current: null };
+    let triggerParentRerender: (() => void) | undefined;
+
+    function Wrapper() {
+      const [, setTick] = useState(0);
+      triggerParentRerender = () => setTick((value) => value + 1);
+      return (
+        <FileTreeView
+          model={model}
+          adapter={adapter}
+          handleRef={handleRef}
+          onError={() => {
+            // Fresh inline callback on every render.
+          }}
+        />
+      );
+    }
+
+    const host = mount(<Wrapper />);
+    await act(async () => {
+      await Promise.resolve();
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      handleRef.current?.startRename("closed/needle.txt");
+      await Promise.resolve();
+    });
+    expect(closedLoads).toBe(1);
+
+    // Re-rendering the parent mid-load with a new inline onError must not cancel or restart rename loading.
+    await act(async () => {
+      triggerParentRerender?.();
+      await Promise.resolve();
+    });
+    expect(closedLoads).toBe(1);
+
+    await act(async () => {
+      closedDeferred.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(closedLoads).toBe(1);
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/needle.txt" });
+    expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
   });
 });
