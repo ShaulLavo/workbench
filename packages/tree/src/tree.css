@@ -83,7 +83,7 @@
     background: var(--wb-row-selected);
   }
 
-  .wb-tree-row[data-active="true"]:not([data-selected="true"]) {
+  .wb-tree-row[data-active="true"]:not([data-selected="true"]):not([data-drop-target="true"]) {
     background: var(--wb-row-active);
   }
 

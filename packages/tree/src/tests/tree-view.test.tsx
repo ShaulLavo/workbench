@@ -591,7 +591,9 @@ describe("@shaulavo/workbench-tree React view", () => {
 
     // Row height override & initialScrollTop
     const firstSlot = host.querySelector<HTMLDivElement>(".wb-tree-slot");
+    const viewportWrap = host.querySelector<HTMLDivElement>(".wb-tree-viewport-wrap");
     expect(firstSlot?.style.height).toBe("20px");
+    expect(viewportWrap?.style.getPropertyValue("--wb-tree-row-height")).toBe("20px");
     expect(handleRef.current?.getScrollElement()?.scrollTop).toBe(12);
 
     // Active, loading, custom decoration, and row element registration
@@ -679,5 +681,146 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(model.getSnapshot().expanded.has("fresh")).toBe(true);
     expect(model.getSnapshot().focusedPath).toBe("fresh/index.ts");
+  });
+
+  it("keeps drafts visible, routes delegated errors to onError, rejects filtered focusPath, enforces touch canDrag, cleans external dragleave, and renames clicked compact segment", async () => {
+    vi.useFakeTimers();
+    try {
+      const model = new FileTreeModel({
+        paths: ["a/b/leaf.ts", "dir/child.ts", "README.md"],
+        initialExpanded: ["a", "a/b"],
+      });
+      const handleRef = createRef<FileTreeViewHandle>();
+      const onError = vi.fn();
+      const onCreate = vi.fn(async () => {
+        throw new Error("create boom");
+      });
+      const onRename = vi.fn(async () => {
+        throw new Error("rename boom");
+      });
+      const onMove = vi.fn(async () => {
+        throw new Error("move boom");
+      });
+      const canDrag = vi.fn((paths: readonly string[]) => !paths.includes("README.md"));
+      const onExternalDrop = vi.fn();
+
+      const host = mount(
+        <FileTreeView
+          model={model}
+          handleRef={handleRef}
+          onCreate={onCreate}
+          onRename={onRename}
+          onMove={onMove}
+          onError={onError}
+          canDrag={canDrag}
+          onExternalDrop={onExternalDrop}
+        />,
+      );
+
+      // 1. startRename on a collapsed child expands ancestors so the input is visible.
+      act(() => {
+        handleRef.current?.startRename("dir/child.ts");
+      });
+      expect(model.getSnapshot().expanded.has("dir")).toBe(true);
+      const renameInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+      expect(renameInput).not.toBeNull();
+      await act(async () => {
+        if (renameInput) {
+          renameInput.value = "renamed.ts";
+          renameInput.dispatchEvent(new Event("input", { bubbles: true }));
+          renameInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        }
+        await Promise.resolve();
+      });
+      expect(onRename).toHaveBeenCalledWith("dir/child.ts", "dir/renamed.ts");
+      expect(onError).toHaveBeenCalledWith("Unable to rename child.ts", expect.any(Error));
+
+      // 2. focusPath on a filtered-out path returns false and leaves no stale focus request.
+      act(() => {
+        model.setFilter("README");
+        handleRef.current?.focusPath("README.md");
+      });
+      const readmeRowEl = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+      expect(document.activeElement).toBe(readmeRowEl);
+      act(() => {
+        expect(handleRef.current?.focusPath("dir/child.ts")).toBe(false);
+      });
+      expect(model.getSnapshot().focusedPath).toBe("README.md");
+      act(() => {
+        model.setFilter("");
+      });
+      expect(document.activeElement).toBe(readmeRowEl);
+
+      // 3. startCreate while filtered clears filter so draft input is rendered and delegated error hits onError.
+      act(() => {
+        model.setFilter("README");
+      });
+      act(() => {
+        handleRef.current?.startCreate("dir", "file");
+      });
+      expect(model.getSnapshot().filter).toBe("");
+      const createInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+      expect(createInput).not.toBeNull();
+      await act(async () => {
+        if (createInput) {
+          createInput.value = "new.ts";
+          createInput.dispatchEvent(new Event("input", { bubbles: true }));
+          createInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+        }
+        await Promise.resolve();
+      });
+      expect(onCreate).toHaveBeenCalledWith("dir", "file", "new.ts");
+      expect(onError).toHaveBeenCalledWith("Unable to create new.ts", expect.any(Error));
+
+      // 4. Double-clicking a compact segment (`a` inside `a / b`) renames `a`, not `a/b`.
+      const segA = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a"]');
+      expect(segA).not.toBeNull();
+      act(() => {
+        segA?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+      });
+      expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "a" });
+      act(() => {
+        model.setDraft(undefined);
+      });
+
+      // 5. Touch long-press respects canDrag (README.md is disallowed).
+      const readmeRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+      act(() => {
+        readmeRow?.dispatchEvent(
+          new PointerEvent("pointerdown", {
+            pointerId: 9,
+            pointerType: "touch",
+            clientX: 10,
+            clientY: 10,
+            bubbles: true,
+          }),
+        );
+      });
+      act(() => {
+        vi.advanceTimersByTime(450);
+      });
+      const scroller = host.querySelector<HTMLElement>("[data-wb-tree-scroller]");
+      expect(scroller?.getAttribute("data-touch-dragging")).toBeNull();
+      expect(canDrag).toHaveBeenCalledWith(["README.md"]);
+
+      // 6. Canceled external drag clears drop highlight on dragleave.
+      const dirRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dir"]');
+      const dragOverEvent = new Event("dragover", { bubbles: true, cancelable: true });
+      Object.defineProperty(dragOverEvent, "dataTransfer", {
+        value: { types: ["Files"], dropEffect: "none" },
+      });
+      act(() => {
+        dirRow?.dispatchEvent(dragOverEvent);
+      });
+      expect(dirRow?.getAttribute("data-drop-target")).toBe("true");
+      const dragLeaveEvent = new Event("dragleave", { bubbles: true });
+      Object.defineProperty(dragLeaveEvent, "relatedTarget", { value: document.body });
+      act(() => {
+        scroller?.dispatchEvent(dragLeaveEvent);
+      });
+      expect(dirRow?.getAttribute("data-drop-target")).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

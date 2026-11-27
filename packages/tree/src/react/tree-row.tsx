@@ -32,7 +32,7 @@ export interface FileTreeRowProps {
   readonly onRowElementChange?: (path: string, element: HTMLElement | null) => void;
   readonly onRowFocus?: (row: TreeEntryRow) => void;
   readonly onActivate: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
-  readonly onDoubleClickRename?: (row: TreeEntryRow) => void;
+  readonly onDoubleClickRename?: (row: TreeEntryRow, targetPath?: string) => void;
   readonly onToggleDirectory: (dirPath: string) => void;
   readonly onSegmentClick: (segmentPath: string, event: MouseEvent<HTMLButtonElement>) => void;
   readonly onContextMenu: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
@@ -224,6 +224,14 @@ export function FileTreeRow({
                 onClick={(event) => {
                   event.stopPropagation();
                   onSegmentClick(seg.path, event);
+                }}
+                onDoubleClick={(event) => {
+                  event.stopPropagation();
+                  if (!onDoubleClickRename) return;
+                  if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
+                    return;
+                  }
+                  onDoubleClickRename(row, seg.path);
                 }}
                 onDragOver={(event) => {
                   event.stopPropagation();

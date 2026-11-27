@@ -6,6 +6,7 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
@@ -70,6 +71,7 @@ export interface FileTreeViewportProps {
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onSelectStickyAncestor: (dirPath: string) => void;
   readonly onRootContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
+  readonly onRootDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
   readonly onRootDragOver?: (event: DragEvent<HTMLDivElement>) => void;
   readonly onRootDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
@@ -102,6 +104,7 @@ export function FileTreeViewport({
   onKeyDown,
   onSelectStickyAncestor,
   onRootContextMenu,
+  onRootDragLeave,
   onRootDragOver,
   onRootDrop,
 }: FileTreeViewportProps) {
@@ -270,8 +273,13 @@ export function FileTreeViewport({
 
   const virtualRows = virtualizer.getVirtualItems();
 
+  const wrapStyle =
+    explicitRowHeight !== undefined && explicitRowHeight > 0
+      ? ({ "--wb-tree-row-height": `${explicitRowHeight}px` } as CSSProperties)
+      : undefined;
+
   return (
-    <div className="wb-tree-viewport-wrap">
+    <div className="wb-tree-viewport-wrap" style={wrapStyle}>
       <StickyAncestorsOverlay
         rows={stickyRows}
         initialPushUpPx={stickyPushUpRef.current}
@@ -300,6 +308,11 @@ export function FileTreeViewport({
           if ((event.target as HTMLElement | null)?.closest("[data-wb-tree-row]")) return;
           event.preventDefault();
           onRootContextMenu(event);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          dragPointerYRef.current = null;
+          onRootDragLeave?.(event);
         }}
         onDragOverCapture={(event) => {
           dragPointerYRef.current = event.clientY;

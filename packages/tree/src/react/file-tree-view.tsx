@@ -299,6 +299,7 @@ export function FileTreeView({
     focusPath(path, options) {
       if (!model.index.hasPath(path)) return false;
       model.expandAllAncestors(path);
+      if (findRowIndexByPath(path) < 0) return false;
       model.setFocusedPath(path, "keyboard");
       requestRowFocus(path, options);
       return true;
@@ -322,10 +323,17 @@ export function FileTreeView({
     },
     startCreate(parent, kind) {
       if (!isCurrentlyWritable()) return;
+      if (parent !== "" && model.index.getKind(parent) !== "directory") return;
+      if (model.getSnapshot().filter) model.setFilter("");
       model.setDraft({ mode: "create", kind, parent });
     },
     startRename(path) {
-      if (!isCurrentlyWritable()) return;
+      if (!isCurrentlyWritable() || !model.index.hasPath(path)) return;
+      model.expandAllAncestors(path);
+      if (findRowIndexByPath(path) < 0 && model.getSnapshot().filter) {
+        model.setFilter("");
+      }
+      if (findRowIndexByPath(path) < 0) return;
       model.setDraft({ mode: "rename", path });
     },
     collapseAll() {
@@ -439,7 +447,11 @@ export function FileTreeView({
     model.setDraft(undefined);
     if (!isCurrentlyWritable()) return;
     if (onCreate) {
-      await onCreate(parent, kind, name);
+      try {
+        await onCreate(parent, kind, name);
+      } catch (error) {
+        onError?.(`Unable to create ${name}`, error);
+      }
       return;
     }
     const fullPath = joinPath(parent, name);
@@ -473,8 +485,13 @@ export function FileTreeView({
       return;
     }
     if (onRename) {
-      await onRename(fromPath, toPath);
-      requestRowFocus(toPath);
+      try {
+        await onRename(fromPath, toPath);
+        requestRowFocus(toPath);
+      } catch (error) {
+        requestRowFocus(fromPath);
+        onError?.(`Unable to rename ${baseName(fromPath)}`, error);
+      }
       return;
     }
     const entryKind = model.index.getKind(fromPath) ?? "file";
@@ -521,7 +538,11 @@ export function FileTreeView({
     }));
     if (onMove) {
       if (destinationDir) model.setExpanded(destinationDir, true);
-      await onMove(moves.map(({ from, to }) => ({ from, to })));
+      try {
+        await onMove(moves.map(({ from, to }) => ({ from, to })));
+      } catch (error) {
+        onError?.("Unable to move selected items", error);
+      }
       return;
     }
     const optIds: string[] = [];
@@ -632,7 +653,13 @@ export function FileTreeView({
   }
 
   function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (state.draft) return;
+    if (state.draft) {
+      const hasVisibleDraft = state.rows.some(
+        (row) => row.type === "draft" || (row.type === "entry" && row.editing),
+      );
+      if (hasVisibleDraft) return;
+      model.setDraft(undefined);
+    }
     const targetEl = event.target as HTMLElement | null;
     if (targetEl?.closest("input, textarea, [data-wb-tree-status]")) return;
     if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
@@ -721,16 +748,21 @@ export function FileTreeView({
     const segEl = hit.closest<HTMLElement>("[data-wb-drop-segment]");
     if (segEl?.dataset.wbDropSegment) {
       const segPath = segEl.dataset.wbDropSegment;
-      return canMoveInto(sources, segPath) ? { directory: segPath, segmentPath: segPath } : null;
+      const top = topLevelPaths(sources);
+      if (!canMoveInto(top, segPath) || (canDrop && !canDrop(top, segPath))) return null;
+      return { directory: segPath, segmentPath: segPath };
     }
     const rowEl = hit.closest<HTMLElement>("[data-wb-tree-row]");
     if (rowEl?.dataset.path) {
       const kind = rowEl.dataset.kind === "directory" ? "directory" : "file";
       const destDir = targetDirectory(rowEl.dataset.path, kind);
-      return canMoveInto(sources, destDir) ? { directory: destDir } : null;
+      const top = topLevelPaths(sources);
+      if (!canMoveInto(top, destDir) || (canDrop && !canDrop(top, destDir))) return null;
+      return { directory: destDir };
     }
     const scrollerEl = hit.closest<HTMLElement>("[data-wb-tree-scroller]");
-    if (scrollerEl && canMoveInto(sources, "")) {
+    const top = topLevelPaths(sources);
+    if (scrollerEl && canMoveInto(top, "") && (!canDrop || canDrop(top, ""))) {
       return { directory: "" };
     }
     return null;
@@ -820,6 +852,10 @@ export function FileTreeView({
       if (!current || current.pointerId !== pointerId) return;
       const currentSelected = model.getSnapshot().selected;
       const sources = currentSelected.has(row.path) ? Array.from(currentSelected) : [row.path];
+      if (canDrag && !canDrag(sources)) {
+        current.timer = undefined;
+        return;
+      }
       current.timer = undefined;
       current.active = true;
       current.sources = sources;
@@ -1030,6 +1066,7 @@ export function FileTreeView({
             ? (event) => openMenuFor(null, { x: event.clientX, y: event.clientY })
             : undefined
         }
+        onRootDragLeave={() => clearDragState()}
         onRootDragOver={(event) => {
           if (!isCurrentlyWritable()) return;
           const sources = draggingPathsRef.current;
@@ -1117,7 +1154,10 @@ export function FileTreeView({
               }}
               onActivate={handleActivateRow}
               onDoubleClickRename={
-                writable ? (targetRow) => model.setDraft({ mode: "rename", path: targetRow.path }) : undefined
+                writable
+                  ? (targetRow, targetPath) =>
+                      model.setDraft({ mode: "rename", path: targetPath ?? targetRow.path })
+                  : undefined
               }
               onToggleDirectory={toggleDirectory}
               onSegmentClick={handleSegmentClick}
