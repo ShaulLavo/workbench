@@ -13,6 +13,7 @@ import type { DocumentId, EditorDocumentAdapter, LoadedDocument, WriteOutcome } 
 
 export interface DocumentDraftEntry {
   readonly buffer: EditorTextBuffer;
+  readonly nativeMarkClean: () => void;
   revision: string | undefined;
   languageId?: string;
   byteLength: number;
@@ -244,7 +245,7 @@ function attachBufferSubscription(
     );
     entry.byteLength = Math.max(0, entry.byteLength + delta);
     if (!isDraftDirty(entry) && nativeIsDirty()) {
-      entry.buffer.markClean();
+      entry.nativeMarkClean();
     }
     notifyDoc(store, documentId);
   });
@@ -261,10 +262,12 @@ export function seedDocumentDraft(
   if (existing) return existing;
 
   const buffer = createEditorTextBuffer(doc.text);
-  buffer.markClean();
+  const nativeMarkClean = buffer.markClean.bind(buffer);
   const nativeIsDirty = buffer.isDirty.bind(buffer);
+  nativeMarkClean();
   const entry: DocumentDraftEntry = {
     buffer,
+    nativeMarkClean,
     revision: doc.revision,
     languageId: doc.languageId,
     byteLength: utf8ByteLengthOfSnapshot(buffer.getTextSnapshot()),
@@ -280,6 +283,15 @@ export function seedDocumentDraft(
   };
   Object.defineProperty(buffer, "isDirty", {
     value: () => isDraftDirty(entry),
+    configurable: true,
+  });
+  Object.defineProperty(buffer, "markClean", {
+    value: () => {
+      entry.savedSnapshot = buffer.getSnapshot();
+      entry.savedRevision = Math.max(entry.savedRevision, buffer.getRevision());
+      nativeMarkClean();
+      notifyDoc(store, documentId);
+    },
     configurable: true,
   });
   attachBufferSubscription(store, documentId, entry, nativeIsDirty);
@@ -307,7 +319,7 @@ function replaceBufferFromDisk(
       });
     }
     entry.buffer.clearHistory();
-    entry.buffer.markClean();
+    entry.nativeMarkClean();
     entry.revision = doc.revision;
     entry.languageId = doc.languageId;
     entry.byteLength = utf8ByteLengthOfSnapshot(entry.buffer.getTextSnapshot());
@@ -387,7 +399,7 @@ async function executeSave(
     entry.savedRevision = targetRevision;
   }
   if (entry.buffer.getRevision() === targetRevision) {
-    entry.buffer.markClean();
+    entry.nativeMarkClean();
   }
   const dirtyNow = isDraftDirty(entry);
   callbacks.onDirtyChange?.(documentId, dirtyNow);

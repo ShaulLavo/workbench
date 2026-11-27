@@ -1206,6 +1206,21 @@ describe("@shaulavo/workbench-editor", () => {
     expect(isDraftDirty(draft)).toBe(false);
     expect(draft.buffer.isDirty()).toBe(false);
     expect(editor!.getState().isDirty).toBe(false);
+
+    // Calling session.markClean() directly also keeps buffer.isDirty(), isDraftDirty(), and EditorState.isDirty in sync.
+    const directSession = createEditorBufferSession(draft.buffer, createEditorViewSession(draft.buffer));
+    act(() => {
+      editor!.edit({ from: 2, to: 2, text: "c" });
+    });
+    expect(directSession.isDirty()).toBe(true);
+    expect(isDraftDirty(draft)).toBe(true);
+    expect(editor!.getState().isDirty).toBe(true);
+    act(() => {
+      directSession.markClean();
+    });
+    expect(directSession.isDirty()).toBe(false);
+    expect(isDraftDirty(draft)).toBe(false);
+    expect(editor!.getState().isDirty).toBe(false);
   });
 
   it("preserves Sprockt session-mode contract: persistent editor, onBeforeDetach before swap & unmount, reveal.seq, scroll clamp, and fonts.ready", async () => {
