@@ -1088,4 +1088,115 @@ describe("@shaulavo/workbench-terminal", () => {
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
     }
   });
+
+  it("invokes onBeforeDispose before terminal.dispose on unmount and always disposes even if it throws", async () => {
+    const events: string[] = [];
+    let disposed = false;
+    const fakeRuntime = {} as GhosttyRuntime;
+    const makeFakeTerminal = () => {
+      const base = createMockPanelTerminal(new Set(), () => {});
+      return Object.assign(base, {
+        dispose: vi.fn(() => {
+          disposed = true;
+          events.push("dispose");
+        }),
+        captureViewport: vi.fn(() => {
+          if (disposed) throw new Error("Terminal has been disposed");
+          events.push("capture");
+          return "snapshot";
+        }),
+      });
+    };
+
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => makeFakeTerminal() as unknown as Terminal);
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([]),
+      activeId: createSubscribable<string | undefined>(undefined),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({
+        write: () => {},
+        resize: () => {},
+        detach: () => {
+          events.push("detach");
+        },
+      }),
+    };
+
+    try {
+      const observedTerminals: Terminal[] = [];
+      let readyTerminal: Terminal | null = null;
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const reactRoot = createRoot(container);
+      act(() => {
+        reactRoot.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="s1"
+            loadRuntime={async () => fakeRuntime}
+            onTerminalReady={(t) => {
+              readyTerminal = t;
+            }}
+            onBeforeDispose={(t) => {
+              observedTerminals.push(t);
+              events.push("before-dispose");
+              (t as unknown as { captureViewport(): string }).captureViewport();
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        for (let i = 0; i < 6; i += 1) await Promise.resolve();
+      });
+      expect(readyTerminal).not.toBeNull();
+
+      act(() => {
+        reactRoot.unmount();
+      });
+      container.remove();
+
+      expect(observedTerminals).toEqual([readyTerminal]);
+      expect(events).toEqual(["detach", "before-dispose", "capture", "dispose"]);
+
+      // Even if onBeforeDispose throws, terminal.dispose() still runs in finally.
+      events.length = 0;
+      disposed = false;
+      const container2 = document.createElement("div");
+      document.body.appendChild(container2);
+      const reactRoot2 = createRoot(container2);
+      act(() => {
+        reactRoot2.render(
+          <TerminalView
+            adapter={adapter}
+            sessionId="s2"
+            loadRuntime={async () => fakeRuntime}
+            onBeforeDispose={() => {
+              events.push("before-dispose-throw");
+              throw new Error("consumer capture error");
+            }}
+          />,
+        );
+      });
+      await act(async () => {
+        for (let i = 0; i < 6; i += 1) await Promise.resolve();
+      });
+      expect(() => {
+        act(() => {
+          reactRoot2.unmount();
+        });
+      }).toThrow("consumer capture error");
+      container2.remove();
+      expect(disposed).toBe(true);
+      expect(events).toEqual(["detach", "before-dispose-throw", "dispose"]);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 });

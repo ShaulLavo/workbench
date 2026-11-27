@@ -65,6 +65,8 @@ export interface TerminalViewProps {
   readonly canvasHostClassName?: string;
   readonly dataPosition?: "single" | "left" | "right" | "hidden";
   readonly onTerminalReady?: (terminal: Terminal) => void;
+  /** Called immediately before `TerminalView` disposes a terminal reported via `onTerminalReady`. */
+  readonly onBeforeDispose?: (terminal: Terminal) => void;
   readonly onAttached?: (terminal: Terminal, attachment: TerminalAttachment) => void;
   readonly onReadyChange?: (ready: boolean) => void;
   readonly onFramePainted?: (terminal: Terminal) => void;
@@ -393,6 +395,7 @@ export function TerminalView({
   canvasHostClassName,
   dataPosition,
   onTerminalReady,
+  onBeforeDispose,
   onAttached,
   onReadyChange,
   onFramePainted,
@@ -445,6 +448,7 @@ export function TerminalView({
     loadRuntime,
     onPasteFailed,
     onTerminalReady,
+    onBeforeDispose,
     onAttached,
     onReadyChange,
     onFramePainted,
@@ -476,6 +480,7 @@ export function TerminalView({
       loadRuntime,
       onPasteFailed,
       onTerminalReady,
+      onBeforeDispose,
       onAttached,
       onReadyChange,
       onFramePainted,
@@ -560,6 +565,7 @@ export function TerminalView({
     const { signal } = controller;
     let cancelled = false;
     let terminal: Terminal | null = null;
+    let terminalNotified = false;
     let attachment: TerminalAttachment | null = null;
     let hotkeyCleanup: (() => void) | null = null;
     let linkCleanup: (() => void) | null = null;
@@ -733,6 +739,7 @@ export function TerminalView({
       };
 
       const grid = terminal.appearance.grid;
+      terminalNotified = true;
       propsRef.current.onTerminalReady?.(terminal);
       const nextAttachment = await adapter.attach(sessionId, {
         initialSize: { cols: grid.columns, rows: grid.rows },
@@ -774,10 +781,18 @@ export function TerminalView({
       // View detach NEVER kills the underlying PTY session.
       attachment?.detach();
       attachmentRef.current = null;
-      terminal?.dispose();
+      const terminalToDispose = terminal;
+      terminal = null;
       terminalRef.current = null;
       inputReadyRef.current = false;
-      host.replaceChildren();
+      try {
+        if (terminalToDispose && terminalNotified) {
+          propsRef.current.onBeforeDispose?.(terminalToDispose);
+        }
+      } finally {
+        terminalToDispose?.dispose();
+        host.replaceChildren();
+      }
     };
   }, [adapter, sessionId, scrollbackLimit, lowLatency]);
 
