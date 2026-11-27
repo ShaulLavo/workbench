@@ -1,4 +1,4 @@
-import { act } from "react";
+import { act, createRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   DirectoryLoadState,
@@ -8,8 +8,8 @@ import type {
 } from "@shaulavo/workbench-core";
 import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { FileTreeModel } from "../index";
-import { FileTreeView } from "../react";
+import { FileTreeModel, prepareFileTreeInput } from "../index";
+import { FileTreeView, type FileTreeViewHandle } from "../react";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
 
@@ -547,5 +547,137 @@ describe("@shaulavo/workbench-tree React view", () => {
       if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
       if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
     }
+  });
+
+  it("supports imperative handleRef, rowHeight, decorations, row element tracking, and delegated menu/delete/mutations", async () => {
+    const model = new FileTreeModel({
+      paths: ["src/a.ts", "src/b.ts", "README.md"],
+      initialExpanded: ["src"],
+    });
+    const handleRef = createRef<FileTreeViewHandle>();
+    const onRequestContextMenu = vi.fn();
+    const onRequestDelete = vi.fn();
+    const onCreate = vi.fn();
+    const onRename = vi.fn();
+    const onExpandChange = vi.fn();
+    const onSelectionChange = vi.fn();
+    const onScrollTopChange = vi.fn();
+    const mountedElements = new Map<string, HTMLElement>();
+
+    const host = mount(
+      <FileTreeView
+        model={model}
+        handleRef={handleRef}
+        rowHeight={20}
+        initialScrollTop={12}
+        onScrollTopChange={onScrollTopChange}
+        activePath="src/a.ts"
+        loadingPaths={new Set(["src/b.ts"])}
+        renderRowDecoration={(row) =>
+          row.path === "src" ? <span data-testid="custom-dec">loading</span> : null
+        }
+        onRowElementChange={(path, element) => {
+          if (element) mountedElements.set(path, element);
+          else mountedElements.delete(path);
+        }}
+        onRequestContextMenu={onRequestContextMenu}
+        onRequestDelete={onRequestDelete}
+        onCreate={onCreate}
+        onRename={onRename}
+        onExpandChange={onExpandChange}
+        onSelectionChange={onSelectionChange}
+      />,
+    );
+
+    // Row height override & initialScrollTop
+    const firstSlot = host.querySelector<HTMLDivElement>(".wb-tree-slot");
+    expect(firstSlot?.style.height).toBe("20px");
+    expect(handleRef.current?.getScrollElement()?.scrollTop).toBe(12);
+
+    // Active, loading, custom decoration, and row element registration
+    const aRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-src/a.ts"]');
+    const bRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-src/b.ts"]');
+    expect(aRow?.getAttribute("aria-current")).toBe("true");
+    expect(aRow?.getAttribute("data-active")).toBe("true");
+    expect(bRow?.getAttribute("data-loading")).toBe("true");
+    expect(host.querySelector('[data-testid="custom-dec"]')?.textContent).toBe("loading");
+    expect(mountedElements.get("src/a.ts")).toBe(aRow);
+
+    // Context menu delegation for row and root background
+    act(() => {
+      aRow?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 40, clientY: 60 }));
+    });
+    expect(onRequestContextMenu).toHaveBeenCalledTimes(1);
+    expect(onRequestContextMenu.mock.calls[0]?.[0]?.path).toBe("src/a.ts");
+    expect(onRequestContextMenu.mock.calls[0]?.[1]).toEqual({ x: 40, y: 60 });
+
+    const scroller = host.querySelector<HTMLElement>("[data-wb-tree-scroller]");
+    act(() => {
+      scroller?.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, clientX: 10, clientY: 180 }));
+    });
+    expect(onRequestContextMenu).toHaveBeenCalledTimes(2);
+    expect(onRequestContextMenu.mock.calls[1]?.[0]).toBeNull();
+
+    // Delegated delete via keyboard
+    act(() => {
+      scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onRequestDelete).toHaveBeenCalledWith(["src/a.ts"]);
+
+    // Imperative startCreate -> delegates to onCreate
+    act(() => {
+      handleRef.current?.startCreate("src", "file");
+    });
+    const draftInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+    expect(draftInput).not.toBeNull();
+    await act(async () => {
+      if (draftInput) {
+        draftInput.value = "c.ts";
+        draftInput.dispatchEvent(new Event("input", { bubbles: true }));
+        draftInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      }
+      await Promise.resolve();
+    });
+    expect(onCreate).toHaveBeenCalledWith("src", "file", "c.ts");
+
+    // Imperative startRename -> delegates to onRename
+    act(() => {
+      handleRef.current?.startRename("README.md");
+    });
+    const renameInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+    await act(async () => {
+      if (renameInput) {
+        renameInput.value = "NOTES.md";
+        renameInput.dispatchEvent(new Event("input", { bubbles: true }));
+        renameInput.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      }
+      await Promise.resolve();
+    });
+    expect(onRename).toHaveBeenCalledWith("README.md", "NOTES.md");
+
+    // Cmd+A selects all, collapseAll collapses expanded folders, replacePreparedInput swaps O(1)
+    act(() => {
+      scroller?.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
+    });
+    expect(model.getSelectedPaths().length).toBe(4);
+    expect(onSelectionChange).toHaveBeenCalled();
+
+    act(() => {
+      handleRef.current?.collapseAll();
+    });
+    expect(model.getExpandedPaths()).toEqual([]);
+
+    act(() => {
+      model.replacePreparedInput(prepareFileTreeInput(["fresh/index.ts"]));
+    });
+    expect(model.index.hasPath("fresh/index.ts")).toBe(true);
+    expect(model.index.hasPath("README.md")).toBe(false);
+
+    // Imperative focusPath expands ancestors and focuses row
+    act(() => {
+      expect(handleRef.current?.focusPath("fresh/index.ts")).toBe(true);
+    });
+    expect(model.getSnapshot().expanded.has("fresh")).toBe(true);
+    expect(model.getSnapshot().focusedPath).toBe("fresh/index.ts");
   });
 });

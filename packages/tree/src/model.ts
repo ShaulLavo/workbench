@@ -614,6 +614,71 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     this.emit();
   }
 
+  collapseAll(): void {
+    if (this.expanded.size === 0) return;
+    this.expanded = new Set();
+    if (this.focusedPath) {
+      const top = ancestorsOf(this.focusedPath)[0];
+      if (top) this.focusedPath = top;
+    }
+    this.emit();
+  }
+
+  clearSelection(): void {
+    if (this.selected.size === 0) return;
+    this.selected = new Set();
+    this.selectionAnchor = undefined;
+    this.emit();
+  }
+
+  setSelectedPaths(
+    paths: readonly string[],
+    options?: { readonly focusedPath?: string; readonly modality?: "pointer" | "keyboard" },
+  ): void {
+    const next = new Set(paths);
+    const sameSize = next.size === this.selected.size;
+    let identical = sameSize;
+    if (identical) {
+      for (const path of next) {
+        if (!this.selected.has(path)) {
+          identical = false;
+          break;
+        }
+      }
+    }
+    const nextFocused = options?.focusedPath !== undefined ? options.focusedPath : this.focusedPath;
+    const nextModality = options?.modality ?? this.focusModality;
+    if (identical && nextFocused === this.focusedPath && nextModality === this.focusModality) return;
+    this.selected = next;
+    this.selectionAnchor = paths.at(-1);
+    this.focusedPath = nextFocused;
+    this.focusModality = nextModality;
+    this.emit();
+  }
+
+  selectAll(): void {
+    const rows = this.getSnapshot().rows;
+    const next = new Set<string>();
+    for (const row of rows) {
+      if (row.type === "entry" && !row.contextOnly) next.add(row.path);
+    }
+    this.selected = next;
+    this.emit();
+  }
+
+  getExpandedPaths(): string[] {
+    return Array.from(this.expanded);
+  }
+
+  getSelectedPaths(): string[] {
+    return Array.from(this.selected);
+  }
+
+  replacePreparedInput(prepared: PreparedFileTreeInput): void {
+    this.index.replacePreparedInput(prepared);
+    this.emit();
+  }
+
   replaceSnapshot(snapshot: IndexedTreeSnapshot): void {
     this.index.replaceSnapshot(snapshot);
     this.emit();

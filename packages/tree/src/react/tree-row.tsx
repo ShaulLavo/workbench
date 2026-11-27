@@ -1,4 +1,4 @@
-import { useState, type DragEvent, type MouseEvent, type PointerEvent } from "react";
+import { useState, type DragEvent, type MouseEvent, type PointerEvent, type ReactNode } from "react";
 import type { GitStatusCode } from "@shaulavo/workbench-core";
 import { FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
 import { cx, InlineRenameInput } from "@shaulavo/workbench-ui";
@@ -24,10 +24,15 @@ export interface FileTreeRowProps {
   readonly canDrag: boolean;
   readonly siblingNames: ReadonlySet<string>;
   readonly isTabStop: boolean;
+  readonly active?: boolean;
+  readonly loading?: boolean;
+  readonly decoration?: ReactNode;
   readonly focusSeq?: number;
   readonly onFocusHandled?: (seq: number) => void;
+  readonly onRowElementChange?: (path: string, element: HTMLElement | null) => void;
   readonly onRowFocus?: (row: TreeEntryRow) => void;
   readonly onActivate: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
+  readonly onDoubleClickRename?: (row: TreeEntryRow) => void;
   readonly onToggleDirectory: (dirPath: string) => void;
   readonly onSegmentClick: (segmentPath: string, event: MouseEvent<HTMLButtonElement>) => void;
   readonly onContextMenu: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
@@ -62,10 +67,15 @@ export function FileTreeRow({
   canDrag,
   siblingNames,
   isTabStop,
+  active = false,
+  loading = false,
+  decoration,
   focusSeq,
   onFocusHandled,
+  onRowElementChange,
   onRowFocus,
   onActivate,
+  onDoubleClickRename,
   onToggleDirectory,
   onSegmentClick,
   onContextMenu,
@@ -90,14 +100,19 @@ export function FileTreeRow({
   return (
     <div
       ref={(el) => {
+        onRowElementChange?.(row.path, el);
         if (el && focusSeq !== undefined) {
           el.focus();
           onFocusHandled?.(focusSeq);
         }
+        return () => {
+          onRowElementChange?.(row.path, null);
+        };
       }}
       role="treeitem"
       aria-level={row.depth + 1}
       aria-selected={row.selected}
+      aria-current={active ? "true" : undefined}
       aria-expanded={isDirectory ? row.expanded : undefined}
       tabIndex={isTabStop ? 0 : -1}
       draggable={canDrag && !row.editing}
@@ -108,6 +123,8 @@ export function FileTreeRow({
       data-path={row.path}
       data-kind={row.kind}
       data-selected={row.selected ? "true" : "false"}
+      data-active={active ? "true" : undefined}
+      data-loading={loading ? "true" : undefined}
       data-selection-edge={row.selectionEdge}
       data-focused={row.focused ? "true" : "false"}
       data-ignored={row.ignored ? "true" : undefined}
@@ -120,6 +137,11 @@ export function FileTreeRow({
       onClick={(event) => {
         if (row.editing) return;
         onActivate(row, event);
+      }}
+      onDoubleClick={() => {
+        if (row.editing || !onDoubleClickRename) return;
+        if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) return;
+        onDoubleClickRename(row);
       }}
       onContextMenu={(event) => {
         event.preventDefault();
@@ -227,6 +249,12 @@ export function FileTreeRow({
           <span className="wb-tree-stem">{row.name}</span>
         </span>
       )}
+
+      {decoration ? (
+        <span className="wb-tree-decoration" data-wb-tree-decoration="">
+          {decoration}
+        </span>
+      ) : null}
 
       {gitLetter ? (
         <span className="wb-tree-git-badge" data-status={row.gitStatus} aria-label={`Git ${row.gitStatus}`}>

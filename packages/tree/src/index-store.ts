@@ -446,6 +446,28 @@ export class FileTreeIndex {
     return { status: "idle" };
   }
 
+  /** Replaces confirmed state with a pre-built `PreparedFileTreeInput` in O(1) without re-indexing. */
+  replacePreparedInput(prepared: PreparedFileTreeInput): void {
+    this.base = prepared;
+    this.confirmedOverlay = null;
+    this.confirmedSnapshotCache = null;
+    if (this.pendingOptimistic.length > 0) {
+      const confirmed = this.toConfirmedSnapshot();
+      const confirmedKinds = this.confirmedKinds();
+      this.pendingOptimistic = this.pendingOptimistic.filter(
+        (entry) =>
+          !(entry.inFlight
+            ? isOptimisticConfirmedByPatch(
+                confirmedKinds,
+                { kind: "reset", nextRevision: prepared.revision },
+                entry.mutation,
+              )
+            : isOptimisticTreeMutationConfirmed(confirmed, entry.mutation)),
+      );
+    }
+    this.rebuildOptimisticOverlay();
+  }
+
   /** Replaces confirmed state with a new indexed snapshot and settles matching optimistic mutations. */
   replaceSnapshot(snapshot: IndexedTreeSnapshot): void {
     this.base = prepareFileTreeInput(snapshot.entries, {
