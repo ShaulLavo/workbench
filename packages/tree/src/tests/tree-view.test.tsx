@@ -942,4 +942,52 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(inlineInput).not.toBeNull();
     expect(document.activeElement).toBe(inlineInput);
   });
+
+  it("falls back to focused row on keyboard Delete, honors externalCommands, and sets data-guide-level", () => {
+    const onRequestDelete = vi.fn();
+    const model = new FileTreeModel({
+      paths: ["src/a.ts", "README.md"],
+      initialExpanded: ["src"],
+    });
+    const host = mount(<FileTreeView model={model} onRequestDelete={onRequestDelete} />);
+
+    // Indent guide carries 0-based depth level for consumer syntax-color styling.
+    const guide = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-src/a.ts"] .wb-tree-guide');
+    expect(guide?.getAttribute("data-guide-level")).toBe("0");
+
+    // Focused row with empty selection still triggers onRequestDelete on Delete key.
+    const readmeRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+    act(() => {
+      readmeRow?.focus();
+    });
+    expect(model.getSelectedPaths()).toEqual([]);
+    act(() => {
+      readmeRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onRequestDelete).toHaveBeenCalledWith(["README.md"]);
+
+    // externalCommands suppresses built-in F2/Mod+A/Space/Delete shortcuts so consumer keymaps own them.
+    onRequestDelete.mockClear();
+    const extModel = new FileTreeModel({ paths: ["README.md", "notes.md"] });
+    const extHost = mount(
+      <FileTreeView
+        model={extModel}
+        onRequestDelete={onRequestDelete}
+        externalCommands={new Set(["rename", "selectAll", "toggleMark", "delete"])}
+      />,
+    );
+    const extRow = extHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+    act(() => {
+      extRow?.focus();
+    });
+    act(() => {
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(extModel.getSnapshot().draft).toBeUndefined();
+    expect(extModel.getSelectedPaths()).toEqual([]);
+    expect(onRequestDelete).not.toHaveBeenCalled();
+  });
 });

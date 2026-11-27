@@ -548,4 +548,24 @@ describe("@shaulavo/workbench-tree engine", () => {
 
     bound.dispose();
   });
+
+  it("reconciles focusedPath, selected, and rename draft when paths are removed by replacePreparedInput or replaceSnapshot", () => {
+    const model = new FileTreeModel({ paths: ["remove.ts", "keep.ts"] });
+    model.select("remove.ts", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "remove.ts" });
+
+    model.replacePreparedInput(prepareFileTreeInput(["keep.ts"]));
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+    expect(model.getSnapshot().draft).toBeUndefined();
+
+    model.select("keep.ts", "replace", "keyboard");
+    model.replaceSnapshot({
+      revision: 2,
+      entries: [{ path: "other.ts", kind: "file" }],
+      loadedDirectoryPaths: new Set([""]),
+    });
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+  });
 });

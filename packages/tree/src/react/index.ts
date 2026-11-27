@@ -1,4 +1,9 @@
-export { FileTreeView, type FileTreeViewHandle, type FileTreeViewProps } from "./file-tree-view";
+export {
+  FileTreeView,
+  type FileTreeKeyboardCommand,
+  type FileTreeViewHandle,
+  type FileTreeViewProps,
+} from "./file-tree-view";
 export { StickyAncestorsOverlay, type StickyAncestorsOverlayProps } from "./sticky-ancestors";
 export {
   FileTreeDraftRow,

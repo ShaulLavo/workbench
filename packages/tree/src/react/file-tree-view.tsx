@@ -69,6 +69,8 @@ export interface FileTreeViewHandle {
   getScrollElement(): HTMLDivElement | null;
 }
 
+export type FileTreeKeyboardCommand = "rename" | "selectAll" | "toggleMark" | "delete";
+
 export interface FileTreeViewProps {
   /** Optional external `FileTreeModel` (e.g. from a cached `PreparedFileTreeInput`). */
   readonly model?: FileTreeModel;
@@ -105,6 +107,8 @@ export interface FileTreeViewProps {
   readonly canDrag?: (paths: readonly string[]) => boolean;
   readonly canDrop?: (sources: readonly string[], destinationDir: string) => boolean;
   readonly onError?: (message: string, error: unknown) => void;
+  /** Built-in keyboard commands owned externally (e.g. by a consumer keymap). */
+  readonly externalCommands?: ReadonlySet<FileTreeKeyboardCommand>;
   readonly extraContextMenuItems?: (row: TreeEntryRow) => readonly ContextMenuItem[];
   readonly className?: string;
   readonly style?: CSSProperties;
@@ -185,6 +189,7 @@ export function FileTreeView({
   canDrag,
   canDrop,
   onError,
+  externalCommands,
   extraContextMenuItems,
   className,
   style,
@@ -668,6 +673,7 @@ export function FileTreeView({
   }
 
   function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.defaultPrevented) return;
     if (state.draft) {
       const hasVisibleDraft = state.rows.some(
         (row) => row.type === "draft" || (row.type === "entry" && row.editing),
@@ -677,7 +683,11 @@ export function FileTreeView({
     }
     const targetEl = event.target as HTMLElement | null;
     if (targetEl?.closest("input, textarea, [data-wb-tree-status]")) return;
-    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+    if (
+      !externalCommands?.has("selectAll") &&
+      (event.metaKey || event.ctrlKey) &&
+      event.key.toLowerCase() === "a"
+    ) {
       event.preventDefault();
       model.selectAll();
       return;
@@ -714,7 +724,13 @@ export function FileTreeView({
     }
 
     const focusedRow = state.rows.find((row): row is TreeEntryRow => row.type === "entry" && row.focused);
-    if (event.key === " " && focusedRow && !event.metaKey && !event.ctrlKey) {
+    if (
+      !externalCommands?.has("toggleMark") &&
+      event.key === " " &&
+      focusedRow &&
+      !event.metaKey &&
+      !event.ctrlKey
+    ) {
       event.preventDefault();
       model.select(focusedRow.path, "toggle", "keyboard");
       return;
@@ -728,14 +744,21 @@ export function FileTreeView({
       }
       return;
     }
-    if (event.key === "F2" && writable && focusedRow) {
+    if (!externalCommands?.has("rename") && event.key === "F2" && writable && focusedRow) {
       event.preventDefault();
       startModelRename(model, state.focusedPath ?? focusedRow.path);
       return;
     }
-    if ((event.key === "Delete" || event.key === "Backspace") && writable && state.selected.size > 0) {
+    if (
+      !externalCommands?.has("delete") &&
+      (event.key === "Delete" || event.key === "Backspace") &&
+      writable
+    ) {
+      const targets =
+        state.selected.size > 0 ? Array.from(state.selected) : focusedRow ? [focusedRow.path] : [];
+      if (targets.length === 0) return;
       event.preventDefault();
-      requestDeletePaths(Array.from(state.selected));
+      requestDeletePaths(targets);
       return;
     }
     if ((event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) && focusedRow) {

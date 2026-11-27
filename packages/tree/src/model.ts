@@ -674,23 +674,50 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     return Array.from(this.selected);
   }
 
+  private reconcileSelectionAndFocus(): void {
+    if (this.selected.size > 0) {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of this.selected) {
+        if (this.index.hasPath(path)) next.add(path);
+        else changed = true;
+      }
+      if (changed) this.selected = next;
+    }
+    if (this.selectionAnchor && !this.index.hasPath(this.selectionAnchor)) {
+      this.selectionAnchor = undefined;
+    }
+    if (this.focusedPath && !this.index.hasPath(this.focusedPath)) {
+      this.focusedPath = undefined;
+    }
+    if (this.draft?.mode === "rename" && !this.index.hasPath(this.draft.path)) {
+      this.draft = undefined;
+    }
+  }
+
   replacePreparedInput(prepared: PreparedFileTreeInput): void {
     this.index.replacePreparedInput(prepared);
+    this.reconcileSelectionAndFocus();
     this.emit();
   }
 
   replaceSnapshot(snapshot: IndexedTreeSnapshot): void {
     this.index.replaceSnapshot(snapshot);
+    this.reconcileSelectionAndFocus();
     this.emit();
   }
 
   applyPatch(patch: IndexedTreePatch): PatchApplyResult {
     const result = this.index.applyPatch(patch);
-    if (result.status === "applied") this.emit();
+    if (result.status === "applied") {
+      this.reconcileSelectionAndFocus();
+      this.emit();
+    }
     return result;
   }
 
   notifyIndexChange(): void {
+    this.reconcileSelectionAndFocus();
     this.emit();
   }
 }

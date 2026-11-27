@@ -172,6 +172,7 @@ export function FileTreeRow({
             <span
               key={ancPath}
               className="wb-tree-guide"
+              data-guide-level={level}
               data-active-guide={activeParentPath === ancPath ? "true" : undefined}
               style={{ left: `calc(${level} * var(--wb-tree-indent) + 0.75rem)` }}
             />
