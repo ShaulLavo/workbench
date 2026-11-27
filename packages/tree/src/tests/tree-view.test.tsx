@@ -773,6 +773,20 @@ describe("@shaulavo/workbench-tree React view", () => {
       expect(onError).toHaveBeenCalledWith("Unable to create new.ts", expect.any(Error));
 
       // 4. Full double-click sequence (click 1, click 2, dblclick) on compact segment `a` inside `a / b` renames `a`, not `a/b`.
+      // Clicking the terminal segment `a/b` toggles expansion, while clicking ancestor `a` only selects `a`.
+      expect(readmeRowEl?.getAttribute("aria-label")).toBe("README.md");
+
+      const segB = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a/b"]');
+      expect(segB).not.toBeNull();
+      act(() => {
+        segB?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      });
+      expect(model.getSnapshot().expanded.has("a/b")).toBe(true);
+      act(() => {
+        segB?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      });
+      expect(model.getSnapshot().expanded.has("a/b")).toBe(false);
+
       const segA = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a"]');
       expect(segA).not.toBeNull();
       act(() => {

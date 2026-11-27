@@ -127,7 +127,12 @@ export function PointContextMenu({
           collisionPadding={6}
           className="wb-menu-positioner"
         >
-          <BaseMenu.Popup className="wb-menu-popup" aria-label={label} data-wb-point-context-menu="">
+          <BaseMenu.Popup
+            className="wb-menu-popup"
+            aria-label={label}
+            data-wb-point-context-menu=""
+            finalFocus={false}
+          >
             {items.map((item) => (
               <Fragment key={item.id}>
                 {item.separatorBefore ? <BaseMenu.Separator className="wb-menu-separator" /> : null}

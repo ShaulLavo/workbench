@@ -34,7 +34,11 @@ export interface FileTreeRowProps {
   readonly onActivate: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
   readonly onDoubleClickRename?: (row: TreeEntryRow, targetPath?: string) => void;
   readonly onToggleDirectory: (dirPath: string) => void;
-  readonly onSegmentClick: (segmentPath: string, event: MouseEvent<HTMLButtonElement>) => void;
+  readonly onSegmentClick: (
+    row: TreeEntryRow,
+    segmentPath: string,
+    event: MouseEvent<HTMLButtonElement>,
+  ) => void;
   readonly onContextMenu: (row: TreeEntryRow, event: MouseEvent<HTMLElement>) => void;
   readonly onCommitRename: (fromPath: string, nextName: string) => void;
   readonly onCancelDraft: () => void;
@@ -94,6 +98,8 @@ export function FileTreeRow({
   const isDirectory = row.kind === "directory";
   const isDropHighlight = isDirectory && dropTargetSegment === undefined && dropTargetDirectory === row.path;
   const split = isDirectory ? null : splitFilename(row.name);
+  const accessibleName =
+    row.segments && row.segments.length > 1 ? row.segments.map((seg) => seg.name).join("/") : row.name;
   const gitLetter =
     row.gitStatus && row.gitStatus !== "ignored" ? GIT_BADGE_LETTER[row.gitStatus] : undefined;
 
@@ -110,6 +116,7 @@ export function FileTreeRow({
         };
       }}
       role="treeitem"
+      aria-label={accessibleName}
       aria-level={row.depth + 1}
       aria-selected={row.selected}
       aria-current={active ? "true" : undefined}
@@ -223,7 +230,7 @@ export function FileTreeRow({
                 data-testid={`wb-tree-segment-${seg.path}`}
                 onClick={(event) => {
                   event.stopPropagation();
-                  onSegmentClick(seg.path, event);
+                  onSegmentClick(row, seg.path, event);
                 }}
                 onDoubleClick={(event) => {
                   event.stopPropagation();

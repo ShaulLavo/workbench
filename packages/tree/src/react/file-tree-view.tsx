@@ -436,8 +436,15 @@ export function FileTreeView({
     onOpenFile?.(row.path, decision);
   }
 
-  function handleSegmentClick(segmentPath: string, _event: MouseEvent<HTMLButtonElement>): void {
+  function handleSegmentClick(
+    row: TreeEntryRow,
+    segmentPath: string,
+    _event: MouseEvent<HTMLButtonElement>,
+  ): void {
     model.select(segmentPath, "replace", "pointer");
+    if (segmentPath === row.path) {
+      toggleDirectory(row.path);
+    }
   }
 
   async function commitCreate(parent: string, kind: "file" | "directory", name: string): Promise<void> {
