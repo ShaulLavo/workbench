@@ -1082,5 +1082,53 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(onPartialError).toHaveBeenCalledTimes(1);
     expect(partialModel.getSelectedPaths()).toEqual(["second.ts"]);
     expect(partialModel.getSnapshot().focusedPath).toBe("second.ts");
+
+    // Drag move rebases selection/focus to destination path, and filtered Delete targets only visible selected rows.
+    const moveModel = new FileTreeModel({
+      paths: ["renamed/a.txt", "other/keep.txt", "alpha.txt", "beta.txt"],
+      initialExpanded: ["renamed", "other"],
+    });
+    const onFilteredDelete = vi.fn();
+    const moveHost = mount(<FileTreeView model={moveModel} onRequestDelete={onFilteredDelete} />);
+    const renamedRow = moveHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-renamed"]');
+    const otherRow = moveHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-other"]');
+    act(() => {
+      renamedRow?.click();
+    });
+    const dt = { effectAllowed: "", dropEffect: "", types: [] as string[], setData: vi.fn() };
+    const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStart, "dataTransfer", { value: dt });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: dt });
+    act(() => {
+      renamedRow?.dispatchEvent(dragStart);
+      otherRow?.dispatchEvent(drop);
+    });
+    expect(moveModel.getSelectedPaths()).toEqual(["other/renamed"]);
+    expect(moveModel.getSnapshot().focusedPath).toBe("other/renamed");
+
+    // Filter hides beta.txt while alpha.txt and beta.txt are selected: Delete targets only visible alpha.txt.
+    act(() => {
+      moveModel.setSelectedPaths(["alpha.txt", "beta.txt"], {
+        focusedPath: "alpha.txt",
+        modality: "keyboard",
+      });
+      moveModel.setFilter("alpha");
+    });
+    const alphaRow = moveHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-alpha.txt"]');
+    act(() => {
+      alphaRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onFilteredDelete).toHaveBeenCalledWith(["alpha.txt"]);
+
+    // When filter hides every selected path, Delete does not fall back to an unrelated focused row.
+    onFilteredDelete.mockClear();
+    act(() => {
+      moveModel.setSelectedPaths(["beta.txt"], { focusedPath: "alpha.txt", modality: "keyboard" });
+    });
+    act(() => {
+      alphaRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onFilteredDelete).not.toHaveBeenCalled();
   });
 });

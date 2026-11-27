@@ -141,7 +141,11 @@ export function bindFileSystemAdapter(
     handlingInvalidation = true;
     try {
       model.index.applyLazyInvalidation(event);
-      model.notifyIndexChange();
+      model.notifyIndexChange(
+        event.moves.length > 0 || event.removed.length > 0
+          ? { movedPaths: event.moves, removedPaths: event.removed }
+          : undefined,
+      );
       reloadInvalidatedLazyDirs(event);
     } finally {
       handlingInvalidation = false;

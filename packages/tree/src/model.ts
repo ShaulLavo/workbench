@@ -13,7 +13,7 @@ import {
   type PreparedFileTreeInput,
   type RawTreeEntry,
 } from "./index-store";
-import { ancestorsOf, isInside, isSameOrInside, joinPath, parentOf } from "./paths";
+import { ancestorsOf, isInside, isSameOrInside, joinPath, normalizeTreePath, parentOf } from "./paths";
 
 export type TreeDraft =
   | { readonly mode: "create"; readonly kind: EntryKind; readonly parent: string }
@@ -696,9 +696,9 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   }
 
   private pruneRemovedPaths(removedPaths: readonly string[]): void {
-    if (removedPaths.length === 0) return;
-    const isRemoved = (path: string): boolean =>
-      removedPaths.some((removed) => isSameOrInside(path, removed));
+    const normalized = removedPaths.map(normalizeTreePath).filter(Boolean);
+    if (normalized.length === 0) return;
+    const isRemoved = (path: string): boolean => normalized.some((removed) => isSameOrInside(path, removed));
     if (this.selected.size > 0) {
       let changed = false;
       const next = new Set<string>();
@@ -719,6 +719,38 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     }
   }
 
+  private rebaseMovedPaths(moves: readonly { readonly from: string; readonly to: string }[]): void {
+    const normalizedMoves = moves
+      .map((move) => ({ from: normalizeTreePath(move.from), to: normalizeTreePath(move.to) }))
+      .filter((move) => move.from.length > 0 && move.to.length > 0);
+    if (normalizedMoves.length === 0) return;
+    const rebase = (path: string): string => {
+      let current = path;
+      for (const move of normalizedMoves) {
+        if (isSameOrInside(current, move.from)) {
+          current = move.to + current.slice(move.from.length);
+        }
+      }
+      return current;
+    };
+    if (this.selected.size > 0) {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of this.selected) {
+        const rebased = rebase(path);
+        if (rebased !== path) changed = true;
+        next.add(rebased);
+      }
+      if (changed) this.selected = next;
+    }
+    if (this.selectionAnchor) this.selectionAnchor = rebase(this.selectionAnchor);
+    if (this.focusedPath) this.focusedPath = rebase(this.focusedPath);
+    if (this.draft?.mode === "rename") {
+      const nextPath = rebase(this.draft.path);
+      if (nextPath !== this.draft.path) this.draft = { mode: "rename", path: nextPath };
+    }
+  }
+
   replacePreparedInput(prepared: PreparedFileTreeInput): void {
     this.index.replacePreparedInput(prepared);
     this.reconcileSelectionAndFocus();
@@ -734,13 +766,20 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   applyPatch(patch: IndexedTreePatch): PatchApplyResult {
     const result = this.index.applyPatch(patch);
     if (result.status === "applied") {
+      if (patch.kind === "move") this.rebaseMovedPaths(patch.moves);
       this.reconcileSelectionAndFocus();
       this.emit();
     }
     return result;
   }
 
-  notifyIndexChange(options?: { readonly removedPaths?: readonly string[] }): void {
+  notifyIndexChange(options?: {
+    readonly removedPaths?: readonly string[];
+    readonly movedPaths?: readonly { readonly from: string; readonly to: string }[];
+  }): void {
+    if (options?.movedPaths && options.movedPaths.length > 0) {
+      this.rebaseMovedPaths(options.movedPaths);
+    }
     if (options?.removedPaths && options.removedPaths.length > 0) {
       this.pruneRemovedPaths(options.removedPaths);
     }

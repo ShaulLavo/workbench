@@ -36,6 +36,7 @@ import {
   topLevelPaths,
   type TreeEntryRow,
   type TreeNavigationKey,
+  type TreeRow,
 } from "../model";
 import { baseName, joinPath, parentOf } from "../paths";
 import { FileTreeDraftRow, FileTreeRow, FileTreeStatusRow } from "./tree-row";
@@ -137,6 +138,17 @@ function isFilterSeedKey(event: KeyboardEvent): boolean {
  * type-to-filter, sticky ancestors, IME-safe create/rename, multi-select pills, keyboard nav,
  * drag-and-drop with edge auto-scroll, touch long-press drag, and per-activation touch focus.
  */
+function collectVisibleEntryPaths(rows: readonly TreeRow[]): Set<string> {
+  const visible = new Set<string>();
+  for (const row of rows) {
+    if (row.type !== "entry") continue;
+    visible.add(row.path);
+    if (!row.segments) continue;
+    for (const seg of row.segments) visible.add(seg.path);
+  }
+  return visible;
+}
+
 function findModelRowIndex(model: FileTreeModel, targetPath: string): number {
   const rows = model.getSnapshot().rows;
   return rows.findIndex(
@@ -534,7 +546,7 @@ export function FileTreeView({
       model.notifyIndexChange();
     } catch (error) {
       model.index.rollbackOptimistic(optId);
-      model.notifyIndexChange();
+      model.notifyIndexChange({ movedPaths: [{ from: toPath, to: fromPath }] });
       onError?.(`Unable to rename ${baseName(fromPath)}`, error);
     }
   }
@@ -572,8 +584,11 @@ export function FileTreeView({
       model.index.applyOptimistic(id, { kind: "move", moves: [move] }, { inFlight: Boolean(adapter) });
     }
     if (destinationDir) model.setExpanded(destinationDir, true);
+    if (!adapter) {
+      model.notifyIndexChange({ movedPaths: moves });
+      return;
+    }
     model.notifyIndexChange();
-    if (!adapter) return;
     let completed = 0;
     try {
       for (let i = 0; i < moves.length; i += 1) {
@@ -581,7 +596,7 @@ export function FileTreeView({
         if (!move) continue;
         if (!isCurrentlyWritable()) {
           rollbackOptimisticFrom(optIds, i);
-          model.notifyIndexChange();
+          model.notifyIndexChange({ movedPaths: moves.slice(0, completed) });
           if (completed > 0) void adapter.indexed?.requestResync();
           return;
         }
@@ -590,10 +605,10 @@ export function FileTreeView({
         if (doneId) model.index.settleOptimistic(doneId);
         completed += 1;
       }
-      model.notifyIndexChange();
+      model.notifyIndexChange({ movedPaths: moves });
     } catch (error) {
       rollbackOptimisticFrom(optIds, completed);
-      model.notifyIndexChange();
+      model.notifyIndexChange({ movedPaths: moves.slice(0, completed) });
       if (completed > 0) void adapter.indexed?.requestResync();
       onError?.("Unable to move selected items", error);
     }
@@ -754,9 +769,10 @@ export function FileTreeView({
       (event.key === "Delete" || event.key === "Backspace") &&
       writable
     ) {
+      const visiblePaths = collectVisibleEntryPaths(state.rows);
       const targets =
         state.selected.size > 0
-          ? Array.from(state.selected)
+          ? Array.from(state.selected).filter((path) => visiblePaths.has(path))
           : focusedRow
             ? [state.focusedPath ?? focusedRow.path]
             : [];
