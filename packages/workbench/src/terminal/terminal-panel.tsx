@@ -102,60 +102,48 @@ function notifyPreservedSplit(state: PreservedSplitState): void {
   for (const listener of state.listeners) listener();
 }
 
-function detachPreservedSplitWatcher(state: PreservedSplitState): void {
-  if (!state.unsubAdapter) return;
-  const unsub = state.unsubAdapter;
-  state.unsubAdapter = null;
-  unsub();
+function setPreservedSplitPairValue(
+  state: PreservedSplitState,
+  nextPair: readonly [string, string] | undefined,
+): void {
+  if (state.pair?.[0] === nextPair?.[0] && state.pair?.[1] === nextPair?.[1]) return;
+  state.pair = nextPair;
+  notifyPreservedSplit(state);
 }
 
 function clearPreservedSplitPair(adapter: TerminalAdapter): void {
   const state = preservedSplitStores.get(adapter);
   if (!state) return;
-  detachPreservedSplitWatcher(state);
-  if (state.pair === undefined) return;
-  state.pair = undefined;
-  notifyPreservedSplit(state);
+  setPreservedSplitPairValue(state, undefined);
 }
 
 function reconcilePreservedSplit(adapter: TerminalAdapter, state: PreservedSplitState): void {
-  const currentPair = state.pair;
-  if (!currentPair) {
-    detachPreservedSplitWatcher(state);
-    return;
-  }
   const sessions = adapter.sessions.getSnapshot();
   const active = adapter.activeId.getSnapshot();
   const split = adapter.splitId?.getSnapshot();
   if (!split) {
-    clearPreservedSplitPair(adapter);
+    setPreservedSplitPairValue(state, undefined);
     return;
   }
   if (active && active !== split) {
     const hasBoth = sessions.some((s) => s.id === active) && sessions.some((s) => s.id === split);
-    if (!hasBoth) {
-      clearPreservedSplitPair(adapter);
-      return;
-    }
-    if (currentPair[0] !== active || currentPair[1] !== split) {
-      state.pair = [active, split];
-      notifyPreservedSplit(state);
-    }
+    setPreservedSplitPairValue(state, hasBoth ? [active, split] : undefined);
     return;
   }
+  const currentPair = state.pair;
   const stillValid =
+    currentPair !== undefined &&
     currentPair[1] === split &&
     sessions.some((s) => s.id === currentPair[0]) &&
     sessions.some((s) => s.id === currentPair[1]);
   if (!stillValid) {
-    clearPreservedSplitPair(adapter);
+    setPreservedSplitPairValue(state, undefined);
   }
 }
 
-function preserveSplitPair(adapter: TerminalAdapter, pair: readonly [string, string]): void {
-  if (adapter.splitPair || !adapter.splitId) return;
+function ensurePreservedSplitWatcher(adapter: TerminalAdapter): PreservedSplitState | null {
+  if (adapter.splitPair || !adapter.splitId) return null;
   const state = getOrCreatePreservedSplitState(adapter);
-  state.pair = pair;
   if (!state.unsubAdapter) {
     const onAdapterChange = (): void => {
       reconcilePreservedSplit(adapter, state);
@@ -168,8 +156,15 @@ function preserveSplitPair(adapter: TerminalAdapter, pair: readonly [string, str
       unsubSplit();
       unsubSessions();
     };
+    reconcilePreservedSplit(adapter, state);
   }
-  notifyPreservedSplit(state);
+  return state;
+}
+
+function preserveSplitPair(adapter: TerminalAdapter, pair: readonly [string, string]): void {
+  const state = ensurePreservedSplitWatcher(adapter);
+  if (!state) return;
+  setPreservedSplitPairValue(state, pair);
 }
 
 function SessionStatusDot({ status }: { readonly status: TerminalSessionInfo["status"] }) {
@@ -323,6 +318,10 @@ export function TerminalPanel({
     };
   }, [adapter]);
   const preservedSplitPair = useSubscribable(preservedSplitSource);
+
+  useEffect(() => {
+    ensurePreservedSplitWatcher(adapter);
+  }, [adapter]);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [focusTick, setFocusTick] = useState(0);
   const [tabFocusTick, setTabFocusTick] = useState(0);

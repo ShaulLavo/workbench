@@ -2182,11 +2182,13 @@ describe("@shaulavo/workbench-terminal", () => {
           .splitFocused,
       ).toBe("true");
 
-      // Remounting after unmounting, changing the split to s3 + s2, and selecting s2 while unmounted restores s3 + s2 (never stale s1 + s2).
+      // Remounting after unmounting, CLOSING the split, reopening as s3 + s2, and selecting s2 while unmounted
+      // restores s3 + s2 with s2 focused (never collapses to single s2 and never restores stale s1 + s2).
       act(() => {
         activeRoot?.unmount();
         activeRoot = null;
       });
+      splitId.set(undefined);
       activeId.set("s3");
       splitId.set("s2");
       activeId.set("s2");
