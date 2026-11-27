@@ -436,11 +436,8 @@ export function FileTreeView({
     onOpenFile?.(row.path, decision);
   }
 
-  function handleSegmentClick(segmentPath: string, event: MouseEvent<HTMLButtonElement>): void {
+  function handleSegmentClick(segmentPath: string, _event: MouseEvent<HTMLButtonElement>): void {
     model.select(segmentPath, "replace", "pointer");
-    if (event.detail >= 2) {
-      toggleDirectory(segmentPath);
-    }
   }
 
   async function commitCreate(parent: string, kind: "file" | "directory", name: string): Promise<void> {
@@ -1066,7 +1063,10 @@ export function FileTreeView({
             ? (event) => openMenuFor(null, { x: event.clientX, y: event.clientY })
             : undefined
         }
-        onRootDragLeave={() => clearDragState()}
+        onRootDragLeave={() => {
+          clearHoverOpen();
+          setDropTarget(null);
+        }}
         onRootDragOver={(event) => {
           if (!isCurrentlyWritable()) return;
           const sources = draggingPathsRef.current;

@@ -772,11 +772,18 @@ describe("@shaulavo/workbench-tree React view", () => {
       expect(onCreate).toHaveBeenCalledWith("dir", "file", "new.ts");
       expect(onError).toHaveBeenCalledWith("Unable to create new.ts", expect.any(Error));
 
-      // 4. Double-clicking a compact segment (`a` inside `a / b`) renames `a`, not `a/b`.
+      // 4. Full double-click sequence (click 1, click 2, dblclick) on compact segment `a` inside `a / b` renames `a`, not `a/b`.
       const segA = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a"]');
       expect(segA).not.toBeNull();
       act(() => {
-        segA?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true }));
+        segA?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+      });
+      act(() => {
+        segA?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 2 }));
+      });
+      expect(host.querySelector('[data-testid="wb-tree-segment-a"]')).not.toBeNull();
+      act(() => {
+        segA?.dispatchEvent(new MouseEvent("dblclick", { bubbles: true, detail: 2 }));
       });
       expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "a" });
       act(() => {
@@ -803,7 +810,7 @@ describe("@shaulavo/workbench-tree React view", () => {
       expect(scroller?.getAttribute("data-touch-dragging")).toBeNull();
       expect(canDrag).toHaveBeenCalledWith(["README.md"]);
 
-      // 6. Canceled external drag clears drop highlight on dragleave.
+      // 6. Canceled external drag clears drop highlight on dragleave, while internal drag retains sources across leave/re-enter.
       const dirRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dir"]');
       const dragOverEvent = new Event("dragover", { bubbles: true, cancelable: true });
       Object.defineProperty(dragOverEvent, "dataTransfer", {
@@ -819,6 +826,35 @@ describe("@shaulavo/workbench-tree React view", () => {
         scroller?.dispatchEvent(dragLeaveEvent);
       });
       expect(dirRow?.getAttribute("data-drop-target")).toBeNull();
+
+      // Internal drag of dir/child.ts leaves scroller, re-enters over `a`, and still executes move.
+      const childRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dir/child.ts"]');
+      const aRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a/b"]');
+      const dt = { effectAllowed: "", dropEffect: "", types: [] as string[], setData: vi.fn() };
+      const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+      Object.defineProperty(dragStart, "dataTransfer", { value: dt });
+      act(() => {
+        childRow?.dispatchEvent(dragStart);
+      });
+      const internalLeave = new Event("dragleave", { bubbles: true });
+      Object.defineProperty(internalLeave, "relatedTarget", { value: document.body });
+      act(() => {
+        scroller?.dispatchEvent(internalLeave);
+      });
+      const internalReenter = new Event("dragover", { bubbles: true, cancelable: true });
+      Object.defineProperty(internalReenter, "dataTransfer", { value: dt });
+      act(() => {
+        aRow?.dispatchEvent(internalReenter);
+      });
+      expect(aRow?.getAttribute("data-drop-target")).toBe("true");
+      const internalDrop = new Event("drop", { bubbles: true, cancelable: true });
+      Object.defineProperty(internalDrop, "dataTransfer", { value: dt });
+      await act(async () => {
+        aRow?.dispatchEvent(internalDrop);
+        await Promise.resolve();
+      });
+      expect(onMove).toHaveBeenCalledWith([{ from: "dir/child.ts", to: "a/b/child.ts" }]);
+      expect(onError).toHaveBeenCalledWith("Unable to move selected items", expect.any(Error));
     } finally {
       vi.useRealTimers();
     }
