@@ -1105,7 +1105,7 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(parseTerminalFileReference("Dockerfile")).toEqual({ path: "Dockerfile" });
 
     const text =
-      "error:src/App.tsx(12,4): see Makefile, error:(src/err.ts:9:1), include(src/inc.ts) and (src/other.ts:7:2)";
+      "error:src/App.tsx(12,4): see Makefile, src/app/(dashboard)/page.tsx:12:4, error:(src/err.ts:9:1), include(src/inc.ts) and (src/other.ts:7:2)";
     const boundaries = Array.from({ length: text.length + 1 }, (_, i) => i);
     const links = findTerminalSnapshotFileLinks({
       text,
@@ -1115,13 +1115,14 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(links.map((l) => l.reference)).toEqual([
       { path: "src/App.tsx", line: 12, column: 4 },
       { path: "Makefile" },
+      { path: "src/app/(dashboard)/page.tsx", line: 12, column: 4 },
       { path: "src/err.ts", line: 9, column: 1 },
       { path: "src/inc.ts" },
       { path: "src/other.ts", line: 7, column: 2 },
     ]);
 
     // Malformed parenthesized suffixes must not emit partial paths or bogus line links.
-    const malformed = "src/App.tsx(12,) src/App.tsx(12,4)junk";
+    const malformed = "src/App.tsx(12,) src/App.tsx(12,x) src/App.tsx(12,4)junk";
     const malformedBounds = Array.from({ length: malformed.length + 1 }, (_, i) => i);
     expect(
       findTerminalSnapshotFileLinks({
@@ -1386,6 +1387,72 @@ describe("@shaulavo/workbench-terminal", () => {
       });
       expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
     } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("does not steal focus when user moves focus elsewhere during async Delete", async () => {
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => createMockPanelTerminal(new Set(), () => {}));
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "only", title: "bash 1", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("only");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    let resolveClose: (() => void) | undefined;
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "next",
+      async closeSession(id) {
+        sessions.set([{ id, title: "bash 1", status: "exited" }]);
+        await new Promise<void>((resolve) => {
+          resolveClose = resolve;
+        });
+        sessions.set([]);
+        activeId.set(undefined);
+      },
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    const externalInput = document.createElement("input");
+    document.body.appendChild(externalInput);
+    try {
+      const root = mount(
+        <TerminalPanel adapter={adapter} loadRuntime={async () => ({}) as GhosttyRuntime} />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const tabBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-only"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabBtn.focus();
+        tabBtn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      // User moves focus to an unrelated input before the async close completes.
+      act(() => {
+        externalInput.focus();
+      });
+      await act(async () => {
+        resolveClose?.();
+        await flushMicrotasks();
+      });
+      expect(document.activeElement).toBe(externalInput);
+    } finally {
+      externalInput.remove();
       createSpy.mockRestore();
     }
   });

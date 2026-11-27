@@ -13,11 +13,25 @@ export interface TerminalSnapshotFileLink {
   readonly text: string;
 }
 
-const HARD_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "[", "]", "{", "}", ")"]);
+const NON_PAREN_BOUNDARY_CHARS: readonly string[] = [
+  " ",
+  "\t",
+  '"',
+  "'",
+  "`",
+  "<",
+  ">",
+  "|",
+  "[",
+  "]",
+  "{",
+  "}",
+];
+const NON_PAREN_BOUNDARY = new Set(NON_PAREN_BOUNDARY_CHARS);
+const HARD_BOUNDARY = new Set(NON_PAREN_BOUNDARY_CHARS.concat([")"]));
 const TRAILING_PUNCTUATION = new Set([".", ",", ":", ";", "!", "?"]);
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z\d+.-]*:\/\//;
 const HOSTNAME_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|app|ai|edu|gov|local|localhost)$/i;
-const NUMERIC_PAREN_PREFIX_RE = /^\(\d+(?:,\d*)?\)/;
 const PAREN_LOCATION_RE = /^\(\d+(?:,\d+)?\)/;
 const PAREN_SUFFIX_RE = /^(.*)\((\d+)(?:,(\d+))?\)$/;
 const KNOWN_BARE_NAMES = new Set([
@@ -122,12 +136,31 @@ function isLocationSuffixDelimiter(ch: string | undefined): boolean {
   return ch === undefined || HARD_BOUNDARY.has(ch) || TRAILING_PUNCTUATION.has(ch);
 }
 
-function scanUntilHardBoundary(text: string, start: number): number {
+function scanUntilNonParenBoundary(text: string, start: number): number {
   let end = start;
-  while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "")) {
+  while (end < text.length && !NON_PAREN_BOUNDARY.has(text[end] ?? "")) {
     end += 1;
   }
   return end;
+}
+
+function scanRouteGroupSegmentEnd(text: string, openIndex: number): number | null {
+  let close = openIndex + 1;
+  while (close < text.length && !NON_PAREN_BOUNDARY.has(text[close] ?? "")) {
+    if (text[close] === "(") return null;
+    if (text[close] === ")") {
+      return text[close + 1] === "/" ? close + 1 : null;
+    }
+    close += 1;
+  }
+  return null;
+}
+
+function prefixEndsWithRecognizedFile(prefix: string): boolean {
+  if (!prefix) return false;
+  const { text } = peelDiagnosticLabel(prefix);
+  const leaf = text.slice(text.lastIndexOf("/") + 1);
+  return isRecognizedFileLeaf(leaf);
 }
 
 function scanTokenEnd(text: string, start: number): number {
@@ -137,16 +170,21 @@ function scanTokenEnd(text: string, start: number): number {
       end += 1;
       continue;
     }
-    const rest = text.slice(end);
-    const numericParen = NUMERIC_PAREN_PREFIX_RE.exec(rest);
-    if (!numericParen) break;
-    const validLoc = PAREN_LOCATION_RE.exec(rest);
+    if (end > start && text[end - 1] === "/") {
+      const groupEnd = scanRouteGroupSegmentEnd(text, end);
+      if (groupEnd !== null) {
+        end = groupEnd;
+        continue;
+      }
+    }
+    if (!prefixEndsWithRecognizedFile(text.slice(start, end))) break;
+    const validLoc = PAREN_LOCATION_RE.exec(text.slice(end));
     const afterSuffix = validLoc ? text[end + validLoc[0].length] : undefined;
     if (validLoc && isLocationSuffixDelimiter(afterSuffix)) {
       return end + validLoc[0].length;
     }
-    // Malformed parenthesized suffix (e.g. `(12,)` or `(12,4)junk`): consume the whole token so parsing rejects it.
-    return scanUntilHardBoundary(text, end + numericParen[0].length);
+    // Malformed parenthesized suffix on a file (e.g. `(12,)`, `(12,x)`, `(12,4)junk`): consume whole so parsing rejects it.
+    return scanUntilNonParenBoundary(text, end);
   }
   return end;
 }

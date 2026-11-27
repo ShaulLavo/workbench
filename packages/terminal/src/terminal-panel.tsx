@@ -188,6 +188,8 @@ export function TerminalPanel({
     const pendingRestore = restoreFocusTargetRef.current;
     if (!pendingRestore || activeIds.has(pendingRestore.closingId)) return;
     restoreFocusTargetRef.current = null;
+    const activeEl = document.activeElement;
+    if (activeEl && activeEl !== document.body && !headerRef.current?.contains(activeEl)) return;
     if (pendingRestore.kind === "tab" && activeIds.has(pendingRestore.id)) {
       focusTabButton(pendingRestore.id);
       return;
