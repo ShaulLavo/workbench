@@ -115,33 +115,38 @@ export function bindFileSystemAdapter(
     }
   }
 
+  function reloadInvalidatedLazyDirs(event: LazyInvalidationEvent): void {
+    if (event.reset) {
+      for (const dir of lazyUnsubs.keys()) staleLazyDirs.add(dir);
+      staleLazyDirs.add("");
+      void ensureDirectoryLoaded("", { force: true });
+      for (const dir of model.getSnapshot().expanded) {
+        void ensureDirectoryLoaded(dir, { force: true });
+      }
+      return;
+    }
+    const expanded = model.getSnapshot().expanded;
+    for (const dir of event.directories) {
+      const normalized = normalizeTreePath(dir);
+      if (normalized === "" || expanded.has(normalized)) {
+        void ensureDirectoryLoaded(normalized, { force: true });
+      } else {
+        staleLazyDirs.add(normalized);
+      }
+    }
+  }
+
   function handleLazyInvalidation(event: LazyInvalidationEvent): void {
     if (disposed) return;
     handlingInvalidation = true;
     try {
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange();
-      if (event.reset) {
-        for (const dir of lazyUnsubs.keys()) staleLazyDirs.add(dir);
-        staleLazyDirs.add("");
-        void ensureDirectoryLoaded("", { force: true });
-        for (const dir of model.getSnapshot().expanded) {
-          void ensureDirectoryLoaded(dir, { force: true });
-        }
-        return;
-      }
-      const expanded = model.getSnapshot().expanded;
-      for (const dir of event.directories) {
-        const normalized = normalizeTreePath(dir);
-        if (normalized === "" || expanded.has(normalized)) {
-          void ensureDirectoryLoaded(normalized, { force: true });
-        } else {
-          staleLazyDirs.add(normalized);
-        }
-      }
+      reloadInvalidatedLazyDirs(event);
     } finally {
       handlingInvalidation = false;
     }
+    syncExpandedLazyDirectories();
   }
 
   if (adapter.lazy) {
