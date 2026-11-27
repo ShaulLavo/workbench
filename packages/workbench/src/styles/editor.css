@@ -51,6 +51,15 @@
     pointer-events: none;
   }
 
+  .wb-editor-view[data-status="loading"] .wb-editor-surface,
+  .wb-editor-view[data-status="missing"] .wb-editor-surface,
+  .wb-editor-view[data-status="error"] .wb-editor-surface {
+    position: absolute;
+    inset: 0;
+    visibility: hidden;
+    pointer-events: none;
+  }
+
   .wb-editor-banner {
     display: flex;
     align-items: center;

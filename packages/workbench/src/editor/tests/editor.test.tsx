@@ -2,35 +2,51 @@ import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import type {
   ActivationFocusDecision,
+  DocumentConflict,
+  EditorDocumentAdapter,
   EditorGroupsSnapshot,
   EditorTabDescriptor,
   LspHostAdapter,
   LspServerStatus,
   Subscribable,
+  WriteOutcome,
 } from "../../core/index";
 import { WorkbenchPortalProvider } from "../../ui/index";
-import { createStringTextSnapshot } from "@singapore-editor/core/document";
+import {
+  createAnchorSelection,
+  createEditorBufferSession,
+  createEditorTextBuffer,
+  createEditorViewSession,
+  createSelectionSet,
+  createStringTextSnapshot,
+} from "@singapore-editor/core/document";
+import type { Editor } from "@singapore-editor/core/editor";
 import type { EditorInlineReplacementProvider, EditorViewSnapshot } from "@singapore-editor/core/extensions";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWorkbenchEditorTheme,
   capOverscrollTop,
   clampRestoredScroll,
+  CodeEditor,
   createWorkbenchEditorPlugins,
   DEFAULT_MAX_ANALYSIS_BYTES,
   documentFeatureTier,
   EditorTabBar,
   languageIdForPath,
   languageLabelForPath,
+  type EditorRevealTarget,
+  type EditorSessionAttachment,
 } from "../index";
 import {
+  computeIncrementalUtf8Delta,
   getDocumentDraft,
   isDraftDirty,
   persistDocumentDraft,
-  recordDocumentEdit,
   replaceDocumentDraftFromDisk,
+  resolveDocumentConflict,
   seedDocumentDraft,
   subscribeDocumentDraft,
+  utf8ByteLength,
 } from "../utils/draft-store";
 import { applyTabPlacement, computeEdgeDropZone, listGroupNodes } from "../groups/index";
 import { DiagnosticPeek, diagnosticPeekPlacement, LspStatusBadge } from "../lsp/index";
@@ -660,19 +676,25 @@ describe("@shaulavo/workbench-editor", () => {
     expect(selfEdge).toBe(singleGroup);
   });
 
-  it("preserves drafts across switches, serializes overlapping saves, and keeps dirty flag for mid-save edits", async () => {
+  it("preserves live EditorTextBuffer drafts, breaks typing runs on save, handles save rejections, and serializes Take theirs / Keep mine", async () => {
     let resolveFirstWrite: (() => void) | undefined;
     let notifyFirstWriteStarted: (() => void) | undefined;
     const firstWriteStarted = new Promise<void>((resolve) => {
       notifyFirstWriteStarted = resolve;
     });
     const writes: { readonly docId: string; readonly text: string; readonly expected?: string }[] = [];
+    const conflictChoices: string[] = [];
     let revA = 1;
     let revB = 10;
+    let failNextSave = false;
+    let diskTextA = "disk-v9";
 
-    const adapter = {
-      getConflict: () => createSubscribable(undefined),
-      loadDocument: async () => undefined,
+    const adapter: EditorDocumentAdapter = {
+      getConflict: () => createSubscribable<DocumentConflict | undefined>(undefined),
+      loadDocument: async (docId) =>
+        docId === "a.ts"
+          ? { text: diskTextA, revision: "9", byteLength: utf8ByteLength(diskTextA) }
+          : undefined,
       async writeIfUnchanged(docId: string, text: string, expectedRevision: string | undefined) {
         writes.push({ docId, text, expected: expectedRevision });
         if (writes.length === 1) {
@@ -688,91 +710,483 @@ describe("@shaulavo/workbench-editor", () => {
         revB += 1;
         return { written: true as const, nextRevision: String(revB) };
       },
-      save: async () => undefined,
+      async save() {
+        if (failNextSave) {
+          failNextSave = false;
+          throw new Error("disk full");
+        }
+      },
+      async resolveConflict(_docId, choice) {
+        conflictChoices.push(choice);
+      },
     };
 
-    seedDocumentDraft(adapter, "a.ts", { text: "v0", revision: "1", byteLength: 2 });
-    seedDocumentDraft(adapter, "b.ts", { text: "b0", revision: "10", byteLength: 2 });
+    const draftA = seedDocumentDraft(adapter, "a.ts", { text: "v0", revision: "1", byteLength: 2 });
+    const draftB = seedDocumentDraft(adapter, "b.ts", { text: "b0", revision: "10", byteLength: 2 });
+    const materializeSpy = vi.spyOn(draftA.buffer, "materializeFullText");
 
-    // Edit doc A and kick off first save while pending.
-    expect(recordDocumentEdit(adapter, "a.ts", "v1")).toBe(true);
+    const replaceAll = (entry: typeof draftA, text: string) => {
+      const snap = entry.buffer.getSnapshot();
+      const sel = createSelectionSet([createAnchorSelection(snap, 0, snap.length)]);
+      entry.buffer.applyText(sel, text);
+    };
+
+    // Edit + undo clears dirty back to false with ZERO materializeFullText calls.
+    replaceAll(draftA, "v1");
+    expect(isDraftDirty(draftA)).toBe(true);
+    expect(materializeSpy).toHaveBeenCalledTimes(0);
+    draftA.buffer.undo();
+    expect(isDraftDirty(draftA)).toBe(false);
+    expect(draftA.buffer.isDirty()).toBe(false);
+    expect(materializeSpy).toHaveBeenCalledTimes(0);
+
+    // Edit doc A and kick off first save while pending (materializeFullText called ONCE for write payload).
+    replaceAll(draftA, "v1");
+    expect(isDraftDirty(draftA)).toBe(true);
     const dirtyEvents: { readonly docId: string; readonly dirty: boolean }[] = [];
     const save1 = persistDocumentDraft(adapter, "a.ts", false, {
       onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
     });
     await firstWriteStarted;
+    expect(materializeSpy).toHaveBeenCalledTimes(1);
 
-    // User types v2 while save1 is in flight and switches to doc B.
-    expect(recordDocumentEdit(adapter, "a.ts", "v2")).toBe(true);
-    const save2 = persistDocumentDraft(adapter, "a.ts", false, {
-      onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
-    });
+    // User types while save1 is in flight (after breakTypingRun sealed v1 as an undo boundary).
+    const snapMid = draftA.buffer.getSnapshot();
+    const endSel = createSelectionSet([createAnchorSelection(snapMid, snapMid.length, snapMid.length)]);
+    draftA.buffer.applyText(endSel, "+mid");
+    expect(draftA.buffer.getTextSnapshot().materializeFullText()).toBe("v1+mid");
 
-    // Release save1 -> doc A must STILL be dirty because v2 has not been written yet!
+    // Release save1 -> doc A must STILL be dirty because "+mid" was not written yet!
     resolveFirstWrite?.();
     await save1;
     expect(dirtyEvents[0]).toEqual({ docId: "a.ts", dirty: true });
-    // Doc B's revision and clean state must remain completely untouched.
-    expect(getDocumentDraft(adapter, "b.ts")?.revision).toBe("10");
-    expect(isDraftDirty(getDocumentDraft(adapter, "b.ts")!)).toBe(false);
+    expect(isDraftDirty(draftA)).toBe(true);
+    expect(draftB.revision).toBe("10");
+    expect(isDraftDirty(draftB)).toBe(false);
 
-    // Wait for queued save2 -> writes v2 with expectedRevision "2" and clears dirty state.
-    await save2;
+    // Undo once returns cleanly to the sealed v1 saved checkpoint and clears dirty to false!
+    draftA.buffer.undo();
+    expect(draftA.buffer.getTextSnapshot().materializeFullText()).toBe("v1");
+    expect(isDraftDirty(draftA)).toBe(false);
+    expect(draftA.buffer.isDirty()).toBe(false);
+
+    // Redo brings "+mid" back (dirty again) and saving clears dirty on the newer revision.
+    draftA.buffer.redo();
+    expect(isDraftDirty(draftA)).toBe(true);
+    await persistDocumentDraft(adapter, "a.ts", false, {
+      onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
+    });
     expect(writes).toEqual([
       { docId: "a.ts", text: "v1", expected: "1" },
-      { docId: "a.ts", text: "v2", expected: "2" },
+      { docId: "a.ts", text: "v1+mid", expected: "2" },
     ]);
-    expect(getDocumentDraft(adapter, "a.ts")?.revision).toBe("3");
-    expect(isDraftDirty(getDocumentDraft(adapter, "a.ts")!)).toBe(false);
+    expect(draftA.revision).toBe("3");
+    expect(isDraftDirty(draftA)).toBe(false);
 
-    // Take-theirs cancels queued forced saves in flight and notifies split-pane subscribers in place.
-    const paneNotifications = vi.fn();
-    const unsubscribe = subscribeDocumentDraft(adapter, "a.ts", paneNotifications);
+    // adapter.save() rejection leaves draft dirty while retaining entry.revision = nextRevision for retry.
+    replaceAll(draftA, "retry-me");
+    failNextSave = true;
+    const onSaveSpy = vi.fn();
+    await expect(persistDocumentDraft(adapter, "a.ts", false, { onSave: onSaveSpy })).rejects.toThrow(
+      "disk full",
+    );
+    expect(onSaveSpy).not.toHaveBeenCalled();
+    expect(draftA.revision).toBe("4");
+    expect(isDraftDirty(draftA)).toBe(true);
 
+    // Retrying save sends expectedRevision "4" (no false conflict) and clears dirty.
+    await persistDocumentDraft(adapter, "a.ts", false, { onSave: onSaveSpy });
+    expect(writes.at(-1)).toEqual({ docId: "a.ts", text: "retry-me", expected: "4" });
+    expect(onSaveSpy).toHaveBeenCalledTimes(1);
+    expect(draftA.revision).toBe("5");
+    expect(isDraftDirty(draftA)).toBe(false);
+
+    // In-flight Save 1 -> queued Save 2 -> "Take theirs": Save 2 NEVER writes, "Take theirs" waits for Save 1!
+    const eventsOrder: string[] = [];
     let releaseBlockedWrite: (() => void) | undefined;
     let notifyBlockedStarted: (() => void) | undefined;
     const blockedStarted = new Promise<void>((resolve) => {
       notifyBlockedStarted = resolve;
     });
     const origWrite = adapter.writeIfUnchanged;
+    const origResolve = adapter.resolveConflict;
     adapter.writeIfUnchanged = async (docId, text, expected) => {
       writes.push({ docId, text, expected });
+      eventsOrder.push(`write:${text}`);
       if (text === "stale-1") {
         notifyBlockedStarted?.();
         await new Promise<void>((resolve) => {
           releaseBlockedWrite = resolve;
         });
+        eventsOrder.push("write-done:stale-1");
       }
       return { written: true as const, nextRevision: "99" };
     };
+    adapter.resolveConflict = async (docId, choice) => {
+      eventsOrder.push(`resolve:${choice}`);
+      await origResolve?.(docId, choice);
+    };
 
-    recordDocumentEdit(adapter, "a.ts", "stale-1");
+    const paneNotifications = vi.fn();
+    const unsubscribe = subscribeDocumentDraft(adapter, "a.ts", paneNotifications);
+
+    replaceAll(draftA, "stale-1");
     const blockingSave = persistDocumentDraft(adapter, "a.ts", false, {});
     await blockedStarted;
-    recordDocumentEdit(adapter, "a.ts", "stale-2");
-    const queuedForcedSave = persistDocumentDraft(adapter, "a.ts", true, {});
+    replaceAll(draftA, "stale-2");
+    const queuedSave2 = persistDocumentDraft(adapter, "a.ts", true, {});
 
-    // Take theirs replaces draft in place -> notifies split pane & invalidates queuedForcedSave!
-    const replaced = replaceDocumentDraftFromDisk(adapter, "a.ts", {
-      text: "disk-v9",
-      revision: "9",
-      byteLength: 7,
+    // Trigger "Take theirs" while Save 1 is in flight and Save 2 is queued.
+    const takeTheirsPromise = resolveDocumentConflict(adapter, "a.ts", "take-theirs", {
+      onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
     });
-    expect(replaced.text).toBe("disk-v9");
-    expect(replaced.reloadSeq).toBe(1);
-    expect(isDraftDirty(replaced)).toBe(false);
-    expect(paneNotifications).toHaveBeenCalledTimes(1);
+    expect(draftA.resolvingConflict).toBe(true);
+    // A second concurrent resolution call on another pane is ignored while resolvingConflict is true.
+    await resolveDocumentConflict(adapter, "a.ts", "keep-mine", {});
+    expect(eventsOrder).toEqual(["write:stale-1"]);
 
     releaseBlockedWrite?.();
-    await blockingSave;
-    await queuedForcedSave;
-    adapter.writeIfUnchanged = origWrite;
-    unsubscribe();
-
-    // queuedForcedSave MUST NOT have written "stale-2", and blockingSave must NOT overwrite rev "9".
+    await Promise.all([blockingSave, queuedSave2, takeTheirsPromise]);
+    expect(draftA.resolvingConflict).toBe(false);
+    expect(eventsOrder).toEqual(["write:stale-1", "write-done:stale-1", "resolve:take-theirs"]);
     expect(writes.some((w) => w.text === "stale-2")).toBe(false);
-    expect(getDocumentDraft(adapter, "a.ts")?.revision).toBe("9");
-    expect(getDocumentDraft(adapter, "a.ts")?.text).toBe("disk-v9");
+    expect(draftA.revision).toBe("9");
+    expect(draftA.buffer.getTextSnapshot().materializeFullText()).toBe("disk-v9");
+    expect(isDraftDirty(draftA)).toBe(false);
+    expect(paneNotifications).toHaveBeenCalled();
+
+    // "keep-mine" invokes resolveConflict("keep-mine") then forced write preserving onWriteConflict / onSave.
+    const conflictOutcomes: Extract<WriteOutcome, { readonly written: false }>[] = [];
+    adapter.writeIfUnchanged = async (_docId, _text, expected) => {
+      expect(expected).toBeUndefined();
+      return { written: false as const, currentText: "disk-v10", currentRevision: "10" };
+    };
+    replaceAll(draftA, "mine-text");
+    await resolveDocumentConflict(adapter, "a.ts", "keep-mine", {
+      onWriteConflict: (_docId, outcome) => conflictOutcomes.push(outcome),
+    });
+    expect(conflictOutcomes).toHaveLength(1);
+    expect(isDraftDirty(draftA)).toBe(true);
+
+    const keepMineSaved = vi.fn();
+    adapter.writeIfUnchanged = origWrite;
+    adapter.resolveConflict = origResolve;
+    await resolveDocumentConflict(adapter, "a.ts", "keep-mine", {
+      onSave: keepMineSaved,
+    });
+    expect(keepMineSaved).toHaveBeenCalledWith("a.ts");
+    expect(isDraftDirty(draftA)).toBe(false);
+
+    // Direct replaceDocumentDraftFromDisk also updates buffer in place and clears dirty.
+    replaceAll(draftA, "temp");
+    const replaced = replaceDocumentDraftFromDisk(adapter, "a.ts", {
+      text: "fresh-disk",
+      revision: "12",
+      byteLength: 10,
+    });
+    expect(replaced.buffer.getTextSnapshot().materializeFullText()).toBe("fresh-disk");
+    expect(replaced.revision).toBe("12");
+    expect(isDraftDirty(replaced)).toBe(false);
+
+    unsubscribe();
+    materializeSpy.mockRestore();
+  });
+
+  it("tracks exact UTF-8 byte lengths across non-ASCII and split/joined UTF-16 surrogate pairs without materializeFullText", () => {
+    const encoder = new TextEncoder();
+    const adapter: EditorDocumentAdapter = {
+      getConflict: () => createSubscribable(undefined),
+      loadDocument: async () => undefined,
+      writeIfUnchanged: async () => ({ written: true as const, nextRevision: "2" }),
+      save: async () => undefined,
+    };
+
+    const initial = "a😀b"; // 1 + 4 + 1 = 6 bytes
+    const draft = seedDocumentDraft(adapter, "unicode.ts", {
+      text: initial,
+      revision: "1",
+      byteLength: encoder.encode(initial).byteLength,
+    });
+    const materializeSpy = vi.spyOn(draft.buffer, "materializeFullText");
+
+    const assertMatchesEncoder = () => {
+      const actual = draft.buffer.getTextSnapshot().materializeFullText();
+      expect(draft.byteLength).toBe(encoder.encode(actual).byteLength);
+    };
+
+    // 1. Direct split/rejoin delta across a UTF-16 surrogate pair boundary ("a😀b" 6B <-> "a\uD83DX\uDE00b" 9B).
+    const beforeSplit = createStringTextSnapshot("a\uD83D\uDE00b");
+    const afterSplit = createStringTextSnapshot("a\uD83DX\uDE00b");
+    expect(
+      computeIncrementalUtf8Delta(beforeSplit as never, afterSplit as never, [{ from: 2, to: 2, text: "X" }]),
+    ).toBe(3);
+    expect(
+      computeIncrementalUtf8Delta(afterSplit as never, beforeSplit as never, [{ from: 2, to: 3, text: "" }]),
+    ).toBe(-3);
+
+    // 2. Adjacent buffer edit next to an astral pair stays exact even when Singapore snaps code-point boundaries.
+    let snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, 2, 2)]), [
+      { from: 2, to: 2, text: "X" },
+    ]);
+    assertMatchesEncoder();
+
+    // 3. Insert lone low surrogate "\uDE00" then prepend high surrogate "\uD83D" immediately before it (3 -> 4 bytes, delta +1).
+    snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, 0, 0)]), [
+      { from: 0, to: 0, text: "\uDE00" },
+    ]);
+    assertMatchesEncoder();
+    const bytesBeforeJoinLeft = draft.byteLength;
+    snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, 0, 0)]), [
+      { from: 0, to: 0, text: "\uD83D" },
+    ]);
+    assertMatchesEncoder();
+    expect(draft.byteLength - bytesBeforeJoinLeft).toBe(1);
+
+    // 4. Insert lone high surrogate "\uD83D" at end, then append low surrogate "\uDE00" immediately after it (3 -> 4 bytes, delta +1).
+    snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, snap.length, snap.length)]), [
+      { from: snap.length, to: snap.length, text: "\uD83D" },
+    ]);
+    assertMatchesEncoder();
+    const bytesBeforeJoinRight = draft.byteLength;
+    snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, snap.length, snap.length)]), [
+      { from: snap.length, to: snap.length, text: "\uDE00" },
+    ]);
+    assertMatchesEncoder();
+    expect(draft.byteLength - bytesBeforeJoinRight).toBe(1);
+
+    // 5. Insert multi-byte CJK + emoji simultaneously at two non-overlapping cursors.
+    snap = draft.buffer.getSnapshot();
+    draft.buffer.applyEdits(createSelectionSet([createAnchorSelection(snap, 0, 0)]), [
+      { from: 0, to: 0, text: "你好" },
+      { from: snap.length, to: snap.length, text: "🚀" },
+    ]);
+    assertMatchesEncoder();
+
+    // Zero calls to buffer.materializeFullText throughout all edits!
+    expect(materializeSpy).not.toHaveBeenCalled();
+    materializeSpy.mockRestore();
+  });
+
+  it("shares one live EditorTextBuffer across split CodeEditor panes with independent views and flips maxAnalysisBytes live", async () => {
+    const conflictSub = createSubscribable<DocumentConflict | undefined>(undefined);
+    const adapter: EditorDocumentAdapter = {
+      maxAnalysisBytes: 12,
+      getConflict: () => conflictSub,
+      loadDocument: async () => ({ text: "hello", revision: "1", byteLength: 5 }),
+      writeIfUnchanged: async () => ({ written: true as const, nextRevision: "2" }),
+      save: async () => undefined,
+      resolveConflict: async () => {
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      },
+    };
+
+    const editors: (Editor | null)[] = [null, null];
+    const dirtyCalls: { readonly pane: number; readonly dirty: boolean }[] = [];
+
+    const host = mount(
+      <div>
+        <CodeEditor
+          adapter={adapter}
+          documentId="shared.ts"
+          path="shared.ts"
+          highlighting={false}
+          onDirtyChange={(_id, dirty) => dirtyCalls.push({ pane: 0, dirty })}
+          onEditorReady={(ed) => {
+            editors[0] = ed;
+          }}
+        />
+        <CodeEditor
+          adapter={adapter}
+          documentId="shared.ts"
+          path="shared.ts"
+          highlighting={false}
+          onDirtyChange={(_id, dirty) => dirtyCalls.push({ pane: 1, dirty })}
+          onEditorReady={(ed) => {
+            editors[1] = ed;
+          }}
+        />
+      </div>,
+    );
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const draft = getDocumentDraft(adapter, "shared.ts")!;
+    expect(draft).toBeDefined();
+    const editorEls = Array.from(host.querySelectorAll<HTMLElement>("[data-wb-editor]"));
+    expect(editorEls).toHaveLength(2);
+    expect(editorEls[0]?.dataset.analysisAllowed).toBe("true");
+    expect(editorEls[1]?.dataset.analysisAllowed).toBe("true");
+
+    // Independent view sessions over the same live buffer: selection in pane 0 does not move pane 1's selection.
+    expect(editors[0]).not.toBeNull();
+    expect(editors[1]).not.toBeNull();
+    act(() => {
+      editors[0]!.setSelection(0, 3);
+      editors[1]!.setSelection(5, 5);
+    });
+    expect(editors[0]!.getState().cursor).toEqual({ row: 0, column: 3 });
+    expect(editors[1]!.getState().cursor).toEqual({ row: 0, column: 5 });
+
+    // Editing through pane 0's editor updates pane 1 live AND crosses maxAnalysisBytes (12 bytes) with multi-byte UTF-8!
+    act(() => {
+      editors[0]!.edit({ from: 5, to: 5, text: "😀😀" }); // 5 + 8 = 13 > 12 bytes
+    });
+    expect(editors[1]!.getTextSnapshot().materializeFullText()).toBe("hello😀😀");
+    expect(editorEls[0]?.dataset.analysisAllowed).toBe("false");
+    expect(editorEls[1]?.dataset.analysisAllowed).toBe("false");
+    expect(host.querySelectorAll('[data-testid="wb-editor-large-file-notice"]')).toHaveLength(2);
+
+    // Undoing drops back under 12 bytes -> restores analysisAllowed and clears dirty in both panes.
+    act(() => {
+      draft.buffer.undo();
+    });
+    expect(editorEls[0]?.dataset.analysisAllowed).toBe("true");
+    expect(editorEls[1]?.dataset.analysisAllowed).toBe("true");
+    expect(dirtyCalls.filter((c) => c.pane === 0).at(-1)?.dirty).toBe(false);
+    expect(dirtyCalls.filter((c) => c.pane === 1).at(-1)?.dirty).toBe(false);
+
+    // Cross-pane resolvingConflict disables conflict buttons in BOTH panes simultaneously.
+    act(() => {
+      conflictSub.set({ documentId: "shared.ts", path: "shared.ts", diskText: "external" });
+    });
+    const keepButtons = Array.from(
+      host.querySelectorAll<HTMLButtonElement>('[data-testid="wb-editor-conflict-keep"]'),
+    );
+    expect(keepButtons).toHaveLength(2);
+    act(() => {
+      keepButtons[0]?.click();
+    });
+    expect(keepButtons[0]?.disabled).toBe(true);
+    expect(keepButtons[1]?.disabled).toBe(true);
+  });
+
+  it("preserves Sprockt session-mode contract: persistent editor, onBeforeDetach before swap & unmount, reveal.seq, scroll clamp, and fonts.ready", async () => {
+    const bufA = createEditorTextBuffer("line 1\nline 2\nline 3");
+    const sessionA = createEditorBufferSession(bufA, createEditorViewSession(bufA));
+    const bufB = createEditorTextBuffer("alpha\nbeta\ngamma");
+    const sessionB = createEditorBufferSession(bufB, createEditorViewSession(bufB));
+
+    const attachmentA: EditorSessionAttachment = {
+      session: sessionA,
+      documentId: "a.ts",
+      languageId: "typescript",
+      scrollPosition: { left: 0, top: 9999 },
+    };
+    const attachmentB: EditorSessionAttachment = {
+      session: sessionB,
+      documentId: "b.ts",
+      languageId: "typescript",
+    };
+
+    const events: string[] = [];
+    const seenEditors = new Set<Editor>();
+    let latestEditor: Editor | null = null;
+    let fontsResolve: (() => void) | undefined;
+    const origFonts = document.fonts;
+    Object.defineProperty(document, "fonts", {
+      configurable: true,
+      value: {
+        ready: new Promise<void>((resolve) => {
+          fontsResolve = resolve;
+        }),
+      },
+    });
+
+    const renderSession = (
+      session: EditorSessionAttachment | null,
+      reveal: EditorRevealTarget | null = null,
+    ) => (
+      <CodeEditor
+        session={session}
+        fontFamily="JetBrains Mono"
+        highlighting={false}
+        reveal={reveal}
+        onEditorReady={(ed) => {
+          if (ed) {
+            seenEditors.add(ed);
+            latestEditor = ed;
+          }
+        }}
+        onBeforeDetach={(att) => events.push(`beforeDetach:${att.documentId}`)}
+        onAttached={(_ed, att) => events.push(`attached:${att.documentId}`)}
+        onDetached={() => events.push("detached")}
+        emptyState={<div data-testid="session-empty">No file</div>}
+      />
+    );
+
+    try {
+      const host = mount(renderSession(attachmentA, { line: 2, column: 3, focus: true, seq: 1 }));
+      expect(seenEditors.size).toBe(1);
+      expect(latestEditor).not.toBeNull();
+      const setFontFamilySpy = vi.spyOn(latestEditor!, "setFontFamily");
+      const jumpToSpy = vi.spyOn(latestEditor!, "jumpTo");
+      expect(events).toEqual(["attached:a.ts"]);
+
+      // Fonts ready triggers font family remeasurement on the live editor.
+      await act(async () => {
+        fontsResolve?.();
+        await Promise.resolve();
+      });
+      expect(setFontFamilySpy).toHaveBeenCalledWith("JetBrains Mono");
+
+      // Duplicate reveal seq=1 is ignored; monotonic seq=2 jumps to line 3 col 2.
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            {renderSession(attachmentA, { line: 1, column: 1, seq: 1 })}
+          </WorkbenchPortalProvider>,
+        );
+      });
+      expect(jumpToSpy).not.toHaveBeenCalled();
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            {renderSession(attachmentA, { line: 3, column: 2, seq: 2 })}
+          </WorkbenchPortalProvider>,
+        );
+      });
+      expect(jumpToSpy).toHaveBeenCalledTimes(1);
+
+      // Swapping to attachmentB fires onBeforeDetach(a.ts) before attaching b.ts on the SAME editor instance.
+      act(() => {
+        activeRoot?.render(<WorkbenchPortalProvider>{renderSession(attachmentB)}</WorkbenchPortalProvider>);
+      });
+      expect(seenEditors.size).toBe(1);
+      expect(events).toEqual(["attached:a.ts", "beforeDetach:a.ts", "attached:b.ts"]);
+
+      // Clearing to null detaches b.ts and shows emptyState without destroying the editor instance.
+      act(() => {
+        activeRoot?.render(<WorkbenchPortalProvider>{renderSession(null)}</WorkbenchPortalProvider>);
+      });
+      expect(host.querySelector('[data-testid="session-empty"]')).not.toBeNull();
+      expect(events).toEqual([
+        "attached:a.ts",
+        "beforeDetach:a.ts",
+        "attached:b.ts",
+        "beforeDetach:b.ts",
+        "detached",
+      ]);
+
+      // Re-attaching a.ts then unmounting fires layout-effect beforeDetach + detached before editor disposal.
+      act(() => {
+        activeRoot?.render(<WorkbenchPortalProvider>{renderSession(attachmentA)}</WorkbenchPortalProvider>);
+      });
+      act(() => {
+        activeRoot?.unmount();
+        activeRoot = null;
+      });
+      expect(events.slice(-3)).toEqual(["attached:a.ts", "beforeDetach:a.ts", "detached"]);
+    } finally {
+      Object.defineProperty(document, "fonts", { configurable: true, value: origFonts });
+    }
   });
 
   it("positions DiagnosticPeek, closes on Escape, navigates related targets, and renders LspStatusBadge", () => {

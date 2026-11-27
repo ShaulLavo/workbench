@@ -236,18 +236,18 @@ createRoot(document.getElementById("root")!).render(
     buildVitePage(dirs.bareEditorDir, "entry-editor", {
       "main.tsx": `
 import { createRoot } from "react-dom/client";
-import { EditorTabBar, EditorView } from "@shaulavo/workbench/editor";
+import { EditorTabBar, CodeEditor } from "@shaulavo/workbench/editor";
 const NO_CONFLICT = { getSnapshot: () => undefined, subscribe: () => () => {} };
 const adapter = {
   getConflict: () => NO_CONFLICT,
-  loadDocument: async () => ({ id: "a.ts", path: "src/a.ts", text: "export const ok = 1;\\n", revision: "1" }),
-  writeIfUnchanged: async () => ({ written: true as const, revision: "2" }),
+  loadDocument: async () => ({ id: "a.ts", path: "src/a.ts", text: "export const ok = 1;\\n", revision: "1", byteLength: 21 }),
+  writeIfUnchanged: async () => ({ written: true as const, nextRevision: "2" }),
   save: async () => {},
 };
 createRoot(document.getElementById("root")!).render(
   <div style={{ width: 520, height: 320, display: "flex", flexDirection: "column" }}>
     <EditorTabBar groupId="g1" tabs={[{ id: "t1", documentId: "a.ts", path: "src/a.ts", label: "a.ts" }]} selectedTabId="t1" onSelectTab={() => {}} onCloseTab={() => {}} />
-    <EditorView adapter={adapter} documentId="a.ts" path="src/a.ts" />
+    <CodeEditor adapter={adapter} documentId="a.ts" path="src/a.ts" />
   </div>,
 );
 `,
@@ -627,7 +627,8 @@ async function verifyEngine(browser: Browser, engineName: string, baseUrl: strin
     if (!srcBox || !dstBox) throw new Error(`[${engineName}] entry-editor-groups missing tab/group boxes`);
     await page.mouse.move(srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2);
     await page.mouse.down();
-    await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height / 2, { steps: 10 });
+    await page.mouse.move(srcBox.x + srcBox.width / 2 + 12, srcBox.y + srcBox.height / 2, { steps: 3 });
+    await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height / 2, { steps: 12 });
     await page.mouse.up();
     await page.waitForFunction(
       () =>
