@@ -6,9 +6,19 @@ import {
   type IndexedTreePatch,
   type IndexedTreeSnapshot,
   type LazyInvalidationEvent,
+  type LazyInvalidationOperation,
   type OptimisticTreeMutation,
 } from "@shaulavo/workbench-core";
-import { ancestorsOf, baseName, compareDirEntries, joinPath, normalizeTreePath, parentOf } from "./paths";
+import {
+  ancestorsOf,
+  baseName,
+  compareDirEntries,
+  isInside,
+  isSameOrInside,
+  joinPath,
+  normalizeTreePath,
+  parentOf,
+} from "./paths";
 
 export type RawTreeEntry = string | { readonly path: string; readonly kind: EntryKind };
 
@@ -325,6 +335,94 @@ function applyMutationToLayer(layer: MutableLayer, mutation: OptimisticTreeMutat
   }
 }
 
+function normalizeLazyOperations(
+  operations: readonly LazyInvalidationOperation[],
+): LazyInvalidationOperation[] {
+  const ops: LazyInvalidationOperation[] = [];
+  for (const op of operations) {
+    if (op.kind === "remove") {
+      const path = normalizeTreePath(op.path);
+      if (path) ops.push({ kind: "remove", path });
+      continue;
+    }
+    const from = normalizeTreePath(op.from);
+    const to = normalizeTreePath(op.to);
+    if (from && to && from !== to) ops.push({ kind: "move", from, to });
+  }
+  return ops;
+}
+
+export function applyLazyOpsToPath(path: string, ops: readonly LazyInvalidationOperation[]): string | null {
+  let current = path;
+  for (const op of ops) {
+    if (op.kind === "remove" && isSameOrInside(current, op.path)) return null;
+    if (op.kind === "remove") continue;
+    if (current === op.from) current = op.to;
+    else if (isInside(current, op.from)) current = `${op.to}${current.slice(op.from.length)}`;
+  }
+  return current;
+}
+
+export function resolveLazyOperations(event: LazyInvalidationEvent): LazyInvalidationOperation[] {
+  if (event.operations) return normalizeLazyOperations(event.operations);
+  const removed = event.removed.map(normalizeTreePath).filter(Boolean);
+  const moves = event.moves
+    .map((move) => ({ from: normalizeTreePath(move.from), to: normalizeTreePath(move.to) }))
+    .filter((move) => move.from.length > 0 && move.to.length > 0 && move.from !== move.to);
+  if (moves.length === 0) return removed.map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  if (removed.length === 0) {
+    return moves.map((move): LazyInvalidationOperation => ({ kind: "move", from: move.from, to: move.to }));
+  }
+  const preRemoves = removed
+    .filter((path) => !moves.some((move) => isSameOrInside(move.from, path) || isSameOrInside(path, move.to)))
+    .map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  const moveOps = moves.map((move): LazyInvalidationOperation => ({
+    kind: "move",
+    from: move.from,
+    to: move.to,
+  }));
+  const postRemoves = removed.map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  return preRemoves.concat(moveOps, postRemoves);
+}
+
+function deleteLazyStatesUnder(lazyStates: Map<string, DirectoryLoadState>, rootPath: string): void {
+  for (const key of Array.from(lazyStates.keys())) {
+    if (isSameOrInside(key, rootPath)) lazyStates.delete(key);
+  }
+}
+
+function moveSubtreeInLayerPreservingLoaded(
+  layer: MutableLayer,
+  lazyStates: Map<string, DirectoryLoadState>,
+  from: string,
+  to: string,
+): void {
+  const subtree = collectSubtreeFromLayer(layer, from);
+  if (subtree.length === 0) return;
+
+  const loadedRelDirs = new Set<string>();
+  const savedLazyStates = new Map<string, DirectoryLoadState>();
+  for (const item of subtree) {
+    if (item.kind !== "directory") continue;
+    const srcPath = item.rel ? `${from}/${item.rel}` : from;
+    if (layer.loaded.has(srcPath)) loadedRelDirs.add(item.rel);
+    const lazyState = lazyStates.get(srcPath);
+    if (lazyState) savedLazyStates.set(item.rel, lazyState);
+  }
+
+  deleteSubtreeInLayer(layer, from);
+  deleteLazyStatesUnder(lazyStates, from);
+
+  for (const item of subtree) {
+    const destPath = item.rel ? `${to}/${item.rel}` : to;
+    createPathInLayer(layer, destPath, item.kind);
+    if (item.kind !== "directory") continue;
+    if (!loadedRelDirs.has(item.rel)) layer.loaded.delete(destPath);
+    const savedState = savedLazyStates.get(item.rel);
+    if (savedState) lazyStates.set(destPath, savedState);
+  }
+}
+
 /**
  * Clean-room MIT tree index keeping confirmed state strictly separated from pending optimistic
  * overlays so concurrent confirmed patches survive optimistic rollbacks without loss.
@@ -634,8 +732,13 @@ export class FileTreeIndex {
       return;
     }
     const layer = this.ensureConfirmedMutable();
-    for (const removed of event.removed) {
-      deleteSubtreeInLayer(layer, normalizeTreePath(removed));
+    for (const op of resolveLazyOperations(event)) {
+      if (op.kind === "remove") {
+        deleteSubtreeInLayer(layer, op.path);
+        deleteLazyStatesUnder(this.lazyStates, op.path);
+        continue;
+      }
+      moveSubtreeInLayerPreservingLoaded(layer, this.lazyStates, op.from, op.to);
     }
     for (const dir of event.directories) {
       const normalized = normalizeTreePath(dir);

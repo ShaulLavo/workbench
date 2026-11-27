@@ -42,6 +42,90 @@ function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): vo
   };
 }
 
+function createLazyFilterInvalidationFixture(initialFiles: readonly string[]) {
+  const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
+  const rootListeners = new Set<() => void>();
+  const otherListeners = new Set<() => void>();
+  let rootState: DirectoryLoadState = {
+    status: "loaded",
+    entries: [
+      { name: "closed", kind: "directory" },
+      { name: "open.ts", kind: "file" },
+    ],
+  };
+  const idleState: DirectoryLoadState = { status: "idle" };
+  let workspaceFiles = initialFiles.slice();
+  let failListFiles = false;
+  let deferListFiles = false;
+  let pendingList: ReturnType<typeof Promise.withResolvers<readonly string[]>> | null = null;
+
+  function listFiles(): Promise<readonly string[]> {
+    if (deferListFiles) {
+      pendingList = Promise.withResolvers<readonly string[]>();
+      return pendingList.promise;
+    }
+    if (failListFiles) return Promise.reject(new Error("list failed"));
+    return Promise.resolve(workspaceFiles.slice());
+  }
+
+  const adapter: FileSystemAdapter = {
+    workspaceId: "lazy-filter",
+    writable: { getSnapshot: () => true, subscribe: () => () => {} },
+    listFiles,
+    readText: async () => undefined,
+    size: async () => undefined,
+    createFile: async () => {},
+    createDirectory: async () => {},
+    move: async () => {},
+    remove: async () => {},
+    lazy: {
+      getDirectoryState(dirPath) {
+        const isRoot = dirPath === "";
+        const listeners = isRoot ? rootListeners : otherListeners;
+        return {
+          getSnapshot: () => (isRoot ? rootState : idleState),
+          subscribe(listener) {
+            listeners.add(listener);
+            return () => listeners.delete(listener);
+          },
+        };
+      },
+      async loadDirectory(dirPath) {
+        if (dirPath !== "") return;
+        for (const listener of rootListeners) listener();
+      },
+      subscribeInvalidation(listener) {
+        invListeners.add(listener);
+        return () => invListeners.delete(listener);
+      },
+    },
+  };
+
+  return {
+    adapter,
+    setWorkspaceFiles(next: readonly string[]) {
+      workspaceFiles = next.slice();
+    },
+    setRootState(next: DirectoryLoadState) {
+      rootState = next;
+    },
+    setFailListFiles(fail: boolean) {
+      failListFiles = fail;
+    },
+    setDeferListFiles(defer: boolean) {
+      deferListFiles = defer;
+    },
+    emitInvalidation(event: LazyInvalidationEvent) {
+      for (const listener of invListeners) listener(event);
+    },
+    resolvePendingList(paths: readonly string[]) {
+      if (!pendingList) throw new Error("Expected a pending listFiles request");
+      pendingList.resolve(paths);
+      pendingList = null;
+    },
+  };
+}
+
 describe("@shaulavo/workbench-tree engine", () => {
   it("prepares deterministic sorted trees, preserves empty directories, and remounts in O(1)", () => {
     const prepared = prepareFileTreeInput([
@@ -603,120 +687,306 @@ describe("@shaulavo/workbench-tree engine", () => {
 
   it("filters files inside unopened lazy directories via adapter.listFiles and refreshes on invalidation", async () => {
     const model = new FileTreeModel();
-    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
-    const rootListeners = new Set<() => void>();
-    const closedListeners = new Set<() => void>();
-    const rootState: DirectoryLoadState = {
-      status: "loaded",
-      entries: [
-        { name: "closed", kind: "directory" },
-        { name: "open.ts", kind: "file" },
-      ],
-    };
-    const closedState: DirectoryLoadState = { status: "idle" };
-    let workspaceFiles = ["open.ts", "closed/needle.txt"];
-    let failListFiles = false;
+    const fixture = createLazyFilterInvalidationFixture(["open.ts", "closed/needle.txt"]);
+    const visiblePaths = () =>
+      model
+        .getSnapshot()
+        .rows.filter((row) => row.type === "entry")
+        .map((row) => row.path);
 
-    const adapter: FileSystemAdapter = {
-      workspaceId: "lazy-filter",
-      writable: { getSnapshot: () => true, subscribe: () => () => {} },
-      listFiles: async () => {
-        if (failListFiles) throw new Error("list failed");
-        return workspaceFiles.slice();
-      },
-      readText: async () => undefined,
-      size: async () => undefined,
-      createFile: async () => {},
-      createDirectory: async () => {},
-      move: async () => {},
-      remove: async () => {},
-      lazy: {
-        getDirectoryState(dirPath) {
-          const isRoot = dirPath === "";
-          const listeners = isRoot ? rootListeners : closedListeners;
-          return {
-            getSnapshot: () => (isRoot ? rootState : closedState),
-            subscribe(listener) {
-              listeners.add(listener);
-              return () => listeners.delete(listener);
-            },
-          };
-        },
-        async loadDirectory() {},
-        subscribeInvalidation(listener) {
-          invListeners.add(listener);
-          return () => invListeners.delete(listener);
-        },
-      },
-    };
-
-    const bound = bindFileSystemAdapter(model, adapter);
+    const bound = bindFileSystemAdapter(model, fixture.adapter);
     // Filter discovers closed/needle.txt even though "closed" was never opened or loaded.
     model.setFilter("needle");
     await Promise.resolve();
     await Promise.resolve();
-    const matchedPaths = model
-      .getSnapshot()
-      .rows.filter((row) => row.type === "entry")
-      .map((row) => row.path);
-    expect(matchedPaths).toEqual(["closed", "closed/needle.txt"]);
+    expect(visiblePaths()).toEqual(["closed", "closed/needle.txt"]);
     expect(model.getEntryKind("closed/needle.txt")).toBe("file");
 
-    // Invalidation while filtering refreshes listFiles and reflects newly created files.
-    workspaceFiles = ["open.ts", "closed/needle.txt", "closed/needle-two.txt"];
-    for (const listener of invListeners) {
-      listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
-    }
+    // Invalidation while filtering keeps existing filtered rows mounted until listFiles resolves, then reflects updates.
+    fixture.setWorkspaceFiles(["open.ts", "closed/needle.txt", "closed/needle-two.txt"]);
+    fixture.emitInvalidation({ directories: ["closed"], reset: false, moves: [], removed: [] });
+    expect(visiblePaths()).toEqual(["closed", "closed/needle.txt"]);
     await Promise.resolve();
     await Promise.resolve();
-    const updatedPaths = model
-      .getSnapshot()
-      .rows.filter((row) => row.type === "entry")
-      .map((row) => row.path);
-    expect(updatedPaths).toEqual(["closed", "closed/needle-two.txt", "closed/needle.txt"]);
+    expect(visiblePaths()).toEqual(["closed", "closed/needle-two.txt", "closed/needle.txt"]);
+
+    // Removal, move, and reset invalidations update cached filter entries immediately before listFiles resolves.
+    fixture.setDeferListFiles(true);
+    fixture.emitInvalidation({
+      directories: ["closed"],
+      reset: false,
+      moves: [],
+      removed: ["closed/needle.txt"],
+    });
+    expect(visiblePaths()).toEqual(["closed", "closed/needle-two.txt"]);
+    expect(model.getEntryKind("closed/needle.txt")).toBeUndefined();
+
+    fixture.emitInvalidation({
+      directories: ["closed"],
+      reset: false,
+      moves: [{ from: "closed/needle-two.txt", to: "closed/renamed.txt", operation: 1 }],
+      removed: [],
+    });
+    expect(visiblePaths()).toEqual([]);
+    expect(model.getEntryKind("closed/needle-two.txt")).toBeUndefined();
+    expect(model.getEntryKind("closed/renamed.txt")).toBe("file");
+
+    fixture.resolvePendingList(["open.ts", "closed/needle.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(visiblePaths()).toEqual(["closed", "closed/needle.txt"]);
+
+    fixture.emitInvalidation({ directories: [], reset: true, moves: [], removed: [] });
+    expect(visiblePaths()).toEqual([]);
+    fixture.resolvePendingList(["open.ts", "closed/needle-two.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    fixture.setDeferListFiles(false);
 
     // If invalidation refresh fails, previously deleted files in collapsed folders are cleared, not kept searchable.
-    failListFiles = true;
-    for (const listener of invListeners) {
-      listener({ directories: ["closed"], reset: false, moves: [], removed: ["closed/needle.txt"] });
-    }
+    fixture.setFailListFiles(true);
+    fixture.emitInvalidation({
+      directories: ["closed"],
+      reset: false,
+      moves: [],
+      removed: ["closed/needle.txt"],
+    });
     await Promise.resolve();
     await Promise.resolve();
-    const afterFailedRefresh = model
-      .getSnapshot()
-      .rows.filter((row) => row.type === "entry")
-      .map((row) => row.path);
-    expect(afterFailedRefresh).toEqual([]);
+    expect(visiblePaths()).toEqual([]);
 
     // Repopulating works again once listFiles succeeds, and dispose clears auxiliary filter paths.
-    failListFiles = false;
-    workspaceFiles = ["open.ts", "closed/needle-two.txt"];
-    for (const listener of invListeners) {
-      listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
-    }
+    fixture.setFailListFiles(false);
+    fixture.setWorkspaceFiles(["open.ts", "closed/needle-two.txt"]);
+    fixture.emitInvalidation({ directories: ["closed"], reset: false, moves: [], removed: [] });
     await Promise.resolve();
     await Promise.resolve();
-    expect(
+    expect(visiblePaths()).toEqual(["closed", "closed/needle-two.txt"]);
+
+    bound.dispose();
+    expect(visiblePaths()).toEqual([]);
+
+    // Clearing filter leaves "closed" collapsed.
+    model.setFilter("");
+    expect(visiblePaths()).toEqual(["closed", "open.ts"]);
+  });
+
+  it("preserves unopened renamed directories, hides same-batch move+delete, and keeps empty dir markers under filter invalidation", async () => {
+    const model = new FileTreeModel();
+    const fixture = createLazyFilterInvalidationFixture([
+      "open.ts",
+      "closed/needle.txt",
+      "closed/needle-empty/",
+      "closed/other.txt",
+    ]);
+    const visiblePaths = () =>
       model
         .getSnapshot()
         .rows.filter((row) => row.type === "entry")
-        .map((row) => row.path),
-    ).toEqual(["closed", "closed/needle-two.txt"]);
+        .map((row) => row.path);
+
+    const bound = bindFileSystemAdapter(model, fixture.adapter);
+    model.setFilter("needle");
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(visiblePaths()).toEqual(["closed", "closed/needle-empty", "closed/needle.txt"]);
+    expect(model.getEntryKind("closed/needle-empty")).toBe("directory");
+
+    // Unrelated removal preserves explicit empty directory trailing slash marker while refresh is pending.
+    fixture.setDeferListFiles(true);
+    fixture.emitInvalidation({
+      directories: ["closed"],
+      reset: false,
+      moves: [],
+      removed: ["closed/other.txt"],
+    });
+    expect(model.getEntryKind("closed/needle-empty")).toBe("directory");
+    fixture.resolvePendingList(["open.ts", "closed/needle.txt", "closed/needle-empty/"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Same-batch move + delete of destination keeps both source and deleted destination hidden while pending.
+    fixture.emitInvalidation({
+      directories: ["closed"],
+      reset: false,
+      moves: [{ from: "closed/needle.txt", to: "closed/needle-gone.txt", operation: 1 }],
+      removed: ["closed/needle-gone.txt"],
+    });
+    expect(visiblePaths()).toEqual(["closed", "closed/needle-empty"]);
+    expect(model.getEntryKind("closed/needle.txt")).toBeUndefined();
+    expect(model.getEntryKind("closed/needle-gone.txt")).toBeUndefined();
+    fixture.resolvePendingList(["open.ts", "closed/needle.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Renaming an unopened directory preserves unloaded status so descendants remain visible before and after reload.
+    fixture.setRootState({
+      status: "loaded",
+      entries: [
+        { name: "open.ts", kind: "file" },
+        { name: "renamed", kind: "directory" },
+      ],
+    });
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 2 }],
+      removed: [],
+    });
+    expect(visiblePaths()).toEqual(["renamed", "renamed/needle.txt"]);
+    expect(model.index.getDirectoryLoadState("renamed").status).toBe("idle");
+    fixture.resolvePendingList(["open.ts", "renamed/needle.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(visiblePaths()).toEqual(["renamed", "renamed/needle.txt"]);
 
     bound.dispose();
+  });
+
+  it("handles delete-then-rename, rename-then-delete, explicit operations, and chained moves through deleted paths", async () => {
+    // 1. Delete-then-rename in the same batch (without explicit operations) must not resurrect the deleted child.
+    const deleteBeforeRenameIndex = FileTreeIndex.fromPaths(["closed/keep.txt", "closed/needle.txt"], {
+      loadedDirectoryPaths: new Set(["", "closed"]),
+    });
+    deleteBeforeRenameIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["closed/needle.txt"],
+    });
+    expect(deleteBeforeRenameIndex.hasPath("renamed/keep.txt")).toBe(true);
+    expect(deleteBeforeRenameIndex.hasPath("renamed/needle.txt")).toBe(false);
+    expect(deleteBeforeRenameIndex.hasPath("closed/needle.txt")).toBe(false);
+
+    // Also verify delete-then-rename on the filtered lazy bridge clears selection, focus, and rename draft.
+    const model = new FileTreeModel();
+    const fixture = createLazyFilterInvalidationFixture(["open.ts", "closed/keep.txt", "closed/needle.txt"]);
+    const bound = bindFileSystemAdapter(model, fixture.adapter);
+    model.setFilter("needle");
+    await Promise.resolve();
+    await Promise.resolve();
+    model.select("closed/needle.txt", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "closed/needle.txt" });
+    fixture.setDeferListFiles(true);
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["closed/needle.txt"],
+    });
     expect(
       model
         .getSnapshot()
         .rows.filter((row) => row.type === "entry")
         .map((row) => row.path),
     ).toEqual([]);
+    expect(model.getEntryKind("renamed/needle.txt")).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSnapshot().draft).toBeUndefined();
+    fixture.resolvePendingList(["open.ts", "renamed/keep.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
 
-    // Clearing filter leaves "closed" collapsed.
-    model.setFilter("");
-    const collapsedPaths = model
-      .getSnapshot()
-      .rows.filter((row) => row.type === "entry")
-      .map((row) => row.path);
-    expect(collapsedPaths).toEqual(["closed", "open.ts"]);
+    // Explicit operations (delete x.txt then move y.txt -> x.txt) rebase selection/focus onto x.txt even with summary lists or empty summaries.
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "open.ts", to: "closed/keep.txt", operation: 2 }],
+      removed: ["closed/keep.txt"],
+      operations: [
+        { kind: "remove", path: "closed/keep.txt" },
+        { kind: "move", from: "open.ts", to: "closed/keep.txt" },
+      ],
+    });
+    fixture.resolvePendingList(["closed/keep.txt", "y.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    model.select("y.txt", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "y.txt" });
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [],
+      removed: [],
+      operations: [
+        { kind: "remove", path: "x.txt" },
+        { kind: "move", from: "y.txt", to: "x.txt" },
+      ],
+    });
+    expect(model.getSelectedPaths()).toEqual(["x.txt"]);
+    expect(model.getSnapshot().focusedPath).toBe("x.txt");
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "x.txt" });
+    fixture.resolvePendingList(["x.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    bound.dispose();
+
+    // 2. Reused directory path fallback preserves surviving file moved out of the reused directory.
+    const reusedDirIndex = FileTreeIndex.fromPaths(["closed/needle.txt", "incoming/needle.txt"], {
+      loadedDirectoryPaths: new Set(["", "closed", "incoming"]),
+    });
+    reusedDirIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [
+        { from: "closed", to: "renamed", operation: 1 },
+        { from: "incoming", to: "closed", operation: 2 },
+      ],
+      removed: ["closed/needle.txt"],
+    });
+    expect(reusedDirIndex.hasPath("renamed/needle.txt")).toBe(true);
+    expect(reusedDirIndex.hasPath("closed/needle.txt")).toBe(false);
+
+    // 3. Rename-then-delete in the same batch must not resurrect the deleted child either.
+    const renameBeforeDeleteIndex = FileTreeIndex.fromPaths(
+      ["closed/keep.txt", "closed/needle.txt", "a.txt", "d.txt"],
+      {
+        loadedDirectoryPaths: new Set(["", "closed"]),
+      },
+    );
+    renameBeforeDeleteIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["renamed/needle.txt"],
+    });
+    expect(renameBeforeDeleteIndex.hasPath("renamed/keep.txt")).toBe(true);
+    expect(renameBeforeDeleteIndex.hasPath("renamed/needle.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("closed/needle.txt")).toBe(false);
+
+    // 3. Chained moves through a path that is later reused and deleted preserve the earlier destination.
+    renameBeforeDeleteIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [
+        { from: "a.txt", to: "b.txt", operation: 2 },
+        { from: "b.txt", to: "c.txt", operation: 3 },
+        { from: "d.txt", to: "b.txt", operation: 4 },
+      ],
+      removed: ["b.txt"],
+    });
+    expect(renameBeforeDeleteIndex.hasPath("c.txt")).toBe(true);
+    expect(renameBeforeDeleteIndex.hasPath("b.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("a.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("d.txt")).toBe(false);
+
+    // 4. Explicit ordered operations preserve exact cross-operation ordering (delete before move into same path).
+    const explicitOrderIndex = FileTreeIndex.fromPaths(["x.txt", "y.txt"], {
+      loadedDirectoryPaths: new Set([""]),
+    });
+    explicitOrderIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "y.txt", to: "x.txt", operation: 2 }],
+      removed: ["x.txt"],
+      operations: [
+        { kind: "remove", path: "x.txt" },
+        { kind: "move", from: "y.txt", to: "x.txt" },
+      ],
+    });
+    expect(explicitOrderIndex.hasPath("x.txt")).toBe(true);
+    expect(explicitOrderIndex.hasPath("y.txt")).toBe(false);
   });
 });

@@ -4,16 +4,26 @@ import type {
   GitStatusCode,
   IndexedTreePatch,
   IndexedTreeSnapshot,
+  LazyInvalidationOperation,
   Subscribable,
 } from "@shaulavo/workbench-core";
 import {
+  applyLazyOpsToPath,
   FileTreeIndex,
   prepareFileTreeInput,
   type PatchApplyResult,
   type PreparedFileTreeInput,
   type RawTreeEntry,
 } from "./index-store";
-import { ancestorsOf, isInside, isSameOrInside, joinPath, normalizeTreePath, parentOf } from "./paths";
+import {
+  ancestorsOf,
+  compareDirEntries,
+  isInside,
+  isSameOrInside,
+  joinPath,
+  normalizeTreePath,
+  parentOf,
+} from "./paths";
 
 export type TreeDraft =
   | { readonly mode: "create"; readonly kind: EntryKind; readonly parent: string }
@@ -140,11 +150,17 @@ function compactDirectoryChain(
 }
 
 function childrenForFilter(index: FileTreeIndex, filterIndex: FileTreeIndex | null | undefined, dir: string) {
-  if (!filterIndex) return index.getChildren(dir);
-  if (index.getDirectoryLoadState(dir).status !== "loaded") {
-    return filterIndex.getChildren(dir);
+  const primary = index.getChildren(dir);
+  if (!filterIndex || index.getDirectoryLoadState(dir).status === "loaded") return primary;
+  const extra = filterIndex.getChildren(dir);
+  if (primary.length === 0) return extra;
+  if (extra.length === 0) return primary;
+  const seen = new Set(primary.map((entry) => entry.name));
+  const merged = primary.slice();
+  for (const entry of extra) {
+    if (!seen.has(entry.name)) merged.push(entry);
   }
-  return index.getChildren(dir);
+  return merged.sort(compareDirEntries);
 }
 
 function computeFilterSets(
@@ -801,15 +817,48 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     return result;
   }
 
+  private updateSelectedForOperations(operations: readonly LazyInvalidationOperation[]): void {
+    if (this.selected.size === 0) return;
+    let changed = false;
+    const next = new Set<string>();
+    for (const path of this.selected) {
+      const updated = applyLazyOpsToPath(path, operations);
+      if (updated !== path) changed = true;
+      if (updated) next.add(updated);
+    }
+    if (changed) this.selected = next;
+  }
+
+  private applyPathOperations(operations: readonly LazyInvalidationOperation[]): void {
+    if (operations.length === 0) return;
+    this.updateSelectedForOperations(operations);
+    if (this.selectionAnchor) {
+      this.selectionAnchor = applyLazyOpsToPath(this.selectionAnchor, operations) ?? undefined;
+    }
+    if (this.focusedPath) {
+      this.focusedPath = applyLazyOpsToPath(this.focusedPath, operations) ?? undefined;
+    }
+    if (this.draft?.mode === "rename") {
+      const nextPath = applyLazyOpsToPath(this.draft.path, operations);
+      if (!nextPath) this.draft = undefined;
+      else if (nextPath !== this.draft.path) this.draft = { mode: "rename", path: nextPath };
+    }
+  }
+
   notifyIndexChange(options?: {
     readonly removedPaths?: readonly string[];
     readonly movedPaths?: readonly { readonly from: string; readonly to: string }[];
+    readonly operations?: readonly LazyInvalidationOperation[];
   }): void {
-    if (options?.movedPaths && options.movedPaths.length > 0) {
-      this.rebaseMovedPaths(options.movedPaths);
-    }
-    if (options?.removedPaths && options.removedPaths.length > 0) {
-      this.pruneRemovedPaths(options.removedPaths);
+    if (options?.operations && options.operations.length > 0) {
+      this.applyPathOperations(options.operations);
+    } else {
+      if (options?.movedPaths && options.movedPaths.length > 0) {
+        this.rebaseMovedPaths(options.movedPaths);
+      }
+      if (options?.removedPaths && options.removedPaths.length > 0) {
+        this.pruneRemovedPaths(options.removedPaths);
+      }
     }
     this.emit();
   }

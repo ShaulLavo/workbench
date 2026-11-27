@@ -90,11 +90,17 @@ export type OptimisticTreeMutation =
   | { readonly kind: "duplicate"; readonly from: string; readonly to: string; readonly entryKind: EntryKind }
   | { readonly kind: "delete"; readonly path: string };
 
+export type LazyInvalidationOperation =
+  | { readonly kind: "move"; readonly from: string; readonly to: string }
+  | { readonly kind: "remove"; readonly path: string };
+
 export interface LazyInvalidationEvent {
   readonly directories: readonly string[];
   readonly reset: boolean;
   readonly moves: readonly { readonly from: string; readonly to: string; readonly operation: number }[];
   readonly removed: readonly string[];
+  /** Optional ordered move/remove sequence preserving relative order within a coalesced batch. */
+  readonly operations?: readonly LazyInvalidationOperation[];
 }
 
 export interface FileUploadItem {

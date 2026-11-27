@@ -1,6 +1,30 @@
-import type { FileSystemAdapter, LazyInvalidationEvent } from "@shaulavo/workbench-core";
+import type {
+  FileSystemAdapter,
+  LazyInvalidationEvent,
+  LazyInvalidationOperation,
+} from "@shaulavo/workbench-core";
+import { applyLazyOpsToPath, resolveLazyOperations } from "./index-store";
 import type { FileTreeModel } from "./model";
 import { ancestorsOf, normalizeTreePath } from "./paths";
+
+function applyOpsToFilterPaths(
+  paths: readonly string[],
+  ops: readonly LazyInvalidationOperation[],
+): string[] {
+  if (ops.length === 0) return paths.slice();
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of paths) {
+    const isExplicitDir = rawPath.endsWith("/");
+    const normalized = normalizeTreePath(rawPath);
+    if (!normalized) continue;
+    const rebased = applyLazyOpsToPath(normalized, ops);
+    if (!rebased || seen.has(rebased)) continue;
+    seen.add(rebased);
+    next.push(isExplicitDir ? `${rebased}/` : rebased);
+  }
+  return next;
+}
 
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
@@ -26,7 +50,13 @@ export function bindFileSystemAdapter(
   let handlingInvalidation = false;
   let wasFiltering = false;
   let filterListGen = 0;
+  let cachedFilterPaths: readonly string[] | undefined;
   let disposed = false;
+
+  function setFilterPaths(paths: readonly string[] | undefined): void {
+    cachedFilterPaths = paths;
+    model.setFilterPaths(paths);
+  }
 
   if (adapter.git) {
     model.setGitState(adapter.git.getSnapshot());
@@ -121,12 +151,12 @@ export function bindFileSystemAdapter(
     await lazy.loadDirectory(normalized, force ? { force: true } : options);
   }
 
-  function refreshFilterFiles(): void {
+  function refreshFilterFiles(options?: { readonly clearOnError?: boolean }): void {
     if (disposed || !adapter.lazy) return;
     const isFiltering = model.getSnapshot().filter.trim().length > 0;
     if (!isFiltering) {
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      setFilterPaths(undefined);
       return;
     }
     const gen = ++filterListGen;
@@ -135,10 +165,11 @@ export function bindFileSystemAdapter(
       .then((paths) => {
         if (disposed || gen !== filterListGen) return;
         if (model.getSnapshot().filter.trim().length === 0) return;
-        model.setFilterPaths(paths);
+        setFilterPaths(paths);
       })
       .catch(() => {
-        // Keep currently loaded entries filterable if workspace listing fails.
+        if (disposed || gen !== filterListGen) return;
+        if (options?.clearOnError) setFilterPaths(undefined);
       });
   }
 
@@ -193,25 +224,36 @@ export function bindFileSystemAdapter(
     }
   }
 
+  function syncFilterPathsForInvalidation(
+    event: LazyInvalidationEvent,
+    ops: readonly LazyInvalidationOperation[],
+    wasActiveFilter: boolean,
+  ): void {
+    if (!wasActiveFilter || event.reset) {
+      setFilterPaths(undefined);
+      return;
+    }
+    if (!cachedFilterPaths || ops.length === 0) return;
+    setFilterPaths(applyOpsToFilterPaths(cachedFilterPaths, ops));
+  }
+
   function handleLazyInvalidation(event: LazyInvalidationEvent): void {
     if (disposed) return;
+    const wasActiveFilter = model.getSnapshot().filter.trim().length > 0;
+    const ops = event.reset ? [] : resolveLazyOperations(event);
     handlingInvalidation = true;
     try {
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      syncFilterPathsForInvalidation(event, ops, wasActiveFilter);
       model.index.applyLazyInvalidation(event);
-      model.notifyIndexChange(
-        event.moves.length > 0 || event.removed.length > 0
-          ? { movedPaths: event.moves, removedPaths: event.removed }
-          : undefined,
-      );
+      model.notifyIndexChange(ops.length > 0 ? { operations: ops } : undefined);
       reloadInvalidatedLazyDirs(event);
     } finally {
       handlingInvalidation = false;
     }
     syncExpandedLazyDirectories();
     if (model.getSnapshot().filter.trim().length > 0) {
-      refreshFilterFiles();
+      refreshFilterFiles({ clearOnError: true });
     }
   }
 
@@ -232,7 +274,7 @@ export function bindFileSystemAdapter(
     dispose() {
       disposed = true;
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      setFilterPaths(undefined);
       for (const cleanup of cleanups) cleanup();
       cleanups.length = 0;
       for (const unsub of lazyUnsubs.values()) unsub();
