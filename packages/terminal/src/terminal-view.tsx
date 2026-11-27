@@ -509,6 +509,13 @@ export function TerminalView({
     y: 0,
     selectionText: "",
   });
+  const [prevActive, setPrevActive] = useState(active);
+  if (prevActive !== active) {
+    setPrevActive(active);
+    if (!active && contextMenu.open) {
+      setContextMenu((prev) => ({ ...prev, open: false }));
+    }
+  }
 
   function syncAppearanceNow(): void {
     const terminal = terminalRef.current;
@@ -864,6 +871,7 @@ export function TerminalView({
   }
 
   function handleMenuPaste(): void {
+    if (!activeRef.current || !inputReadyRef.current) return;
     const targetTerminal = terminalRef.current;
     const targetSessionId = propsRef.current.sessionId;
     const pasteGeneration = pasteGenerationRef.current;
@@ -938,7 +946,7 @@ export function TerminalView({
           }}
         />
       ) : null}
-      {!disableContextMenu ? (
+      {!disableContextMenu && active ? (
         <TerminalContextMenu
           open={contextMenu.open}
           x={contextMenu.x}

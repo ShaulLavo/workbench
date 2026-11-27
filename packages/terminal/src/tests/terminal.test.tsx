@@ -748,6 +748,7 @@ describe("@shaulavo/workbench-terminal", () => {
 
   it("forwards onHotkeyError, console fallback, and live screenReaderMode in hosted and standalone modes", async () => {
     const originalClipboard = navigator.clipboard;
+    const originalPlatform = navigator.platform;
     const copyError = new Error("clipboard write denied");
     Object.defineProperty(navigator, "clipboard", {
       configurable: true,
@@ -760,6 +761,7 @@ describe("@shaulavo/workbench-terminal", () => {
     host.focus();
 
     let claimKey: ((input: { readonly type: "key"; readonly event: KeyboardEvent }) => string) | undefined;
+    const sendGeneratedInput = vi.fn();
     const fakeTerminal = {
       element: host,
       lifecycle: "open",
@@ -773,7 +775,7 @@ describe("@shaulavo/workbench-terminal", () => {
         return { signal: abort.signal, dispose: () => abort.abort() };
       },
       on: () => ({ dispose: () => {} }),
-      sendGeneratedInput: () => {},
+      sendGeneratedInput,
     } as unknown as Terminal;
 
     const dispatcher = createBrowserDispatcher({
@@ -826,22 +828,49 @@ describe("@shaulavo/workbench-terminal", () => {
       hostedDispose = null;
       consoleError.mockClear();
 
-      // Standalone mode: verify custom onHotkeyError and console.error fallback.
+      // Standalone mode (macOS keymap): verify custom onHotkeyError, console fallback, and live screenReaderMode.
+      Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
       const standaloneError = vi.fn();
       onHotkeyError = standaloneError;
+      let standaloneScreenReader = false;
       standaloneDispose = attachConfiguredTerminalHotkeys(fakeTerminal, {
         hotkeys: baseHotkeys,
-        getScreenReader: () => true,
+        getScreenReader: () => standaloneScreenReader,
         getOnError: () => onHotkeyError,
       });
       host.focus();
       const isMac = detectPlatform() === "mac";
-      claimKey?.({ type: "key", event: dispatchCopyKey(host, isMac) });
+      expect(isMac).toBe(true);
+
+      // Meta+ArrowLeft binds to sendKeystroke('\x01') only while screenReader == off.
+      const metaLeft = () =>
+        new KeyboardEvent("keydown", {
+          key: "ArrowLeft",
+          code: "ArrowLeft",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+      const offEvent = metaLeft();
+      host.dispatchEvent(offEvent);
+      claimKey?.({ type: "key", event: offEvent });
+      await flushMicrotasks();
+      expect(sendGeneratedInput).toHaveBeenCalledWith({ type: "text", data: "\x01" });
+
+      sendGeneratedInput.mockClear();
+      standaloneScreenReader = true;
+      const onEvent = metaLeft();
+      host.dispatchEvent(onEvent);
+      claimKey?.({ type: "key", event: onEvent });
+      await flushMicrotasks();
+      expect(sendGeneratedInput).not.toHaveBeenCalled();
+
+      claimKey?.({ type: "key", event: dispatchCopyKey(host, true) });
       await flushMicrotasks();
       expect(standaloneError).toHaveBeenCalledWith(copyError, "terminal.copy");
 
       onHotkeyError = undefined;
-      claimKey?.({ type: "key", event: dispatchCopyKey(host, isMac) });
+      claimKey?.({ type: "key", event: dispatchCopyKey(host, true) });
       await flushMicrotasks();
       expect(consoleError).toHaveBeenCalledWith("terminal.copy", copyError);
     } finally {
@@ -851,6 +880,7 @@ describe("@shaulavo/workbench-terminal", () => {
       dispatcher.dispose();
       host.remove();
       consoleError.mockRestore();
+      Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
     }
   });
@@ -944,7 +974,7 @@ describe("@shaulavo/workbench-terminal", () => {
       expect(onPasteFailed).not.toHaveBeenCalled();
       expect(pasteSpy).not.toHaveBeenCalled();
 
-      // Switching away and back to "one" before a pre-switch read settles still suppresses stale error.
+      // Switching away and back to "one" before a pre-switch read settles suppresses both stale error and stale paste.
       act(() => {
         activeId.set("one");
       });
@@ -973,6 +1003,69 @@ describe("@shaulavo/workbench-terminal", () => {
         await Promise.resolve();
       });
       expect(onPasteFailed).not.toHaveBeenCalled();
+
+      // Resolving a pre-switch clipboard read after switching away and back must not paste into "one".
+      let resolveRoundTrip: ((text: string) => void) | undefined;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          readText: vi.fn(
+            () =>
+              new Promise<string>((resolve) => {
+                resolveRoundTrip = resolve;
+              }),
+          ),
+        },
+      });
+      await triggerContextPaste(root, "one");
+      act(() => {
+        activeId.set("two");
+      });
+      act(() => {
+        activeId.set("one");
+      });
+      resolveRoundTrip?.("stale clipboard text");
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(pasteSpy).not.toHaveBeenCalled();
+
+      // Switching away from "one" closes its context menu and blocks any queued Paste microtask.
+      const readWhenHidden = vi.fn(async () => "hidden paste");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: readWhenHidden },
+      });
+      const viewOne = root.querySelector<HTMLElement>('[data-session-id="one"]');
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      const hiddenPasteBtn = document.querySelector<HTMLButtonElement>('[data-testid="wb-term-ctx-paste"]');
+      expect(hiddenPasteBtn).not.toBeNull();
+      act(() => {
+        hiddenPasteBtn!.click();
+        activeId.set("two");
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+      expect(readWhenHidden).not.toHaveBeenCalled();
+      expect(pasteSpy).not.toHaveBeenCalled();
+
+      // Returning to "one" keeps the closed menu dismissed, and pasting while active delivers text.
+      act(() => {
+        activeId.set("one");
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: vi.fn(async () => "active paste") },
+      });
+      await triggerContextPaste(root, "one");
+      expect(pasteSpy).toHaveBeenCalledWith("active paste");
     } finally {
       createSpy.mockRestore();
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
