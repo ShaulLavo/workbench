@@ -622,13 +622,20 @@ async function verifyEngine(browser: Browser, engineName: string, baseUrl: strin
     }
     const sourceTab = page.locator('[data-testid="wb-editor-tab-t1"]');
     const targetGroup = page.locator('[data-testid="wb-editor-group-g2"]');
+    await sourceTab.waitFor({ state: "visible" });
+    await targetGroup.waitFor({ state: "visible" });
     const srcBox = await sourceTab.boundingBox();
     const dstBox = await targetGroup.boundingBox();
     if (!srcBox || !dstBox) throw new Error(`[${engineName}] entry-editor-groups missing tab/group boxes`);
+    const dstX = dstBox.x + dstBox.width / 2;
+    const dstY = dstBox.y + dstBox.height / 2;
     await page.mouse.move(srcBox.x + srcBox.width / 2, srcBox.y + srcBox.height / 2);
     await page.mouse.down();
     await page.mouse.move(srcBox.x + srcBox.width / 2 + 12, srcBox.y + srcBox.height / 2, { steps: 3 });
-    await page.mouse.move(dstBox.x + dstBox.width / 2, dstBox.y + dstBox.height / 2, { steps: 12 });
+    await page.waitForSelector('[data-testid="wb-group-drop-overlay-g2"]');
+    await page.mouse.move(dstX, dstY, { steps: 10 });
+    await page.mouse.move(dstX + 1, dstY);
+    await page.waitForSelector('[data-testid="wb-editor-group-g2"][data-drop-over="true"]');
     await page.mouse.up();
     await page.waitForFunction(
       () =>
