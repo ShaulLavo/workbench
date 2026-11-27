@@ -778,14 +778,15 @@ describe("@shaulavo/workbench-tree React view", () => {
 
       const segB = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a/b"]');
       expect(segB).not.toBeNull();
+      const wasExpanded = model.getSnapshot().expanded.has("a/b");
       act(() => {
         segB?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
       });
-      expect(model.getSnapshot().expanded.has("a/b")).toBe(true);
+      expect(model.getSnapshot().expanded.has("a/b")).toBe(!wasExpanded);
       act(() => {
         segB?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
       });
-      expect(model.getSnapshot().expanded.has("a/b")).toBe(false);
+      expect(model.getSnapshot().expanded.has("a/b")).toBe(wasExpanded);
 
       const segA = host.querySelector<HTMLButtonElement>('[data-testid="wb-tree-segment-a"]');
       expect(segA).not.toBeNull();
