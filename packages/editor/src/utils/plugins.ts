@@ -7,7 +7,7 @@ import {
 import type { EditorPlugin } from "@singapore-editor/core/extensions";
 import type { EditorSyntaxLanguageId } from "@singapore-editor/core/syntax";
 import { createEditorFindPlugin } from "@singapore-editor/find";
-import { createFoldGutterPlugin } from "@singapore-editor/gutters/fold-gutter";
+import { createFoldGutterPlugin, type FoldGutterIcon } from "@singapore-editor/gutters/fold-gutter";
 import { createLineGutterPlugin } from "@singapore-editor/gutters/line-gutter";
 import {
   createHighlightingPlugin,
@@ -21,10 +21,37 @@ export interface WorkbenchEditorPluginOptions {
   readonly analysisAllowed?: boolean;
   /** Collapses the fold gutter to 0px on narrow/phone viewports while preserving line numbers. */
   readonly narrowViewport?: boolean;
+  /** Uses Singapore's built-in highlighting plugin when no custom `highlightingService` is supplied. */
+  readonly useDefaultHighlighting?: boolean;
   readonly highlightingService?: HighlightingService | null;
   readonly highlightingTheme?: HighlightingThemeSource;
+  readonly foldIcons?: {
+    readonly expandedIcon?: FoldGutterIcon;
+    readonly collapsedIcon?: FoldGutterIcon;
+  };
+  readonly includeMergeConflict?: boolean;
   readonly compareMergeConflict?: () => void;
   readonly extraPlugins?: readonly EditorPlugin[];
+}
+
+function buildSyntaxPlugins(
+  options: WorkbenchEditorPluginOptions,
+  analysisAllowed: boolean,
+): readonly EditorPlugin[] {
+  if (!analysisAllowed) return [];
+  if (options.highlightingService) {
+    return [
+      createHighlightingPlugin({
+        name: "workbench.syntax",
+        service: options.highlightingService,
+        theme: options.highlightingTheme,
+      }),
+    ];
+  }
+  if (options.useDefaultHighlighting) {
+    return [createHighlightingPlugin()];
+  }
+  return [];
 }
 
 /**
@@ -37,17 +64,9 @@ export function createWorkbenchEditorPlugins(
 ): readonly EditorPlugin[] {
   const analysisAllowed = options.analysisAllowed ?? true;
   const narrow = options.narrowViewport ?? false;
+  const includeMergeConflict = options.includeMergeConflict ?? true;
 
-  const syntaxPlugins: readonly EditorPlugin[] =
-    analysisAllowed && options.highlightingService
-      ? [
-          createHighlightingPlugin({
-            name: "workbench.syntax",
-            service: options.highlightingService,
-            theme: options.highlightingTheme,
-          }),
-        ]
-      : [];
+  const syntaxPlugins = buildSyntaxPlugins(options, analysisAllowed);
 
   const corePlugins: readonly EditorPlugin[] = [
     createLineGutterPlugin(),
@@ -57,16 +76,23 @@ export function createWorkbenchEditorPlugins(
 
   const analysisPlugins: readonly EditorPlugin[] = analysisAllowed
     ? [
-        createFoldGutterPlugin({ width: narrow ? 0 : 16 }),
-        createMergeConflictPlugin({ compare: options.compareMergeConflict }),
-        createBracketMatchPlugin({
-          style: { backgroundColor: "var(--wb-row-selected)" },
+        createFoldGutterPlugin({
+          width: narrow ? 0 : 16,
+          expandedIcon: options.foldIcons?.expandedIcon,
+          collapsedIcon: options.foldIcons?.collapsedIcon,
         }),
-        createOccurrenceHighlightPlugin({
-          style: { backgroundColor: "var(--wb-row-hover)" },
-        }),
-        createDocumentLinkPlugin(),
-      ]
+      ].concat(
+        includeMergeConflict ? [createMergeConflictPlugin({ compare: options.compareMergeConflict })] : [],
+        [
+          createBracketMatchPlugin({
+            style: { backgroundColor: "var(--wb-row-selected)" },
+          }),
+          createOccurrenceHighlightPlugin({
+            style: { backgroundColor: "var(--wb-row-hover)" },
+          }),
+          createDocumentLinkPlugin(),
+        ],
+      )
     : [];
 
   return syntaxPlugins.concat(corePlugins, analysisPlugins, options.extraPlugins ?? []);

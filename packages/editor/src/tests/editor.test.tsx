@@ -15,11 +15,13 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   buildWorkbenchEditorTheme,
   capOverscrollTop,
+  clampRestoredScroll,
   createWorkbenchEditorPlugins,
   DEFAULT_MAX_ANALYSIS_BYTES,
   documentFeatureTier,
   EditorTabBar,
   languageIdForPath,
+  languageLabelForPath,
 } from "../index";
 import {
   getDocumentDraft,
@@ -86,7 +88,19 @@ describe("@shaulavo/workbench-editor", () => {
     expect(languageIdForPath("src/App.tsx")).toBe("tsx");
     expect(languageIdForPath("Dockerfile")).toBe("dockerfile");
     expect(languageIdForPath("README.md")).toBe("markdown");
+    expect(languageIdForPath("src/Page.svelte")).toBe("svelte");
+    expect(languageIdForPath("src/App.vue")).toBe("html");
     expect(languageIdForPath("notes.unknown")).toBeNull();
+    expect(languageIdForPath("file.__proto__")).toBeNull();
+    expect(languageIdForPath("file.constructor")).toBeNull();
+    expect(languageLabelForPath("src/App.tsx")).toBe("TypeScript JSX");
+    expect(languageLabelForPath("src/App.vue")).toBe("Vue");
+    expect(languageLabelForPath("notes.unknown")).toBe("Plain Text");
+    expect(languageLabelForPath("file.__proto__")).toBe("Plain Text");
+    expect(languageLabelForPath("file.constructor")).toBe("Plain Text");
+
+    expect(clampRestoredScroll({ left: 0, top: 1100 }, 1200, 400)).toEqual({ left: 0, top: 800 });
+    expect(clampRestoredScroll({ left: 4, top: 200 }, 1200, 400)).toEqual({ left: 4, top: 200 });
 
     const normal = documentFeatureTier(4096);
     expect(normal.analysisAllowed).toBe(true);
@@ -103,12 +117,357 @@ describe("@shaulavo/workbench-editor", () => {
     expect(capOverscrollTop(1100, fakeSnap)).toBe(800);
     expect(capOverscrollTop(300, fakeSnap)).toBe(300);
 
-    const fullPlugins = createWorkbenchEditorPlugins({ analysisAllowed: true, narrowViewport: false });
+    const fullPlugins = createWorkbenchEditorPlugins({
+      analysisAllowed: true,
+      narrowViewport: false,
+      useDefaultHighlighting: true,
+    });
     const degradedPlugins = createWorkbenchEditorPlugins({ analysisAllowed: false, narrowViewport: true });
     expect(fullPlugins.length).toBeGreaterThan(degradedPlugins.length);
 
     const theme = buildWorkbenchEditorTheme(null);
     expect(theme.syntax?.keyword).toBe("var(--wb-syn-keyword)");
+  });
+
+  it("disambiguates duplicate tab labels, handles Delete/arrow navigation, and reorders via non-touch pointer drag", () => {
+    const tabs: readonly EditorTabDescriptor[] = [
+      {
+        id: "src/a/index.ts",
+        documentId: "src/a/index.ts",
+        kind: "file",
+        path: "src/a/index.ts",
+        label: "index.ts",
+        title: "src/a/index.ts",
+        tone: "ts",
+      },
+      {
+        id: "src/b/index.ts",
+        documentId: "src/b/index.ts",
+        kind: "file",
+        path: "src/b/index.ts",
+        label: "index.ts",
+        title: "src/b/index.ts",
+        missing: true,
+      },
+    ];
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const onReorder = vi.fn();
+    const host = mount(
+      <EditorTabBar
+        groupId="main"
+        tabs={tabs}
+        selectedTabId="src/a/index.ts"
+        onSelectTab={onSelect}
+        onCloseTab={onClose}
+        onReorderTab={onReorder}
+      />,
+    );
+
+    const hints = Array.from(host.querySelectorAll(".wb-tab-hint"), (el) => el.textContent);
+    expect(hints).toEqual(["src/a", "src/b"]);
+    const tabEls = Array.from(host.querySelectorAll<HTMLElement>("[data-wb-tab]"));
+    expect(tabEls[0]?.getAttribute("data-tab-tone")).toBe("ts");
+    expect(tabEls[1]?.getAttribute("data-missing")).toBe("true");
+
+    // ArrowRight moves focus to the next tab; Delete closes it.
+    const buttons = Array.from(host.querySelectorAll<HTMLButtonElement>('button[role="tab"]'));
+    buttons[0]?.focus();
+    act(() => {
+      buttons[0]?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true }));
+    });
+    expect(document.activeElement).toBe(buttons[1]);
+    act(() => {
+      buttons[1]?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onClose).toHaveBeenCalledWith("main", "src/b/index.ts");
+
+    // Mouse drag reorders past threshold and suppresses trailing click.
+    tabEls[0]!.getBoundingClientRect = () => ({
+      left: 0,
+      right: 100,
+      width: 100,
+      top: 0,
+      bottom: 32,
+      height: 32,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    tabEls[1]!.getBoundingClientRect = () => ({
+      left: 100,
+      right: 200,
+      width: 100,
+      top: 0,
+      bottom: 32,
+      height: 32,
+      x: 100,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          pointerType: "mouse",
+          clientX: 50,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 1, pointerType: "mouse", clientX: 180 }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 1, pointerType: "mouse", clientX: 180 }),
+      );
+      buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    });
+    expect(onReorder).toHaveBeenCalledWith("main", 0, 1, "src/a/index.ts");
+    expect(onSelect).not.toHaveBeenCalled();
+
+    // Touch pointerdown -> click resolves shouldFocusEditor: false even when click lacks pointerType.
+    act(() => {
+      tabEls[1]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 2,
+          pointerType: "touch",
+          clientX: 120,
+        }),
+      );
+      buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
+    });
+    expect(onSelect).toHaveBeenCalledWith("main", "src/b/index.ts", {
+      shouldFocusEditor: false,
+      origin: "touch",
+    });
+
+    // Dragging and releasing outside the strip must NOT swallow subsequent keyboard activation (detail === 0).
+    onSelect.mockClear();
+    onReorder.mockClear();
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 3,
+          pointerType: "mouse",
+          clientX: 50,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 3,
+          pointerType: "mouse",
+          clientX: 180,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 3,
+          pointerType: "mouse",
+          clientX: 180,
+        }),
+      );
+      // Keyboard Enter emits a synthetic click with detail === 0 without any pointer click on the tab.
+      buttons[1]?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 0 }));
+    });
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(onSelect).toHaveBeenCalledWith(
+      "main",
+      "src/b/index.ts",
+      expect.objectContaining({ shouldFocusEditor: true }),
+    );
+  });
+
+  it("cancels active tab drag when groupId changes and handles delayed host reorders accurately", () => {
+    const tabs: readonly EditorTabDescriptor[] = [
+      { id: "a", documentId: "a", kind: "file", path: "a.ts", label: "a.ts", title: "a.ts" },
+      { id: "b", documentId: "b", kind: "file", path: "b.ts", label: "b.ts", title: "b.ts" },
+      { id: "c", documentId: "c", kind: "file", path: "c.ts", label: "c.ts", title: "c.ts" },
+    ];
+    const onSelect = vi.fn();
+    const onClose = vi.fn();
+    const onReorder = vi.fn();
+
+    const host = mount(
+      <EditorTabBar
+        groupId="g1"
+        tabs={tabs}
+        selectedTabId="a"
+        onSelectTab={onSelect}
+        onCloseTab={onClose}
+        onReorderTab={onReorder}
+      />,
+    );
+
+    const mockRects = (container: HTMLElement) => {
+      const els = Array.from(container.querySelectorAll<HTMLElement>("[data-wb-tab]"));
+      els.forEach((el, idx) => {
+        el.getBoundingClientRect = () => ({
+          left: idx * 100,
+          right: (idx + 1) * 100,
+          width: 100,
+          top: 0,
+          bottom: 32,
+          height: 32,
+          x: idx * 100,
+          y: 0,
+          toJSON: () => ({}),
+        });
+      });
+      return els;
+    };
+
+    const tabEls = mockRects(host);
+    // Drag A past C, then back between B and C, then drop: emits exactly ONE reorder (0 -> 1, "a").
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 10,
+          pointerType: "mouse",
+          clientX: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 10,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 10,
+          pointerType: "mouse",
+          clientX: 180,
+        }),
+      );
+    });
+    expect(onReorder).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 10,
+          pointerType: "mouse",
+          clientX: 180,
+        }),
+      );
+    });
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenCalledWith("g1", 0, 1, "a");
+
+    // Dragging A past C and returning it to slot 0 before dropping emits zero reorders.
+    onReorder.mockClear();
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 30,
+        }),
+      );
+    });
+    expect(onReorder).not.toHaveBeenCalled();
+
+    // Changing groupId while dragging cancels the gesture instead of emitting a reorder for g2.
+    onReorder.mockClear();
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+      activeRoot?.render(
+        <WorkbenchPortalProvider>
+          <EditorTabBar
+            groupId="g2"
+            tabs={tabs}
+            selectedTabId="a"
+            onSelectTab={onSelect}
+            onCloseTab={onClose}
+            onReorderTab={onReorder}
+          />
+        </WorkbenchPortalProvider>,
+      );
+    });
+    mockRects(host);
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+    });
+    expect(onReorder).not.toHaveBeenCalled();
+
+    // Returning to g1 after the cancelled drag must NOT resurrect stale data-dragging styling on tab A.
+    act(() => {
+      activeRoot?.render(
+        <WorkbenchPortalProvider>
+          <EditorTabBar
+            groupId="g1"
+            tabs={tabs}
+            selectedTabId="a"
+            onSelectTab={onSelect}
+            onCloseTab={onClose}
+            onReorderTab={onReorder}
+          />
+        </WorkbenchPortalProvider>,
+      );
+    });
+    const restoredA = host.querySelector<HTMLElement>('[data-wb-tab][data-tab-id="a"]');
+    expect(restoredA?.getAttribute("data-dragging")).toBeNull();
   });
 
   it("enforces per-activation touch focus policy in EditorTabBar and dismisses focused inputs on touch", () => {

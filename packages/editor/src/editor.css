@@ -44,6 +44,11 @@
     overflow: hidden;
   }
 
+  .wb-editor-view[data-status="empty"] .wb-editor-surface {
+    visibility: hidden;
+    pointer-events: none;
+  }
+
   .wb-editor-banner {
     display: flex;
     align-items: center;

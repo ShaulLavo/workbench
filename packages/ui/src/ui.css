@@ -522,6 +522,14 @@
     display: none;
   }
 
+  .wb-tab-strip-content {
+    display: flex;
+    flex: none;
+    align-items: stretch;
+    min-width: 100%;
+    width: max-content;
+  }
+
   .wb-tab-strip-actions {
     display: flex;
     align-items: center;
@@ -572,6 +580,24 @@
 
   .wb-tab[data-preview="true"] .wb-tab-label {
     font-style: italic;
+  }
+
+  .wb-tab[data-missing="true"] .wb-tab-label {
+    color: var(--wb-danger);
+    text-decoration: line-through;
+  }
+
+  .wb-tab[data-dragging="true"] {
+    z-index: 1;
+    background: var(--wb-row-hover);
+    opacity: 0.85;
+  }
+
+  .wb-tab-hint {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    color: var(--wb-fg-subtle);
+    font-size: var(--wb-text-2xs);
   }
 
   .wb-tab-trigger:focus-visible {

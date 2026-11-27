@@ -3,7 +3,11 @@ import type { LspManagedTransport } from "@singapore-editor/lsp";
 import {
   createLanguageServerAdapterPlugin,
   type LanguageServerAdapterPluginOptions,
+  type LanguageServerConnectionContext,
+  type LanguageServerDocumentSyncOptions,
   type LanguageServerPlugin,
+  type LspConnectionProvider,
+  type LspReconnectOptions,
 } from "@singapore-editor/lsp-plugin";
 
 /**
@@ -19,6 +23,10 @@ export interface WorkbenchLspPluginOptions {
   readonly languageId: string;
   readonly rootUri: string;
   readonly name?: string;
+  readonly reconnect?: LspReconnectOptions;
+  readonly connectionProvider?: LspConnectionProvider;
+  readonly documentSync?: LanguageServerDocumentSyncOptions;
+  readonly onConnected?: (context: LanguageServerConnectionContext) => void;
   readonly onDiagnostics?: LanguageServerAdapterPluginOptions["onDiagnostics"];
   readonly onDidNavigateDiagnostic?: LanguageServerAdapterPluginOptions["onDidNavigateDiagnostic"];
   readonly onStatusChange?: LanguageServerAdapterPluginOptions["onStatusChange"];
@@ -26,7 +34,8 @@ export interface WorkbenchLspPluginOptions {
 
 /**
  * Bridges a `SingaporeLspAdapter` onto `@singapore-editor/lsp-plugin`'s adapter plugin,
- * forwarding definition navigation through `adapter.openLocation` with explicit focus policy.
+ * forwarding connection pooling, reconnect backoff, document sync, connection callbacks, and
+ * definition navigation through `adapter.openLocation` with explicit focus policy.
  */
 export function createWorkbenchLspPlugin(options: WorkbenchLspPluginOptions): LanguageServerPlugin {
   const { adapter, languageId, rootUri } = options;
@@ -40,8 +49,12 @@ export function createWorkbenchLspPlugin(options: WorkbenchLspPluginOptions): La
       }
       return transport;
     },
-    onConnected: () => {
+    reconnect: options.reconnect,
+    connectionProvider: options.connectionProvider,
+    documentSync: options.documentSync,
+    onConnected: (context) => {
       adapter.onConnected?.(languageId);
+      options.onConnected?.(context);
     },
     onStatusChange: options.onStatusChange,
     onDiagnostics: options.onDiagnostics,
