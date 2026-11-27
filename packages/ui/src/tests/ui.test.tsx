@@ -380,9 +380,23 @@ describe("@shaulavo/workbench-ui", () => {
     const items = Array.from({ length: 100 }, (_, i) => ({ id: `item-${i}`, label: `Row ${i}` }));
     const origRect = HTMLElement.prototype.getBoundingClientRect;
     const origScrollTo = HTMLElement.prototype.scrollTo;
+    const origResizeObserver = globalThis.ResizeObserver;
     const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
     const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
     const origScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    const observedRows = new Set<Element>();
+    class TrackingResizeObserver {
+      observe(target: Element): void {
+        if (target.classList.contains("wb-virtual-list-row")) observedRows.add(target);
+      }
+      unobserve(target: Element): void {
+        observedRows.delete(target);
+      }
+      disconnect(): void {
+        observedRows.clear();
+      }
+    }
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver;
     HTMLElement.prototype.scrollTo = function mockScrollTo(arg?: ScrollToOptions | number, y?: number) {
       if (typeof arg === "number") {
         this.scrollTop = y ?? 0;
@@ -508,6 +522,7 @@ describe("@shaulavo/workbench-ui", () => {
       const measuredRowNode = flowHost.querySelector<HTMLDivElement>(
         '.wb-virtual-list-row[data-layout="absolute"]',
       );
+      expect(observedRows.size).toBeGreaterThan(0);
       act(() => {
         activeRoot?.render(
           <VirtualList
@@ -525,6 +540,7 @@ describe("@shaulavo/workbench-ui", () => {
         '.wb-virtual-list-row[data-layout="absolute"]',
       );
       expect(absOffRows[0]).not.toBe(measuredRowNode);
+      expect(observedRows.size).toBe(0);
       expect(absOffRows[1]?.style.transform).toBe("translateY(26px)");
 
       act(() => {
@@ -562,6 +578,7 @@ describe("@shaulavo/workbench-ui", () => {
     } finally {
       HTMLElement.prototype.getBoundingClientRect = origRect;
       HTMLElement.prototype.scrollTo = origScrollTo;
+      globalThis.ResizeObserver = origResizeObserver;
       if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
       if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
       if (origScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", origScrollHeight);

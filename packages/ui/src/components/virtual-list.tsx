@@ -199,8 +199,10 @@ export function VirtualList<T>({
     if (layout === "flow") {
       node.style.height = "";
     }
+    // React runs ref cleanup before detaching row nodes; sweep once committed so every unmounted row is unobserved.
+    virtualizer.measureElement(null);
     virtualizer.containerRef(effectiveDirectDom ? node : null);
-  }, [layout, effectiveDirectDom, virtualizer]);
+  }, [layout, effectiveDirectDom, measureItems, virtualizer]);
 
   useLayoutEffect(() => {
     virtualizer.measure();

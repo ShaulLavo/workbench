@@ -150,6 +150,8 @@ export function FileTreeViewport({
   }, []);
 
   useLayoutEffect(() => {
+    // React runs ref cleanup before detaching slot nodes; sweep once committed so unmounted slots are unobserved.
+    virtualizer.measureElement(null);
     virtualizer.containerRef(directDomUpdates ? canvasRef.current : null);
   }, [directDomUpdates, virtualizer]);
 
