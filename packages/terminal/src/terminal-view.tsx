@@ -140,6 +140,117 @@ function isHostedHotkeyScope(
   );
 }
 
+export interface TerminalHotkeyBindingOptions {
+  readonly hotkeys: HotkeyAdapter | undefined;
+  readonly getScreenReader: () => boolean;
+  readonly getOnError: () => ((cause: unknown, operation: string) => void) | undefined;
+}
+
+/** Attaches hosted or standalone Ghostty hotkeys with live screen-reader and error forwarding. */
+export function attachConfiguredTerminalHotkeys(
+  terminal: Terminal,
+  options: TerminalHotkeyBindingOptions,
+): (() => void) | null {
+  if (!options.hotkeys) return null;
+  const parentScope = options.hotkeys.getTerminalParentScope?.();
+  const onError = (cause: unknown, operation: string): void => {
+    const handler = options.getOnError();
+    if (handler) {
+      handler(cause, operation);
+      return;
+    }
+    console.error(operation, cause);
+  };
+  const screenReaderMode = (): boolean => options.getScreenReader();
+  const conn = isHostedHotkeyScope(parentScope)
+    ? attachTerminalHotkeys(terminal, {
+        mode: "hosted",
+        dispatcher: parentScope.dispatcher,
+        parent: parentScope.parent,
+        platform: detectPlatform(),
+        screenReaderMode,
+        onError,
+      })
+    : attachTerminalHotkeys(terminal, {
+        mode: "standalone",
+        platform: detectPlatform(),
+        screenReaderMode,
+        onError,
+      });
+  return () => conn.dispose();
+}
+
+interface TerminalContextMenuProps {
+  readonly open: boolean;
+  readonly x: number;
+  readonly y: number;
+  readonly selectionText: string;
+  readonly extraItems?: readonly ContextMenuItem[];
+  readonly onOpenChange: (open: boolean) => void;
+  readonly onCopy: (text: string) => void;
+  readonly onPaste: () => void;
+  readonly onSelectAll: () => void;
+  readonly onClear: () => void;
+}
+
+function TerminalContextMenu({
+  open,
+  x,
+  y,
+  selectionText,
+  extraItems,
+  onOpenChange,
+  onCopy,
+  onPaste,
+  onSelectAll,
+  onClear,
+}: TerminalContextMenuProps) {
+  const baseItems: readonly ContextMenuItem[] = [
+    {
+      id: "copy",
+      label: "Copy",
+      hint: "⌘C",
+      disabled: selectionText.length === 0,
+      testId: "wb-term-ctx-copy",
+      onSelect: () => {
+        if (selectionText) onCopy(selectionText);
+      },
+    },
+    {
+      id: "paste",
+      label: "Paste",
+      hint: "⌘V",
+      testId: "wb-term-ctx-paste",
+      onSelect: onPaste,
+    },
+    {
+      id: "select-all",
+      label: "Select all",
+      separatorBefore: true,
+      testId: "wb-term-ctx-select-all",
+      onSelect: onSelectAll,
+    },
+    {
+      id: "clear",
+      label: "Clear terminal",
+      separatorBefore: true,
+      testId: "wb-term-ctx-clear",
+      onSelect: onClear,
+    },
+  ];
+  const items = extraItems ? baseItems.concat(extraItems) : baseItems;
+  return (
+    <PointContextMenu
+      open={open}
+      x={x}
+      y={y}
+      items={items}
+      label="Terminal actions"
+      onOpenChange={onOpenChange}
+    />
+  );
+}
+
 function isSafeExternalUri(uri: string): boolean {
   try {
     const parsed = new URL(uri);
@@ -307,7 +418,14 @@ export function TerminalView({
   const attachmentRef = useRef<TerminalAttachment | null>(null);
   const inputReadyRef = useRef(false);
   const focusedRef = useRef(false);
+  const activeRef = useRef(active);
+  const pasteGenerationRef = useRef(0);
   const latestScrollRef = useRef<TerminalSavedScroll | null>(null);
+
+  useLayoutEffect(() => {
+    activeRef.current = active;
+    if (!active) pasteGenerationRef.current += 1;
+  }, [active]);
 
   const propsRef = useRef({
     adapter,
@@ -508,33 +626,11 @@ export function TerminalView({
       terminal.setAccessibilityEnabled(propsRef.current.screenReader);
       terminal.textarea?.setAttribute("aria-label", propsRef.current.accessibilityLabel ?? "Terminal input");
 
-      if (propsRef.current.hotkeys) {
-        const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
-        const handleHotkeyError = (cause: unknown, operation: string): void => {
-          if (propsRef.current.onHotkeyError) {
-            propsRef.current.onHotkeyError(cause, operation);
-            return;
-          }
-          console.error(operation, cause);
-        };
-        const screenReaderMode = (): boolean => propsRef.current.screenReader;
-        const conn = isHostedHotkeyScope(parentScope)
-          ? attachTerminalHotkeys(terminal, {
-              mode: "hosted",
-              dispatcher: parentScope.dispatcher,
-              parent: parentScope.parent,
-              platform: detectPlatform(),
-              screenReaderMode,
-              onError: handleHotkeyError,
-            })
-          : attachTerminalHotkeys(terminal, {
-              mode: "standalone",
-              platform: detectPlatform(),
-              screenReaderMode,
-              onError: handleHotkeyError,
-            });
-        hotkeyCleanup = () => conn.dispose();
-      }
+      hotkeyCleanup = attachConfiguredTerminalHotkeys(terminal, {
+        hotkeys: propsRef.current.hotkeys,
+        getScreenReader: () => propsRef.current.screenReader,
+        getOnError: () => propsRef.current.onHotkeyError,
+      });
 
       if (adapter.resolveFileLink && adapter.openFileLink) {
         const resolveFileLink = adapter.resolveFileLink.bind(adapter);
@@ -763,72 +859,43 @@ export function TerminalView({
     });
   }
 
-  const menuItems: readonly ContextMenuItem[] = [
-    {
-      id: "copy",
-      label: "Copy",
-      hint: "⌘C",
-      disabled: contextMenu.selectionText.length === 0,
-      testId: "wb-term-ctx-copy",
-      onSelect: () => {
-        if (contextMenu.selectionText) {
-          void writeClipboardText(contextMenu.selectionText);
-        }
-      },
-    },
-    {
-      id: "paste",
-      label: "Paste",
-      hint: "⌘V",
-      testId: "wb-term-ctx-paste",
-      onSelect: () => {
-        const targetTerminal = terminalRef.current;
-        const targetSessionId = propsRef.current.sessionId;
-        void pasteClipboardIntoTerminal({
-          targetTerminal,
-          getCurrentTerminal: () => terminalRef.current,
-          targetSessionId,
-          getCurrentSessionId: () => propsRef.current.sessionId,
-          isInputReady: () => inputReadyRef.current,
-          readClipboard: () =>
-            readClipboardWithFeedback(
-              () =>
-                !inputReadyRef.current ||
-                terminalRef.current !== targetTerminal ||
-                propsRef.current.sessionId !== targetSessionId,
-              propsRef.current.onPasteFailed,
-            ),
-        });
-      },
-    },
-    {
-      id: "select-all",
-      label: "Select all",
-      separatorBefore: true,
-      testId: "wb-term-ctx-select-all",
-      onSelect: () => {
-        terminalRef.current?.selectAll();
-      },
-    },
-    {
-      id: "clear",
-      label: "Clear terminal",
-      separatorBefore: true,
-      testId: "wb-term-ctx-clear",
-      onSelect: () => {
-        const terminal = terminalRef.current;
-        if (!terminal) return;
-        if (propsRef.current.onClear) {
-          propsRef.current.onClear(terminal, attachmentRef.current);
-          return;
-        }
-        terminal.reset();
-      },
-    },
-  ];
-  const allMenuItems: readonly ContextMenuItem[] = extraContextMenuItems
-    ? menuItems.concat(extraContextMenuItems)
-    : menuItems;
+  function handleMenuCopy(text: string): void {
+    void writeClipboardText(text);
+  }
+
+  function handleMenuPaste(): void {
+    const targetTerminal = terminalRef.current;
+    const targetSessionId = propsRef.current.sessionId;
+    const pasteGeneration = pasteGenerationRef.current;
+    const isStale = (): boolean =>
+      !activeRef.current ||
+      pasteGenerationRef.current !== pasteGeneration ||
+      !inputReadyRef.current ||
+      terminalRef.current !== targetTerminal ||
+      propsRef.current.sessionId !== targetSessionId;
+    void pasteClipboardIntoTerminal({
+      targetTerminal,
+      getCurrentTerminal: () => terminalRef.current,
+      targetSessionId,
+      getCurrentSessionId: () => propsRef.current.sessionId,
+      isInputReady: () => !isStale(),
+      readClipboard: () => readClipboardWithFeedback(isStale, propsRef.current.onPasteFailed),
+    });
+  }
+
+  function handleMenuSelectAll(): void {
+    terminalRef.current?.selectAll();
+  }
+
+  function handleMenuClear(): void {
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    if (propsRef.current.onClear) {
+      propsRef.current.onClear(terminal, attachmentRef.current);
+      return;
+    }
+    terminal.reset();
+  }
 
   return (
     <div
@@ -872,13 +939,17 @@ export function TerminalView({
         />
       ) : null}
       {!disableContextMenu ? (
-        <PointContextMenu
+        <TerminalContextMenu
           open={contextMenu.open}
           x={contextMenu.x}
           y={contextMenu.y}
-          items={allMenuItems}
-          label="Terminal actions"
+          selectionText={contextMenu.selectionText}
+          extraItems={extraContextMenuItems}
           onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
+          onCopy={handleMenuCopy}
+          onPaste={handleMenuPaste}
+          onSelectAll={handleMenuSelectAll}
+          onClear={handleMenuClear}
         />
       ) : null}
     </div>
