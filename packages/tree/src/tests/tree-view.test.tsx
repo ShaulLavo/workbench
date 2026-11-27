@@ -4,6 +4,7 @@ import type {
   DirectoryLoadState,
   FileSystemAdapter,
   FileTreeGitState,
+  LazyInvalidationEvent,
   Subscribable,
 } from "@shaulavo/workbench-core";
 import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
@@ -1030,14 +1031,7 @@ describe("@shaulavo/workbench-tree React view", () => {
         { name: "second.ts", kind: "file" },
       ],
     });
-    const invListeners = new Set<
-      (event: {
-        readonly reset: boolean;
-        readonly directories: readonly string[];
-        readonly moves: readonly [];
-        readonly removed: readonly [];
-      }) => void
-    >();
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
     const onPartialError = vi.fn();
     const partialAdapter: FileSystemAdapter = {
       workspaceId: "test-partial-reset",
@@ -1046,8 +1040,8 @@ describe("@shaulavo/workbench-tree React view", () => {
         getDirectoryState: () => rootState,
         loadDirectory: async () => {},
         subscribeInvalidation(listener) {
-          invListeners.add(listener as never);
-          return () => invListeners.delete(listener as never);
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
         },
       },
       listFiles: async () => [],
