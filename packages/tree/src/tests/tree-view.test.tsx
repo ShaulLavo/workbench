@@ -47,6 +47,76 @@ function mount(element: React.ReactElement): HTMLDivElement {
   return activeHost;
 }
 
+function rerender(element: React.ReactElement): void {
+  act(() => {
+    activeRoot?.render(<WorkbenchPortalProvider>{element}</WorkbenchPortalProvider>);
+  });
+}
+
+function createDeferredClosedDirAdapter() {
+  const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+  const closedDeferred = Promise.withResolvers<void>();
+  let closedLoads = 0;
+
+  function getSlot(dir: string) {
+    let slot = slots.get(dir);
+    if (!slot) {
+      slot = { state: { status: "idle" }, listeners: new Set() };
+      slots.set(dir, slot);
+    }
+    return slot;
+  }
+
+  function setSlotState(dir: string, nextState: DirectoryLoadState): void {
+    const slot = getSlot(dir);
+    slot.state = nextState;
+    for (const listener of slot.listeners) listener();
+  }
+
+  async function loadDirectory(dirPath: string): Promise<void> {
+    if (dirPath === "") {
+      setSlotState("", { status: "loaded", entries: [{ name: "closed", kind: "directory" }] });
+      return;
+    }
+    if (dirPath !== "closed") return;
+    closedLoads += 1;
+    setSlotState("closed", { status: "loading" });
+    await closedDeferred.promise;
+    setSlotState("closed", { status: "loaded", entries: [{ name: "needle.txt", kind: "file" }] });
+  }
+
+  const adapter: FileSystemAdapter = {
+    workspaceId: "ws-inline-onerror",
+    writable: { getSnapshot: () => true, subscribe: () => () => {} },
+    listFiles: async () => ["closed/needle.txt"],
+    readText: async () => "",
+    createFile: async () => {},
+    createDirectory: async () => {},
+    move: async () => {},
+    remove: async () => {},
+    lazy: {
+      getDirectoryState(dirPath) {
+        const slot = getSlot(dirPath);
+        return {
+          getSnapshot: () => slot.state,
+          subscribe(listener) {
+            slot.listeners.add(listener);
+            return () => slot.listeners.delete(listener);
+          },
+        };
+      },
+      loadDirectory,
+      subscribeInvalidation: () => () => {},
+    },
+  };
+
+  return {
+    adapter,
+    getClosedLoads: () => closedLoads,
+    resolveClosed: () => closedDeferred.resolve(),
+  };
+}
+
 beforeEach(() => {
   heightSpy = vi.spyOn(HTMLElement.prototype, "clientHeight", "get").mockReturnValue(360);
   widthSpy = vi.spyOn(HTMLElement.prototype, "clientWidth", "get").mockReturnValue(280);
@@ -1865,5 +1935,44 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(reloaded).toEqual(["", "area", "area/inner"]);
     expect(host.querySelector('[data-testid="wb-tree-row-area/inner/fresh.txt"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).toBeNull();
+  });
+
+  it("keeps pending lazy rename active when parent re-renders with a fresh inline onError callback", async () => {
+    const { adapter, getClosedLoads, resolveClosed } = createDeferredClosedDirAdapter();
+    const model = new FileTreeModel({ compactFolders: true });
+    const handleRef: { current: FileTreeViewHandle | null } = { current: null };
+    const firstOnError = vi.fn();
+    const secondOnError = vi.fn();
+
+    const host = mount(
+      <FileTreeView model={model} adapter={adapter} handleRef={handleRef} onError={firstOnError} />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      handleRef.current?.startRename("closed/needle.txt");
+      await Promise.resolve();
+    });
+    expect(getClosedLoads()).toBe(1);
+
+    // Re-rendering with a distinct onError callback mid-load must not cancel or restart rename loading.
+    rerender(<FileTreeView model={model} adapter={adapter} handleRef={handleRef} onError={secondOnError} />);
+    expect(getClosedLoads()).toBe(1);
+
+    await act(async () => {
+      resolveClosed();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(getClosedLoads()).toBe(1);
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/needle.txt" });
+    expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
   });
 });

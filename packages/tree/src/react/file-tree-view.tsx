@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useEffectEvent,
   useImperativeHandle,
   useLayoutEffect,
   useRef,
@@ -374,6 +375,10 @@ export function FileTreeView({
     return true;
   }
 
+  const emitError = useEffectEvent((message: string, error: unknown) => {
+    onError?.(message, error);
+  });
+
   useEffect(() => {
     if (!pendingRename) return;
     const bound = boundRef.current;
@@ -399,7 +404,7 @@ export function FileTreeView({
         }
         if (model.index.hasPath(path)) startModelRename(model, path);
       } catch (error) {
-        if (!cancelled) onError?.(`Unable to rename ${baseName(path)}`, error);
+        if (!cancelled) emitError(`Unable to rename ${baseName(path)}`, error);
       }
       if (!cancelled) {
         setPendingRename((current) => (current?.seq === seq ? null : current));
@@ -408,7 +413,7 @@ export function FileTreeView({
     return () => {
       cancelled = true;
     };
-  }, [pendingRename, adapter, model, onError]);
+  }, [pendingRename, adapter, model]);
 
   function beginCreate(parent: string, kind: "file" | "directory"): void {
     if (!writable) return;
