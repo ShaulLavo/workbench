@@ -10,6 +10,7 @@ import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
 import type { LinkProvider, Terminal, TerminalTheme } from "ghostty-webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
+  applyTerminalAppearanceToInstance,
   applyTerminalStreamEvent,
   buildGhosttyTheme,
   controlKeyFor,
@@ -17,9 +18,11 @@ import {
   parseTerminalFileReference,
   pasteClipboardIntoTerminal,
   registerTerminalFileLinks,
+  resolveTerminalAppearance,
   TerminalAccessoryBar,
   terminalCursorOptions,
   TerminalPanel,
+  TerminalView,
 } from "../index";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -561,5 +564,117 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(onProcessChange).toHaveBeenCalledWith("vite");
     expect(onTitleChange).toHaveBeenCalledWith("dev server");
     expect(onExit).toHaveBeenCalledWith(0);
+  });
+
+  it("propagates themeOverride lineHeight and delegates runtime creation to custom loadRuntime", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    try {
+      const resolved = resolveTerminalAppearance(host, {
+        override: {
+          colorScheme: "dark",
+          background: { r: 0, g: 0, b: 0 },
+          foreground: { r: 255, g: 255, b: 255 },
+          cursor: { r: 255, g: 255, b: 255 },
+          cursorAccent: { r: 10, g: 10, b: 10 },
+          selectionBackground: { r: 60, g: 60, b: 60 },
+          selectionForeground: { r: 255, g: 255, b: 255 },
+          ansi: Array.from({ length: 16 }, () => ({ r: 128, g: 128, b: 128 })),
+          backgroundOpacity: 0,
+          lineHeight: 1,
+        },
+      });
+      expect(resolved.lineHeight).toBe(1);
+      expect(resolved.backgroundOpacity).toBe(0);
+      const setAppearance = vi.fn();
+      const fakeTerm = {
+        appearance: { theme: { palette: Array.from({ length: 16 }, () => ({ r: 0, g: 0, b: 0 })) } },
+        setAppearance,
+      };
+      applyTerminalAppearanceToInstance(fakeTerm as never, resolved, true);
+      expect(setAppearance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backgroundOpacity: 0,
+          font: expect.objectContaining({ lineHeight: 1 }),
+        }),
+      );
+    } finally {
+      host.remove();
+    }
+
+    const loadRuntime = vi.fn((_signal: AbortSignal) => Promise.reject(new Error("custom runtime loader")));
+    const onError = vi.fn();
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([
+        { id: "s1", title: "bash", status: "ready" },
+      ]),
+      activeId: createSubscribable<string | undefined>("s1"),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s2",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    mount(<TerminalView adapter={adapter} sessionId="s1" loadRuntime={loadRuntime} onError={onError} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(loadRuntime).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("custom runtime loader", expect.any(Error));
+  });
+
+  it("aborts custom loadRuntime on unmount and suppresses late rejection errors", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let rejectDeferred: ((reason?: unknown) => void) | undefined;
+    const deferredLoadRuntime = vi.fn((signal: AbortSignal) => {
+      capturedSignal = signal;
+      return new Promise<never>((_resolve, reject) => {
+        rejectDeferred = reject;
+      });
+    });
+    const onAbortedError = vi.fn();
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([
+        { id: "s1", title: "bash", status: "ready" },
+      ]),
+      activeId: createSubscribable<string | undefined>("s1"),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s2",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    mount(
+      <TerminalView
+        adapter={adapter}
+        sessionId="s1"
+        loadRuntime={deferredLoadRuntime}
+        onError={onAbortedError}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+    act(() => {
+      activeRoot?.unmount();
+      activeRoot = null;
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+    rejectDeferred?.(new Error("aborted after unmount"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onAbortedError).not.toHaveBeenCalled();
   });
 });

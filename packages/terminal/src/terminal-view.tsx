@@ -20,7 +20,7 @@ import {
 } from "@shaulavo/workbench-core";
 import { observeWorkbenchTheme, type ThemeVersionSource } from "@shaulavo/workbench-tokens";
 import { cx, PointContextMenu, type ContextMenuItem } from "@shaulavo/workbench-ui";
-import { Terminal, type GhosttyWebGpuTerminalSubscription } from "ghostty-webgpu";
+import { Terminal, type GhosttyRuntime, type GhosttyWebGpuTerminalSubscription } from "ghostty-webgpu";
 import { attachTerminalHotkeys } from "ghostty-webgpu/hotkeys";
 import { registerTerminalFileLinks } from "./links";
 import { getSharedGhosttyRuntime } from "./runtime";
@@ -54,6 +54,10 @@ export interface TerminalViewProps {
   /** `"auto"` uses `"outline"` on desktop viewports and solid cursor on phones. */
   readonly cursorInactiveStyle?: "outline" | "block" | "bar" | "underline" | "none" | "auto";
   readonly hotkeys?: HotkeyAdapter;
+  readonly onHotkeyError?: (cause: unknown, operation: string) => void;
+  /** Optional custom Ghostty runtime loader (e.g. TanStack Query-backed runtime with page lifecycle). */
+  readonly loadRuntime?: (signal: AbortSignal) => Promise<GhosttyRuntime>;
+  readonly onPasteFailed?: (reason: "unavailable" | "denied") => void;
   readonly showAccessoryBar?: boolean;
   readonly disableContextMenu?: boolean;
   readonly extraContextMenuItems?: readonly ContextMenuItem[];
@@ -107,15 +111,20 @@ async function writeClipboardText(text: string): Promise<void> {
   }
 }
 
-async function readClipboardText(): Promise<string | null> {
-  if (typeof navigator !== "undefined" && navigator.clipboard?.readText) {
-    try {
-      return await navigator.clipboard.readText();
-    } catch {
-      return null;
-    }
+async function readClipboardWithFeedback(
+  isStale: () => boolean,
+  onPasteFailed: ((reason: "unavailable" | "denied") => void) | undefined,
+): Promise<string | null> {
+  if (typeof navigator === "undefined" || !navigator.clipboard?.readText) {
+    if (!isStale()) onPasteFailed?.("unavailable");
+    return null;
   }
-  return null;
+  try {
+    return await navigator.clipboard.readText();
+  } catch {
+    if (!isStale()) onPasteFailed?.("denied");
+    return null;
+  }
 }
 
 function isHostedHotkeyScope(
@@ -263,6 +272,9 @@ export function TerminalView({
   padding,
   cursorInactiveStyle,
   hotkeys,
+  onHotkeyError,
+  loadRuntime,
+  onPasteFailed,
   showAccessoryBar = false,
   disableContextMenu = false,
   extraContextMenuItems,
@@ -311,6 +323,9 @@ export function TerminalView({
     padding,
     cursorInactiveStyle,
     hotkeys,
+    onHotkeyError,
+    loadRuntime,
+    onPasteFailed,
     onTerminalReady,
     onAttached,
     onReadyChange,
@@ -339,6 +354,9 @@ export function TerminalView({
       padding,
       cursorInactiveStyle,
       hotkeys,
+      onHotkeyError,
+      loadRuntime,
+      onPasteFailed,
       onTerminalReady,
       onAttached,
       onReadyChange,
@@ -432,7 +450,9 @@ export function TerminalView({
       await waitForDocumentFonts();
       if (cancelled || signal.aborted) return;
 
-      const runtime = await getSharedGhosttyRuntime();
+      const runtime = propsRef.current.loadRuntime
+        ? await propsRef.current.loadRuntime(signal)
+        : await getSharedGhosttyRuntime();
       if (cancelled || signal.aborted) return;
 
       const current = propsRef.current;
@@ -490,16 +510,28 @@ export function TerminalView({
 
       if (propsRef.current.hotkeys) {
         const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
+        const handleHotkeyError = (cause: unknown, operation: string): void => {
+          if (propsRef.current.onHotkeyError) {
+            propsRef.current.onHotkeyError(cause, operation);
+            return;
+          }
+          console.error(operation, cause);
+        };
+        const screenReaderMode = (): boolean => propsRef.current.screenReader;
         const conn = isHostedHotkeyScope(parentScope)
           ? attachTerminalHotkeys(terminal, {
               mode: "hosted",
               dispatcher: parentScope.dispatcher,
               parent: parentScope.parent,
               platform: detectPlatform(),
+              screenReaderMode,
+              onError: handleHotkeyError,
             })
           : attachTerminalHotkeys(terminal, {
               mode: "standalone",
               platform: detectPlatform(),
+              screenReaderMode,
+              onError: handleHotkeyError,
             });
         hotkeyCleanup = () => conn.dispose();
       }
@@ -758,7 +790,14 @@ export function TerminalView({
           targetSessionId,
           getCurrentSessionId: () => propsRef.current.sessionId,
           isInputReady: () => inputReadyRef.current,
-          readClipboard: readClipboardText,
+          readClipboard: () =>
+            readClipboardWithFeedback(
+              () =>
+                !inputReadyRef.current ||
+                terminalRef.current !== targetTerminal ||
+                propsRef.current.sessionId !== targetSessionId,
+              propsRef.current.onPasteFailed,
+            ),
         });
       },
     },
@@ -786,8 +825,10 @@ export function TerminalView({
         terminal.reset();
       },
     },
-    ...(extraContextMenuItems ?? []),
   ];
+  const allMenuItems: readonly ContextMenuItem[] = extraContextMenuItems
+    ? menuItems.concat(extraContextMenuItems)
+    : menuItems;
 
   return (
     <div
@@ -835,7 +876,7 @@ export function TerminalView({
           open={contextMenu.open}
           x={contextMenu.x}
           y={contextMenu.y}
-          items={menuItems}
+          items={allMenuItems}
           label="Terminal actions"
           onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
         />
