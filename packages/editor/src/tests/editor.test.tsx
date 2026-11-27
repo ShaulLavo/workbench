@@ -450,6 +450,24 @@ describe("@shaulavo/workbench-editor", () => {
       );
     });
     expect(onReorder).not.toHaveBeenCalled();
+
+    // Returning to g1 after the cancelled drag must NOT resurrect stale data-dragging styling on tab A.
+    act(() => {
+      activeRoot?.render(
+        <WorkbenchPortalProvider>
+          <EditorTabBar
+            groupId="g1"
+            tabs={tabs}
+            selectedTabId="a"
+            onSelectTab={onSelect}
+            onCloseTab={onClose}
+            onReorderTab={onReorder}
+          />
+        </WorkbenchPortalProvider>,
+      );
+    });
+    const restoredA = host.querySelector<HTMLElement>('[data-wb-tab][data-tab-id="a"]');
+    expect(restoredA?.getAttribute("data-dragging")).toBeNull();
   });
 
   it("enforces per-activation touch focus policy in EditorTabBar and dismisses focused inputs on touch", () => {

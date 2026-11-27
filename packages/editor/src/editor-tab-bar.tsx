@@ -166,6 +166,12 @@ export function EditorTabBar({
     readonly tabId: TabId;
   } | null>(null);
 
+  const dragVisualValid =
+    dragVisual !== null && dragVisual.groupId === groupId && tabs.some((tab) => tab.id === dragVisual.tabId);
+  if (dragVisual !== null && !dragVisualValid) {
+    setDragVisual(null);
+  }
+
   useEffect(() => {
     tabsRef.current = tabs;
     groupIdRef.current = groupId;
