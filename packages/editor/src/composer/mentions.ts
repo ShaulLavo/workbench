@@ -38,10 +38,9 @@ const NEEDS_BRACKET_RE = /[\s)\]},;!?\\[\]]/;
  * `@[...]` escaping (`\\` and `\]`).
  */
 export function formatMentionToken(filePath: string): string {
-  const normalized = filePath.trim();
-  if (!normalized) return "";
-  if (!NEEDS_BRACKET_RE.test(normalized)) return `@${normalized}`;
-  const escaped = normalized.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+  if (filePath.length === 0) return "";
+  if (!NEEDS_BRACKET_RE.test(filePath)) return `@${filePath}`;
+  const escaped = filePath.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
   return `@[${escaped}]`;
 }
 

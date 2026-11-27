@@ -28,6 +28,7 @@ import {
   recordDocumentEdit,
   replaceDocumentDraftFromDisk,
   seedDocumentDraft,
+  subscribeDocumentDraft,
 } from "../utils/draft-store";
 import { applyTabPlacement, computeEdgeDropZone, listGroupNodes } from "../groups/index";
 import { DiagnosticPeek, diagnosticPeekPlacement, LspStatusBadge } from "../lsp/index";
@@ -356,7 +357,34 @@ describe("@shaulavo/workbench-editor", () => {
     expect(getDocumentDraft(adapter, "a.ts")?.revision).toBe("3");
     expect(isDraftDirty(getDocumentDraft(adapter, "a.ts")!)).toBe(false);
 
-    // Take-theirs replaces draft cleanly with authoritative disk text and bumps reloadSeq.
+    // Take-theirs cancels queued forced saves in flight and notifies split-pane subscribers in place.
+    const paneNotifications = vi.fn();
+    const unsubscribe = subscribeDocumentDraft(adapter, "a.ts", paneNotifications);
+
+    let releaseBlockedWrite: (() => void) | undefined;
+    let notifyBlockedStarted: (() => void) | undefined;
+    const blockedStarted = new Promise<void>((resolve) => {
+      notifyBlockedStarted = resolve;
+    });
+    const origWrite = adapter.writeIfUnchanged;
+    adapter.writeIfUnchanged = async (docId, text, expected) => {
+      writes.push({ docId, text, expected });
+      if (text === "stale-1") {
+        notifyBlockedStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseBlockedWrite = resolve;
+        });
+      }
+      return { written: true as const, nextRevision: "99" };
+    };
+
+    recordDocumentEdit(adapter, "a.ts", "stale-1");
+    const blockingSave = persistDocumentDraft(adapter, "a.ts", false, {});
+    await blockedStarted;
+    recordDocumentEdit(adapter, "a.ts", "stale-2");
+    const queuedForcedSave = persistDocumentDraft(adapter, "a.ts", true, {});
+
+    // Take theirs replaces draft in place -> notifies split pane & invalidates queuedForcedSave!
     const replaced = replaceDocumentDraftFromDisk(adapter, "a.ts", {
       text: "disk-v9",
       revision: "9",
@@ -365,6 +393,18 @@ describe("@shaulavo/workbench-editor", () => {
     expect(replaced.text).toBe("disk-v9");
     expect(replaced.reloadSeq).toBe(1);
     expect(isDraftDirty(replaced)).toBe(false);
+    expect(paneNotifications).toHaveBeenCalledTimes(1);
+
+    releaseBlockedWrite?.();
+    await blockingSave;
+    await queuedForcedSave;
+    adapter.writeIfUnchanged = origWrite;
+    unsubscribe();
+
+    // queuedForcedSave MUST NOT have written "stale-2", and blockingSave must NOT overwrite rev "9".
+    expect(writes.some((w) => w.text === "stale-2")).toBe(false);
+    expect(getDocumentDraft(adapter, "a.ts")?.revision).toBe("9");
+    expect(getDocumentDraft(adapter, "a.ts")?.text).toBe("disk-v9");
   });
 
   it("positions DiagnosticPeek, closes on Escape, navigates related targets, and renders LspStatusBadge", () => {
@@ -491,6 +531,8 @@ describe("@shaulavo/workbench-editor", () => {
     expect(formatMentionToken("src/a,b.ts")).toBe("@[src/a,b.ts]");
     expect(formatMentionToken("docs/closing ] bracket.md")).toBe("@[docs/closing \\] bracket.md]");
     expect(formatMentionToken("docs/sub\\path.md")).toBe("@[docs/sub\\\\path.md]");
+    expect(formatMentionToken("docs/trailing.md ")).toBe("@[docs/trailing.md ]");
+    expect(formatMentionToken(" leading.md")).toBe("@[ leading.md]");
 
     const trickyPaths = [
       "src/App.tsx",
@@ -498,6 +540,8 @@ describe("@shaulavo/workbench-editor", () => {
       "src/a,b.ts",
       "docs/closing ] bracket.md",
       "docs/sub\\path.md",
+      "docs/trailing.md ",
+      " leading.md",
     ];
     const sentence = `Review ${trickyPaths.map((p) => formatMentionToken(p)).join(" and ")}, ignore user@example.com`;
     const mentions = findMentionRanges(sentence);

@@ -29,6 +29,7 @@ import {
   recordDocumentEdit,
   replaceDocumentDraftFromDisk,
   seedDocumentDraft,
+  subscribeDocumentDraft,
   type DocumentDraftEntry,
 } from "./utils/draft-store";
 import { languageIdForPath } from "./utils/language";
@@ -355,10 +356,22 @@ export function EditorView({
     }
   }, [active, commands, controller, currentDoc, focusDecision, focusSeq]);
 
+  // Keep split panes displaying the same documentId in sync on authoritative reloads ("Take theirs").
+  useEffect(() => {
+    if (!currentDoc) return;
+    return subscribeDocumentDraft(adapter, documentId, () => {
+      const latest = getDocumentDraft(adapter, documentId);
+      if (!latest || !mountedRef.current || activeDocIdRef.current !== documentId) return;
+      emitDirty(documentId, isDraftDirty(latest));
+      setLoaded({ documentId, status: "ready", doc: snapshotFromDraft(latest) });
+    });
+  }, [adapter, currentDoc, documentId]);
+
   function triggerPersist(targetDocId: DocumentId, forceOverwrite = false): Promise<void> {
-    if (effectiveReadOnly || !currentDoc) return Promise.resolve();
-    const liveText = controller.materializeFullText();
-    recordDocumentEdit(adapter, targetDocId, liveText);
+    if (effectiveReadOnly) return Promise.resolve();
+    if (activeDocIdRef.current === targetDocId && committedDocIdRef.current === targetDocId) {
+      recordDocumentEdit(adapter, targetDocId, controller.materializeFullText());
+    }
     return persistDocumentDraft(adapter, targetDocId, forceOverwrite, {
       onDirtyChange: emitDirty,
       onSave: emitSave,
@@ -377,22 +390,27 @@ export function EditorView({
   async function applyTakeTheirs(targetDocId: DocumentId): Promise<void> {
     const fresh = await adapter.loadDocument(targetDocId);
     if (!fresh) return;
-    const replaced = replaceDocumentDraftFromDisk(adapter, targetDocId, fresh);
+    replaceDocumentDraftFromDisk(adapter, targetDocId, fresh);
     emitDirty(targetDocId, false);
-    if (!mountedRef.current || activeDocIdRef.current !== targetDocId) return;
-    setLoaded({ documentId: targetDocId, status: "ready", doc: snapshotFromDraft(replaced) });
   }
 
   async function handleResolveConflict(choice: "keep-mine" | "take-theirs"): Promise<void> {
     const targetDocId = documentId;
     if (!adapter.resolveConflict || resolvingConflictDocId === targetDocId) return;
+    if (choice === "keep-mine" && committedDocIdRef.current === targetDocId) {
+      recordDocumentEdit(adapter, targetDocId, controller.materializeFullText());
+    }
     setResolvingConflictDocId(targetDocId);
     try {
       await adapter.resolveConflict(targetDocId, choice);
       if (choice === "take-theirs") {
         await applyTakeTheirs(targetDocId);
       } else {
-        await triggerPersist(targetDocId, true);
+        await persistDocumentDraft(adapter, targetDocId, true, {
+          onDirtyChange: emitDirty,
+          onSave: emitSave,
+          onWriteConflict: emitWriteConflict,
+        });
       }
       if (mountedRef.current) setResolvingConflictDocId(null);
     } catch (error) {

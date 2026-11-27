@@ -56,12 +56,24 @@ for (const host of [
       await page.mouse.up();
       await expect(page.getByTestId("wb-group-drop-overlay-main")).toHaveCount(0);
 
-      // Split groups: clicking Split editor creates a second group side-by-side (polls past dnd-kit's 50ms detach click guard).
+      // Split groups: clicking Split editor creates a second group side-by-side and preserves both drafts.
       await expect(page.locator("[data-wb-editor-group]")).toHaveCount(1);
       await expect(async () => {
         await page.getByTestId("editor-split-right").click();
         await expect(page.locator("[data-wb-editor-group]")).toHaveCount(2, { timeout: 250 });
       }).toPass({ timeout: 5000 });
+      await expect(
+        page
+          .locator('[data-wb-editor-group="main"] [data-wb-editor][data-document-id="src/App.tsx"]')
+          .first(),
+      ).toContainText("UNSAVED_DRAFT_MARKER");
+      await expect(
+        page
+          .locator(
+            '[data-wb-editor-group]:not([data-wb-editor-group="main"]) [data-wb-editor][data-document-id="src/styles.css"]',
+          )
+          .first(),
+      ).toContainText("@layer workbench-app");
 
       // DiagnosticPeek opens, focuses dialog, and closes cleanly on Escape.
       await page.getByTestId("editor-toggle-peek").click();
@@ -94,21 +106,29 @@ for (const host of [
       await expect(oldPane).toBeVisible();
       await expect(newPane).toBeVisible();
 
+      const readPaneScrollTop = async (paneLocator: typeof oldPane): Promise<number> => {
+        return await paneLocator.evaluate((pane) => {
+          const candidates = [pane, ...Array.from(pane.querySelectorAll<HTMLElement>("*"))];
+          return Math.max(...candidates.map((el) => el.scrollTop));
+        });
+      };
+
       const oldBox = await oldPane.boundingBox();
+      const newBox = await newPane.boundingBox();
       expect(oldBox).not.toBeNull();
+      expect(newBox).not.toBeNull();
       await page.mouse.move(oldBox!.x + oldBox!.width / 2, oldBox!.y + oldBox!.height / 2);
       await page.mouse.wheel(0, 320);
+      await expect.poll(() => readPaneScrollTop(newPane)).toBeGreaterThan(40);
 
-      await expect
-        .poll(async () => {
-          return await newPane.evaluate((pane) => {
-            const scroller =
-              pane.querySelector<HTMLElement>(".se-scroll-container, [data-scroll-container]") ?? pane;
-            const candidates = [scroller, ...Array.from(pane.querySelectorAll<HTMLElement>("*"))];
-            return Math.max(...candidates.map((el) => el.scrollTop));
-          });
-        })
-        .toBeGreaterThan(40);
+      // Reverse direction: scrolling `new` back to top syncs `old` back to top (no dropped scroll).
+      await page.mouse.move(newBox!.x + newBox!.width / 2, newBox!.y + newBox!.height / 2);
+      await page.mouse.wheel(0, -400);
+      await expect.poll(() => readPaneScrollTop(oldPane)).toBeLessThan(10);
+
+      // Scroll `new` down again to the same area to confirm no stale echo suppression blocks re-entry.
+      await page.mouse.wheel(0, 320);
+      await expect.poll(() => readPaneScrollTop(oldPane)).toBeGreaterThan(40);
 
       await page.getByTestId("editor-diff-mode").click();
       await expect(page.getByTestId("wb-diff-pane-stacked")).toBeVisible();
