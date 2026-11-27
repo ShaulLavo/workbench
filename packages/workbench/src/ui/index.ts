@@ -38,7 +38,12 @@ export {
   type SearchPanelProps,
   type SearchQueryOptions,
 } from "./components/search-panel";
-export { Splitter, type SplitterProps } from "./components/splitter";
+export {
+  Splitter,
+  type SplitterChangeMeta,
+  type SplitterKeyAction,
+  type SplitterProps,
+} from "./components/splitter";
 export { StatusBar, type StatusBarProps } from "./components/status-bar";
 export { TitleBar, type TitleBarProps } from "./components/title-bar";
 export {

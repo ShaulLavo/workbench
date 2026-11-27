@@ -130,6 +130,75 @@ test("layout-splitter-mobile resizes desktop panes and switches/collapses mobile
 
   await explorerSplitter.press("Enter");
   await expect(explorerPane).toBeHidden();
-  await explorerSplitter.press("Enter");
+  await explorerSplitter.press("ArrowRight");
   await expect(explorerPane).toBeVisible();
+
+  await explorerSplitter.press("Home");
+  const minBox = await explorerPane.boundingBox();
+  await explorerSplitter.press("Home");
+  await explorerSplitter.press("Home");
+  await expect(explorerPane).toBeVisible();
+  expect((await explorerPane.boundingBox())?.width).toBe(minBox?.width);
+
+  // An uncapturable synthetic pointerdown must not leave the splitter stuck in drag mode.
+  await explorerSplitter.evaluate((el) => {
+    el.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        pointerId: 77,
+        clientX: 200,
+        clientY: 100,
+      }),
+    );
+  });
+  await expect(explorerSplitter).not.toHaveAttribute("data-dragging", "true");
+
+  // Secondary pointer release over the separator must not end an active primary drag.
+  const beforeDrag = await explorerPane.boundingBox();
+  const splitterBox = await explorerSplitter.boundingBox();
+  expect(splitterBox).not.toBeNull();
+  const startX = Math.round((splitterBox?.x ?? 0) + (splitterBox?.width ?? 0) / 2);
+  const startY = Math.round((splitterBox?.y ?? 0) + (splitterBox?.height ?? 0) / 2);
+  await page.mouse.move(startX, startY);
+  await page.mouse.down();
+  await expect(explorerSplitter).toHaveAttribute("data-dragging", "true");
+  await page.mouse.move(startX + 60, startY, { steps: 4 });
+  await explorerSplitter.evaluate(
+    (el, { x, y }) => {
+      el.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 99,
+          clientX: x,
+          clientY: y + 8,
+        }),
+      );
+      el.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 99, clientX: x - 140, clientY: y + 8 }),
+      );
+      el.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 99, clientX: x - 140, clientY: y + 8 }),
+      );
+      el.dispatchEvent(
+        new PointerEvent("pointercancel", { bubbles: true, pointerId: 99, clientX: x - 140, clientY: y + 8 }),
+      );
+      el.dispatchEvent(
+        new PointerEvent("lostpointercapture", {
+          bubbles: true,
+          pointerId: 99,
+          clientX: x - 140,
+          clientY: y + 8,
+        }),
+      );
+    },
+    { x: startX, y: startY },
+  );
+  await expect(explorerSplitter).toHaveAttribute("data-dragging", "true");
+  await page.mouse.move(startX + 90, startY, { steps: 4 });
+  await page.mouse.up();
+  await expect(explorerSplitter).not.toHaveAttribute("data-dragging", "true");
+  const afterDrag = await explorerPane.boundingBox();
+  expect((afterDrag?.width ?? 0) - (beforeDrag?.width ?? 0)).toBeGreaterThanOrEqual(80);
 });
