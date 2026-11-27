@@ -474,6 +474,7 @@ describe("@shaulavo/workbench-tree engine", () => {
       entries: [{ name: "auto.ts", kind: "file" }],
     });
     const loaded: string[] = [];
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
 
     const adapter: FileSystemAdapter = {
       workspaceId: "test-lazy-auto-expand",
@@ -482,11 +483,22 @@ describe("@shaulavo/workbench-tree engine", () => {
         getDirectoryState: (dir) => (dir === "" ? rootState : dir === "seeded" ? seededState : guideState),
         async loadDirectory(dir) {
           loaded.push(dir);
-          if (dir === "guide") {
+          if (dir === "") {
+            rootState.set({
+              status: "loaded",
+              entries: [
+                { name: "guide", kind: "directory" },
+                { name: "seeded", kind: "directory" },
+              ],
+            });
+          } else if (dir === "guide") {
             guideState.set({ status: "loaded", entries: [{ name: "readme.md", kind: "file" }] });
           }
         },
-        subscribeInvalidation: () => () => {},
+        subscribeInvalidation(listener) {
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
+        },
       },
       listFiles: async () => [],
       readText: async () => "",
@@ -510,6 +522,14 @@ describe("@shaulavo/workbench-tree engine", () => {
     await Promise.resolve();
     expect(loaded).toEqual(["guide"]);
     expect(model.index.hasPath("seeded/auto.ts")).toBe(true);
+
+    // Lazy reset with synchronous root publication force-loads each expanded directory only once.
+    loaded.length = 0;
+    for (const listener of invListeners) {
+      listener({ directories: [], reset: true, moves: [], removed: [] });
+    }
+    await Promise.resolve();
+    expect(loaded).toEqual(["", "guide", "seeded"]);
 
     bound.dispose();
   });
