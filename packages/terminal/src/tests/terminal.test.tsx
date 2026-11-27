@@ -1,15 +1,20 @@
 import { act, useRef } from "react";
 import { createRoot, type Root } from "react-dom/client";
+import { createBrowserDispatcher, detectPlatform } from "@shaulavo/hotkeys";
 import {
   createReplayGate,
+  type HotkeyAdapter,
   type Subscribable,
   type TerminalAdapter,
   type TerminalSessionInfo,
+  type TerminalStreamEvent,
 } from "@shaulavo/workbench-core";
 import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
-import type { LinkProvider, Terminal, TerminalTheme } from "ghostty-webgpu";
+import { Terminal, type GhosttyRuntime, type LinkProvider, type TerminalTheme } from "ghostty-webgpu";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { attachConfiguredTerminalHotkeys } from "../terminal-view";
 import {
+  applyTerminalAppearanceToInstance,
   applyTerminalStreamEvent,
   buildGhosttyTheme,
   controlKeyFor,
@@ -17,9 +22,11 @@ import {
   parseTerminalFileReference,
   pasteClipboardIntoTerminal,
   registerTerminalFileLinks,
+  resolveTerminalAppearance,
   TerminalAccessoryBar,
   terminalCursorOptions,
   TerminalPanel,
+  TerminalView,
 } from "../index";
 
 (globalThis as { IS_REACT_ACT_ENVIRONMENT?: boolean }).IS_REACT_ACT_ENVIRONMENT = true;
@@ -43,6 +50,70 @@ function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): vo
       for (const listener of listeners) listener();
     },
   };
+}
+
+function dispatchCopyKey(target: HTMLElement, useMeta = false): KeyboardEvent {
+  const event = new KeyboardEvent("keydown", {
+    key: useMeta ? "c" : "C",
+    code: "KeyC",
+    ctrlKey: !useMeta,
+    shiftKey: !useMeta,
+    metaKey: useMeta,
+    bubbles: true,
+    cancelable: true,
+  });
+  target.dispatchEvent(event);
+  return event;
+}
+
+async function flushMicrotasks(): Promise<void> {
+  for (let i = 0; i < 6; i += 1) {
+    await Promise.resolve();
+  }
+}
+
+function createMockPanelTerminal(frameListeners: Set<() => void>, pasteSpy: () => void): Terminal {
+  return {
+    appearance: { grid: { columns: 80, rows: 24 }, theme: { palette: [] } },
+    diagnostics: { rendererBackend: "mock" },
+    textarea: null,
+    open: async () => {},
+    dispose: () => {},
+    setAppearance: () => {},
+    setCursor: () => {},
+    setCursorInactiveStyle: () => {},
+    setAccessibilityEnabled: () => {},
+    refresh: () => {},
+    scrollBy: () => {},
+    write: () => {},
+    writeln: () => {},
+    reset: () => {},
+    getSelection: () => "",
+    selectAll: () => {},
+    paste: pasteSpy,
+    onFrame: (cb: () => void) => {
+      frameListeners.add(cb);
+      return { dispose: () => frameListeners.delete(cb) };
+    },
+    onData: () => ({ dispose: () => {} }),
+    onResize: () => ({ dispose: () => {} }),
+    on: () => ({ dispose: () => {} }),
+  } as unknown as Terminal;
+}
+
+async function triggerContextPaste(root: HTMLDivElement, sessionId: string): Promise<void> {
+  const viewEl = root.querySelector<HTMLElement>(`[data-session-id="${sessionId}"]`);
+  expect(viewEl).not.toBeNull();
+  act(() => {
+    viewEl!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+  });
+  const pasteBtn = document.querySelector<HTMLButtonElement>('[data-testid="wb-term-ctx-paste"]');
+  expect(pasteBtn).not.toBeNull();
+  await act(async () => {
+    pasteBtn!.click();
+    await Promise.resolve();
+    await Promise.resolve();
+  });
 }
 
 function mount(element: React.ReactElement): HTMLDivElement {
@@ -561,5 +632,460 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(onProcessChange).toHaveBeenCalledWith("vite");
     expect(onTitleChange).toHaveBeenCalledWith("dev server");
     expect(onExit).toHaveBeenCalledWith(0);
+  });
+
+  it("propagates themeOverride lineHeight and delegates runtime creation to custom loadRuntime", async () => {
+    const host = document.createElement("div");
+    document.body.appendChild(host);
+    try {
+      const resolved = resolveTerminalAppearance(host, {
+        override: {
+          colorScheme: "dark",
+          background: { r: 0, g: 0, b: 0 },
+          foreground: { r: 255, g: 255, b: 255 },
+          cursor: { r: 255, g: 255, b: 255 },
+          cursorAccent: { r: 10, g: 10, b: 10 },
+          selectionBackground: { r: 60, g: 60, b: 60 },
+          selectionForeground: { r: 255, g: 255, b: 255 },
+          ansi: Array.from({ length: 16 }, () => ({ r: 128, g: 128, b: 128 })),
+          backgroundOpacity: 0,
+          lineHeight: 1,
+        },
+      });
+      expect(resolved.lineHeight).toBe(1);
+      expect(resolved.backgroundOpacity).toBe(0);
+      const setAppearance = vi.fn();
+      const fakeTerm = {
+        appearance: { theme: { palette: Array.from({ length: 16 }, () => ({ r: 0, g: 0, b: 0 })) } },
+        setAppearance,
+      };
+      applyTerminalAppearanceToInstance(fakeTerm as never, resolved, true);
+      expect(setAppearance).toHaveBeenCalledWith(
+        expect.objectContaining({
+          backgroundOpacity: 0,
+          font: expect.objectContaining({ lineHeight: 1 }),
+        }),
+      );
+    } finally {
+      host.remove();
+    }
+
+    const loadRuntime = vi.fn((_signal: AbortSignal) => Promise.reject(new Error("custom runtime loader")));
+    const onError = vi.fn();
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([
+        { id: "s1", title: "bash", status: "ready" },
+      ]),
+      activeId: createSubscribable<string | undefined>("s1"),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s2",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    mount(<TerminalView adapter={adapter} sessionId="s1" loadRuntime={loadRuntime} onError={onError} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(loadRuntime).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("custom runtime loader", expect.any(Error));
+  });
+
+  it("aborts custom loadRuntime on unmount and suppresses late rejection errors", async () => {
+    let capturedSignal: AbortSignal | undefined;
+    let rejectDeferred: ((reason?: unknown) => void) | undefined;
+    const deferredLoadRuntime = vi.fn((signal: AbortSignal) => {
+      capturedSignal = signal;
+      return new Promise<never>((_resolve, reject) => {
+        rejectDeferred = reject;
+      });
+    });
+    const onAbortedError = vi.fn();
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([
+        { id: "s1", title: "bash", status: "ready" },
+      ]),
+      activeId: createSubscribable<string | undefined>("s1"),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s2",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    mount(
+      <TerminalView
+        adapter={adapter}
+        sessionId="s1"
+        loadRuntime={deferredLoadRuntime}
+        onError={onAbortedError}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(capturedSignal?.aborted).toBe(false);
+    act(() => {
+      activeRoot?.unmount();
+      activeRoot = null;
+    });
+    expect(capturedSignal?.aborted).toBe(true);
+    rejectDeferred?.(new Error("aborted after unmount"));
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onAbortedError).not.toHaveBeenCalled();
+  });
+
+  it("forwards onHotkeyError, console fallback, and live screenReaderMode in hosted and standalone modes", async () => {
+    const originalClipboard = navigator.clipboard;
+    const originalPlatform = navigator.platform;
+    const copyError = new Error("clipboard write denied");
+    Object.defineProperty(navigator, "clipboard", {
+      configurable: true,
+      value: { writeText: vi.fn(() => Promise.reject(copyError)) },
+    });
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const host = document.createElement("div");
+    host.tabIndex = 0;
+    document.body.appendChild(host);
+    host.focus();
+
+    let claimKey: ((input: { readonly type: "key"; readonly event: KeyboardEvent }) => string) | undefined;
+    const sendGeneratedInput = vi.fn();
+    const fakeTerminal = {
+      element: host,
+      lifecycle: "open",
+      pendingWriteBytes: 0,
+      appearance: { font: { size: 13 } },
+      inputModes: {},
+      getSelection: () => "selected text",
+      connectInput: (handler: (input: { readonly type: "key"; readonly event: KeyboardEvent }) => string) => {
+        claimKey = handler;
+        const abort = new AbortController();
+        return { signal: abort.signal, dispose: () => abort.abort() };
+      },
+      on: () => ({ dispose: () => {} }),
+      sendGeneratedInput,
+    } as unknown as Terminal;
+
+    const dispatcher = createBrowserDispatcher({
+      root: host,
+      platform: "linux",
+      keymap: [{ keys: "Ctrl+Shift+C", command: "terminal.copy", context: "Terminal && screenReader == on" }],
+    });
+    const parent = dispatcher.createNode({ parent: null });
+    let screenReader = false;
+    let onHotkeyError: ((cause: unknown, operation: string) => void) | undefined = vi.fn();
+    const baseHotkeys: HotkeyAdapter = {
+      registerCommands: () => () => {},
+      getBindings: () => [],
+      formatHint: () => undefined,
+      isTextEntryTarget: () => false,
+    };
+    const hostedHotkeys: HotkeyAdapter = {
+      ...baseHotkeys,
+      getTerminalParentScope: () => ({ dispatcher, parent }),
+    };
+
+    let hostedDispose: (() => void) | null = null;
+    let standaloneDispose: (() => void) | null = null;
+    try {
+      hostedDispose = attachConfiguredTerminalHotkeys(fakeTerminal, {
+        hotkeys: hostedHotkeys,
+        getScreenReader: () => screenReader,
+        getOnError: () => onHotkeyError,
+      });
+      host.focus();
+
+      // Screen reader is false: when-clause suppresses copy command.
+      claimKey?.({ type: "key", event: dispatchCopyKey(host) });
+      await flushMicrotasks();
+      expect(onHotkeyError).not.toHaveBeenCalled();
+
+      // Flip live screenReader to true: hosted copy triggers custom onHotkeyError.
+      screenReader = true;
+      claimKey?.({ type: "key", event: dispatchCopyKey(host) });
+      await flushMicrotasks();
+      expect(onHotkeyError).toHaveBeenCalledWith(copyError, "terminal.copy");
+
+      // Omit onHotkeyError: falls back to console.error.
+      onHotkeyError = undefined;
+      claimKey?.({ type: "key", event: dispatchCopyKey(host) });
+      await flushMicrotasks();
+      expect(consoleError).toHaveBeenCalledWith("terminal.copy", copyError);
+
+      hostedDispose?.();
+      hostedDispose = null;
+      consoleError.mockClear();
+
+      // Standalone mode (macOS keymap): verify custom onHotkeyError, console fallback, and live screenReaderMode.
+      Object.defineProperty(navigator, "platform", { configurable: true, value: "MacIntel" });
+      const standaloneError = vi.fn();
+      onHotkeyError = standaloneError;
+      let standaloneScreenReader = false;
+      standaloneDispose = attachConfiguredTerminalHotkeys(fakeTerminal, {
+        hotkeys: baseHotkeys,
+        getScreenReader: () => standaloneScreenReader,
+        getOnError: () => onHotkeyError,
+      });
+      host.focus();
+      const isMac = detectPlatform() === "mac";
+      expect(isMac).toBe(true);
+
+      // Meta+ArrowLeft binds to sendKeystroke('\x01') only while screenReader == off.
+      const metaLeft = () =>
+        new KeyboardEvent("keydown", {
+          key: "ArrowLeft",
+          code: "ArrowLeft",
+          metaKey: true,
+          bubbles: true,
+          cancelable: true,
+        });
+      const offEvent = metaLeft();
+      host.dispatchEvent(offEvent);
+      claimKey?.({ type: "key", event: offEvent });
+      await flushMicrotasks();
+      expect(sendGeneratedInput).toHaveBeenCalledWith({ type: "text", data: "\x01" });
+
+      sendGeneratedInput.mockClear();
+      standaloneScreenReader = true;
+      const onEvent = metaLeft();
+      host.dispatchEvent(onEvent);
+      claimKey?.({ type: "key", event: onEvent });
+      await flushMicrotasks();
+      expect(sendGeneratedInput).not.toHaveBeenCalled();
+
+      claimKey?.({ type: "key", event: dispatchCopyKey(host, true) });
+      await flushMicrotasks();
+      expect(standaloneError).toHaveBeenCalledWith(copyError, "terminal.copy");
+
+      onHotkeyError = undefined;
+      claimKey?.({ type: "key", event: dispatchCopyKey(host, true) });
+      await flushMicrotasks();
+      expect(consoleError).toHaveBeenCalledWith("terminal.copy", copyError);
+    } finally {
+      hostedDispose?.();
+      standaloneDispose?.();
+      parent.remove();
+      dispatcher.dispose();
+      host.remove();
+      consoleError.mockRestore();
+      Object.defineProperty(navigator, "platform", { configurable: true, value: originalPlatform });
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it("delivers onPasteFailed with sessionId and suppresses late rejections after keepAlive tab switch", async () => {
+    const originalClipboard = navigator.clipboard;
+    const frameListeners = new Set<() => void>();
+    const pasteSpy = vi.fn();
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => createMockPanelTerminal(frameListeners, pasteSpy));
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "one", title: "bash 1", status: "ready" },
+      { id: "two", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("one");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const streamHandlers = new Map<string, (event: TerminalStreamEvent) => void>();
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "three",
+      closeSession: async () => {},
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async (id, callbacks) => {
+        streamHandlers.set(id, callbacks.onEvent);
+        return { write: () => {}, resize: () => {}, detach: () => {} };
+      },
+    };
+    const onPasteFailed = vi.fn();
+    const fakeRuntime = {} as GhosttyRuntime;
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive
+          loadRuntime={async () => fakeRuntime}
+          onPasteFailed={onPasteFailed}
+        />,
+      );
+      await act(async () => {
+        for (let i = 0; i < 6; i += 1) await Promise.resolve();
+      });
+      act(() => {
+        streamHandlers.get("one")?.({ type: "ready" });
+        streamHandlers.get("one")?.({ type: "replay-complete" });
+        for (const listener of frameListeners) listener();
+      });
+
+      // Unavailable clipboard reports ("one", "unavailable").
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+      await triggerContextPaste(root, "one");
+      expect(onPasteFailed).toHaveBeenLastCalledWith("one", "unavailable");
+
+      // Denied clipboard reports ("one", "denied").
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: vi.fn(() => Promise.reject(new Error("denied"))) },
+      });
+      await triggerContextPaste(root, "one");
+      expect(onPasteFailed).toHaveBeenLastCalledWith("one", "denied");
+
+      // Pending clipboard read rejected after keepAlive tab switch is suppressed.
+      onPasteFailed.mockClear();
+      let rejectPending: ((reason?: unknown) => void) | undefined;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          readText: vi.fn(
+            () =>
+              new Promise<string>((_resolve, reject) => {
+                rejectPending = reject;
+              }),
+          ),
+        },
+      });
+      await triggerContextPaste(root, "one");
+      act(() => {
+        activeId.set("two");
+      });
+      rejectPending?.(new Error("late denial"));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(onPasteFailed).not.toHaveBeenCalled();
+      expect(pasteSpy).not.toHaveBeenCalled();
+
+      // Switching away and back to "one" before a pre-switch read settles suppresses both stale error and stale paste.
+      act(() => {
+        activeId.set("one");
+      });
+      let rejectRoundTrip: ((reason?: unknown) => void) | undefined;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          readText: vi.fn(
+            () =>
+              new Promise<string>((_resolve, reject) => {
+                rejectRoundTrip = reject;
+              }),
+          ),
+        },
+      });
+      await triggerContextPaste(root, "one");
+      act(() => {
+        activeId.set("two");
+      });
+      act(() => {
+        activeId.set("one");
+      });
+      rejectRoundTrip?.(new Error("stale after round-trip"));
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(onPasteFailed).not.toHaveBeenCalled();
+
+      // Resolving a pre-switch clipboard read after switching away and back must not paste into "one".
+      let resolveRoundTrip: ((text: string) => void) | undefined;
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: {
+          readText: vi.fn(
+            () =>
+              new Promise<string>((resolve) => {
+                resolveRoundTrip = resolve;
+              }),
+          ),
+        },
+      });
+      await triggerContextPaste(root, "one");
+      act(() => {
+        activeId.set("two");
+      });
+      act(() => {
+        activeId.set("one");
+      });
+      resolveRoundTrip?.("stale clipboard text");
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(pasteSpy).not.toHaveBeenCalled();
+
+      // Switching away from "one" closes its context menu and blocks any queued Paste microtask.
+      const readWhenHidden = vi.fn(async () => "hidden paste");
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: readWhenHidden },
+      });
+      const viewOne = root.querySelector<HTMLElement>('[data-session-id="one"]');
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      const hiddenPasteBtn = document.querySelector<HTMLButtonElement>('[data-testid="wb-term-ctx-paste"]');
+      expect(hiddenPasteBtn).not.toBeNull();
+      act(() => {
+        hiddenPasteBtn!.click();
+        activeId.set("two");
+      });
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+      expect(readWhenHidden).not.toHaveBeenCalled();
+      expect(pasteSpy).not.toHaveBeenCalled();
+
+      // Switching away with the menu still open (without clicking an item) or receiving a delayed
+      // contextmenu while hidden keeps the menu closed after returning to "one".
+      act(() => {
+        activeId.set("one");
+      });
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).not.toBeNull();
+      act(() => {
+        activeId.set("two");
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      act(() => {
+        activeId.set("one");
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+
+      // Pasting normally while active delivers clipboard text.
+      Object.defineProperty(navigator, "clipboard", {
+        configurable: true,
+        value: { readText: vi.fn(async () => "active paste") },
+      });
+      await triggerContextPaste(root, "one");
+      expect(pasteSpy).toHaveBeenCalledWith("active paste");
+    } finally {
+      createSpy.mockRestore();
+      Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
   });
 });

@@ -25,6 +25,7 @@ export interface TerminalThemeInput {
   readonly backgroundOpacity?: number;
   readonly fontFamily?: string;
   readonly fontSize?: number;
+  readonly lineHeight?: number;
   readonly cursorBlink?: boolean;
 }
 
@@ -34,6 +35,7 @@ export interface ResolvedTerminalAppearance {
   readonly backgroundOpacity: number;
   readonly fontFamily: string;
   readonly fontSize: number;
+  readonly lineHeight: number;
   readonly cursorBlink: boolean;
 }
 
@@ -111,6 +113,7 @@ export function readCssTerminalAppearance(
     backgroundOpacity: options?.backgroundOpacity ?? 1,
     fontFamily: rawMono || DEFAULT_MONO_FONT,
     fontSize,
+    lineHeight: 1.2,
     cursorBlink: options?.cursorBlink ?? false,
   };
 }
@@ -146,6 +149,7 @@ export function resolveTerminalAppearance(
     backgroundOpacity: override.backgroundOpacity ?? options?.backgroundOpacity ?? 0,
     fontFamily: override.fontFamily ?? css.fontFamily,
     fontSize: options?.fontSizeOverride ?? override.fontSize ?? css.fontSize,
+    lineHeight: override.lineHeight ?? css.lineHeight,
     cursorBlink: override.cursorBlink ?? options?.cursorBlink ?? false,
   };
 }
@@ -166,7 +170,7 @@ export function applyTerminalAppearanceToInstance(
     font: {
       family: appearance.fontFamily,
       size: appearance.fontSize,
-      lineHeight: 1.2,
+      lineHeight: appearance.lineHeight,
       weight: 400,
       boldWeight: 700,
     },

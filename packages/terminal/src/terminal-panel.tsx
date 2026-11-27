@@ -10,7 +10,7 @@ import { useSubscribable } from "@shaulavo/workbench-core/react";
 import { StrokeIcon } from "@shaulavo/workbench-icons/react";
 import type { ThemeVersionSource } from "@shaulavo/workbench-tokens";
 import { BarTab, BarTabStrip, cx, InlineRenameInput, type ContextMenuItem } from "@shaulavo/workbench-ui";
-import type { Terminal } from "ghostty-webgpu";
+import type { GhosttyRuntime, Terminal } from "ghostty-webgpu";
 import type { TerminalThemeInput } from "./theme";
 import { TerminalView } from "./terminal-view";
 
@@ -40,6 +40,9 @@ export interface TerminalPanelProps {
   readonly lowLatency?: boolean;
   readonly screenReader?: boolean;
   readonly hotkeys?: HotkeyAdapter;
+  readonly onHotkeyError?: (cause: unknown, operation: string) => void;
+  readonly loadRuntime?: (signal: AbortSignal) => Promise<GhosttyRuntime>;
+  readonly onPasteFailed?: (sessionId: string, reason: "unavailable" | "denied") => void;
   readonly showAccessoryBar?: boolean;
   readonly headerTrailing?: ReactNode;
   readonly tabStripRef?: RefCallback<HTMLDivElement>;
@@ -85,6 +88,9 @@ export function TerminalPanel({
   lowLatency = false,
   screenReader = false,
   hotkeys,
+  onHotkeyError,
+  loadRuntime,
+  onPasteFailed,
   showAccessoryBar = false,
   headerTrailing,
   tabStripRef,
@@ -154,6 +160,9 @@ export function TerminalPanel({
         screenReader={screenReader}
         accessibilityLabel={session.title}
         hotkeys={hotkeys}
+        onHotkeyError={onHotkeyError}
+        loadRuntime={loadRuntime}
+        onPasteFailed={onPasteFailed ? (reason) => onPasteFailed(session.id, reason) : undefined}
         showAccessoryBar={showBar}
         extraContextMenuItems={extraContextMenuItemsForSession?.(session.id)}
         onPointerDown={() => adapter.selectSession(session.id)}
