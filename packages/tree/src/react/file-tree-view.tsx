@@ -296,6 +296,10 @@ export function FileTreeView({
   }>({ open: false, x: 0, y: 0, row: null });
   const [deleteTarget, setDeleteTarget] = useState<readonly string[] | null>(null);
   const [deleting, setDeleting] = useState(false);
+  const [pendingRename, setPendingRename] = useState<{
+    readonly path: string;
+    readonly seq: number;
+  } | null>(null);
   const [focusRequest, setFocusRequest] = useState<{ readonly path: string; readonly seq: number } | null>(
     null,
   );
@@ -370,6 +374,62 @@ export function FileTreeView({
     return true;
   }
 
+  useEffect(() => {
+    if (!pendingRename) return;
+    const bound = boundRef.current;
+    if (!adapter?.lazy || !bound) return;
+    let cancelled = false;
+    const { path, seq } = pendingRename;
+    const dirs = [""].concat(ancestorsOf(path));
+    void (async () => {
+      try {
+        for (const dir of dirs) {
+          if (cancelled) return;
+          const needsLoad =
+            model.index.getDirectoryLoadState(dir).status !== "loaded" || bound.isDirectoryStale(dir);
+          if (needsLoad) await bound.ensureDirectoryLoaded(dir, { force: true });
+        }
+        if (
+          cancelled ||
+          readOnlyRef.current ||
+          !adapter.writable.getSnapshot() ||
+          model.getSnapshot().draft !== undefined
+        ) {
+          return;
+        }
+        if (model.index.hasPath(path)) startModelRename(model, path);
+      } catch (error) {
+        if (!cancelled) onError?.(`Unable to rename ${baseName(path)}`, error);
+      }
+      if (!cancelled) {
+        setPendingRename((current) => (current?.seq === seq ? null : current));
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [pendingRename, adapter, model, onError]);
+
+  function beginCreate(parent: string, kind: "file" | "directory"): void {
+    if (!writable) return;
+    setPendingRename(null);
+    startModelCreate(model, parent, kind);
+  }
+
+  function beginRename(rawPath: string): void {
+    if (!writable) return;
+    const path = normalizeTreePath(rawPath);
+    if (!path) return;
+    if (adapter?.lazy) {
+      setPendingRename((prev) => ({ path, seq: (prev?.seq ?? 0) + 1 }));
+      return;
+    }
+    if (model.index.hasPath(path)) {
+      setPendingRename(null);
+      startModelRename(model, path);
+    }
+  }
+
   useImperativeHandle(handleRef, () => ({
     focus() {
       const snap = model.getSnapshot();
@@ -409,11 +469,21 @@ export function FileTreeView({
     },
     startCreate(parent, kind) {
       if (!isCurrentlyWritable()) return;
+      setPendingRename(null);
       startModelCreate(model, parent, kind);
     },
     startRename(path) {
       if (!isCurrentlyWritable()) return;
-      startModelRename(model, path);
+      const normalized = normalizeTreePath(path);
+      if (!normalized) return;
+      if (adapter?.lazy) {
+        setPendingRename((prev) => ({ path: normalized, seq: (prev?.seq ?? 0) + 1 }));
+        return;
+      }
+      if (model.index.hasPath(normalized)) {
+        setPendingRename(null);
+        startModelRename(model, normalized);
+      }
     },
     collapseAll() {
       model.collapseAll();
@@ -872,7 +942,7 @@ export function FileTreeView({
     }
     if (!externalCommands?.has("rename") && event.key === "F2" && writable && focusedRow) {
       event.preventDefault();
-      startModelRename(model, state.focusedPath ?? focusedRow.path);
+      beginRename(state.focusedPath ?? focusedRow.path);
       return;
     }
     if (
@@ -1136,13 +1206,13 @@ export function FileTreeView({
             id: "new-file",
             label: "New file",
             testId: "wb-tree-ctx-new-file",
-            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "file"),
+            onSelect: () => beginCreate(targetDirectory(menuRow.path, menuRow.kind), "file"),
           },
           {
             id: "new-folder",
             label: "New folder",
             testId: "wb-tree-ctx-new-folder",
-            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "directory"),
+            onSelect: () => beginCreate(targetDirectory(menuRow.path, menuRow.kind), "directory"),
           },
           {
             id: "rename",
@@ -1150,7 +1220,7 @@ export function FileTreeView({
             hint: "F2",
             separatorBefore: true,
             testId: "wb-tree-ctx-rename",
-            onSelect: () => startModelRename(model, menuRow.path),
+            onSelect: () => beginRename(menuRow.path),
           },
           {
             id: "delete",
@@ -1321,9 +1391,7 @@ export function FileTreeView({
               }}
               onActivate={handleActivateRow}
               onDoubleClickRename={
-                writable
-                  ? (targetRow, targetPath) => startModelRename(model, targetPath ?? targetRow.path)
-                  : undefined
+                writable ? (targetRow, targetPath) => beginRename(targetPath ?? targetRow.path) : undefined
               }
               onToggleDirectory={toggleDirectory}
               onSegmentClick={handleSegmentClick}

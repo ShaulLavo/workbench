@@ -1,7 +1,7 @@
 import type { ActivationFocusDecision } from "../focus-policy";
 import type { Subscribable } from "../subscribable";
 
-export type TerminalSessionStatus = "starting" | "running" | "exited" | "failed" | "disconnected";
+export type TerminalSessionStatus = "starting" | "ready" | "running" | "exited" | "failed" | "disconnected";
 
 export interface TerminalSessionInfo {
   readonly id: string;
@@ -32,7 +32,11 @@ export type TerminalStreamEvent =
 
 export interface TerminalAttachment {
   write(data: string): void;
+  /** Optional raw-byte input path preserving non-UTF-8 or binary terminal input without re-encoding. */
+  writeBytes?(bytes: Uint8Array): void;
   resize(cols: number, rows: number): void;
+  /** Optional hook called after Ghostty paints a frame (for flow control or viewport snapshots). */
+  markRendered?(): void;
   /**
    * Detaches this view from the live stream without killing the underlying PTY process.
    * Called on React unmount, tab switch, or pane collapse.

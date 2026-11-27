@@ -106,6 +106,12 @@ export function createBridgelessPreviewController({
       const target = history[cursor] ?? "/";
       loadUrl(target);
     },
+    canGoBack() {
+      return !disposed && cursor > 0;
+    },
+    canGoForward() {
+      return !disposed && cursor < history.length - 1;
+    },
     dispose() {
       disposed = true;
     },

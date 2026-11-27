@@ -1,4 +1,12 @@
-import { useEffect, useLayoutEffect, useRef, useState, type FocusEvent, type MouseEvent } from "react";
+import {
+  useEffect,
+  useLayoutEffect,
+  useRef,
+  useState,
+  type FocusEvent,
+  type MouseEvent,
+  type ReactNode,
+} from "react";
 import { detectPlatform, type BrowserDispatcher, type FocusNode } from "@shaulavo/hotkeys";
 import {
   createReplayGate,
@@ -41,11 +49,32 @@ export interface TerminalViewProps {
   readonly scrollbackLimit?: number;
   readonly lowLatency?: boolean;
   readonly screenReader?: boolean;
+  readonly accessibilityLabel?: string;
+  readonly padding?: NonNullable<Parameters<typeof Terminal.create>[0]>["padding"];
+  /** `"auto"` uses `"outline"` on desktop viewports and solid cursor on phones. */
+  readonly cursorInactiveStyle?: "outline" | "block" | "bar" | "underline" | "none" | "auto";
   readonly hotkeys?: HotkeyAdapter;
   readonly showAccessoryBar?: boolean;
+  readonly disableContextMenu?: boolean;
+  readonly extraContextMenuItems?: readonly ContextMenuItem[];
+  readonly inertWhenNotReady?: boolean;
+  readonly canvasHostClassName?: string;
+  readonly dataPosition?: "single" | "left" | "right" | "hidden";
   readonly onTerminalReady?: (terminal: Terminal) => void;
+  readonly onAttached?: (terminal: Terminal, attachment: TerminalAttachment) => void;
   readonly onReadyChange?: (ready: boolean) => void;
+  readonly onFramePainted?: (terminal: Terminal) => void;
+  readonly onScrollbackLengthChange?: (length: number) => void;
+  readonly onTitleChange?: (title: string) => void;
+  readonly onProcessChange?: (process: string | null) => void;
+  readonly onExit?: (exitCode: number | null) => void;
+  readonly onBell?: () => void;
+  readonly onClear?: (terminal: Terminal, attachment: TerminalAttachment | null) => void;
+  readonly onContextMenuCapture?: (event: MouseEvent<HTMLDivElement>, terminal: Terminal | null) => void;
+  readonly onPointerDown?: (event: React.PointerEvent<HTMLDivElement>) => void;
+  readonly renderError?: (message: string) => ReactNode;
   readonly onError?: (message: string, cause?: unknown) => void;
+  readonly children?: ReactNode;
   readonly className?: string;
 }
 
@@ -130,6 +159,9 @@ export interface TerminalStreamTarget {
     readonly appearance: { readonly grid: { readonly columns: number; readonly rows: number } };
   };
   readonly onResize: (cols: number, rows: number) => void;
+  readonly onProcessChange?: (process: string | null) => void;
+  readonly onTitleChange?: (title: string) => void;
+  readonly onExit?: (exitCode: number | null) => void;
 }
 
 /** Dispatches one `TerminalStreamEvent` onto a terminal + `ReplayGate`, keeping reconnects alive. */
@@ -155,9 +187,18 @@ export function applyTerminalStreamEvent(event: TerminalStreamEvent, target: Ter
     target.terminal.reset();
     return;
   }
+  if (event.type === "process") {
+    target.onProcessChange?.(event.name);
+    return;
+  }
+  if (event.type === "title") {
+    target.onTitleChange?.(event.title);
+    return;
+  }
   if (event.type === "exit") {
     target.terminal.writeln("");
     target.terminal.writeln(exitDetail(event.exitCode));
+    target.onExit?.(event.exitCode);
     return;
   }
   if (event.type === "error") {
@@ -218,11 +259,31 @@ export function TerminalView({
   scrollbackLimit,
   lowLatency = false,
   screenReader = false,
+  accessibilityLabel,
+  padding,
+  cursorInactiveStyle,
   hotkeys,
   showAccessoryBar = false,
+  disableContextMenu = false,
+  extraContextMenuItems,
+  inertWhenNotReady = false,
+  canvasHostClassName,
+  dataPosition,
   onTerminalReady,
+  onAttached,
   onReadyChange,
+  onFramePainted,
+  onScrollbackLengthChange,
+  onTitleChange,
+  onProcessChange,
+  onExit,
+  onBell,
+  onClear,
+  onContextMenuCapture,
+  onPointerDown,
+  renderError,
   onError,
+  children,
   className,
 }: TerminalViewProps) {
   // Imperative Ghostty WASM canvas host wrapper: retains terminal across Fast Refresh and async handovers.
@@ -246,9 +307,21 @@ export function TerminalView({
     backgroundOpacity,
     cursorBlink,
     screenReader,
+    accessibilityLabel,
+    padding,
+    cursorInactiveStyle,
     hotkeys,
     onTerminalReady,
+    onAttached,
     onReadyChange,
+    onFramePainted,
+    onScrollbackLengthChange,
+    onTitleChange,
+    onProcessChange,
+    onExit,
+    onBell,
+    onClear,
+    onContextMenuCapture,
     onError,
   });
   useLayoutEffect(() => {
@@ -262,9 +335,21 @@ export function TerminalView({
       backgroundOpacity,
       cursorBlink,
       screenReader,
+      accessibilityLabel,
+      padding,
+      cursorInactiveStyle,
       hotkeys,
       onTerminalReady,
+      onAttached,
       onReadyChange,
+      onFramePainted,
+      onScrollbackLengthChange,
+      onTitleChange,
+      onProcessChange,
+      onExit,
+      onBell,
+      onClear,
+      onContextMenuCapture,
       onError,
     };
   });
@@ -311,6 +396,18 @@ export function TerminalView({
     });
   }
 
+  function applyInactiveCursorStyle(terminal: Terminal | null): void {
+    if (!terminal) return;
+    const mode = propsRef.current.cursorInactiveStyle;
+    if (!mode) return;
+    if (mode === "auto") {
+      const desktop = typeof matchMedia === "function" && matchMedia("(min-width: 769px)").matches;
+      terminal.setCursorInactiveStyle(desktop ? "outline" : undefined);
+      return;
+    }
+    terminal.setCursorInactiveStyle(mode === "none" ? undefined : mode);
+  }
+
   // Primary Ghostty mount + ordered stream attachment lifecycle (StrictMode-safe).
   useEffect(() => {
     const host = hostRef.current;
@@ -339,11 +436,20 @@ export function TerminalView({
       if (cancelled || signal.aborted) return;
 
       const current = propsRef.current;
+      // Preserve accessibilityLabel in Ghostty's stored options so toggling screenReader on later retains it;
+      // setAccessibilityEnabled(screenReader) immediately below enforces the current enabled state.
+      const accessibility =
+        current.accessibilityLabel !== undefined
+          ? { label: current.accessibilityLabel }
+          : current.screenReader
+            ? {}
+            : undefined;
       const nextTerminal = await Terminal.create({
         runtime: { kind: "borrowed", runtime },
         renderWhenOffscreen: true,
         presentation: lowLatency ? "immediate" : "frame",
-        accessibility: current.screenReader ? {} : undefined,
+        accessibility,
+        padding: current.padding,
         links: {
           activateUri: (uri: string) => {
             if (!isSafeExternalUri(uri)) return;
@@ -378,7 +484,9 @@ export function TerminalView({
 
       // Read latest appearance at async handover BEFORE first paint so startup races never stick.
       syncAppearanceNow();
+      applyInactiveCursorStyle(terminal);
       terminal.setAccessibilityEnabled(propsRef.current.screenReader);
+      terminal.textarea?.setAttribute("aria-label", propsRef.current.accessibilityLabel ?? "Terminal input");
 
       if (propsRef.current.hotkeys) {
         const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
@@ -427,14 +535,20 @@ export function TerminalView({
 
       subs.push(
         terminal.onFrame(() => {
-          if (cancelled || signal.aborted) return;
+          if (cancelled || signal.aborted || !terminal) return;
           gate.paint();
+          attachment?.markRendered?.();
+          propsRef.current.onFramePainted?.(terminal);
         }),
       );
 
       subs.push(
         terminal.onData(({ bytes }) => {
           if (bytes.byteLength === 0 || !inputReadyRef.current) return;
+          if (attachment?.writeBytes) {
+            attachment.writeBytes(bytes);
+            return;
+          }
           const text = decoder.decode(bytes, { stream: true });
           if (text) attachment?.write(text);
         }),
@@ -447,12 +561,25 @@ export function TerminalView({
       );
 
       subs.push(
-        terminal.on("scroll", ({ scrollbar }) => {
+        terminal.on("scroll", ({ scrollbar, scrollbackLength }) => {
           latestScrollRef.current = {
             total: scrollbar.total,
             length: scrollbar.length,
             offset: scrollbar.offset,
           };
+          propsRef.current.onScrollbackLengthChange?.(scrollbackLength);
+        }),
+      );
+
+      subs.push(
+        terminal.on("title", (title) => {
+          propsRef.current.onTitleChange?.(title);
+        }),
+      );
+
+      subs.push(
+        terminal.on("bell", () => {
+          propsRef.current.onBell?.();
         }),
       );
 
@@ -464,6 +591,9 @@ export function TerminalView({
           onResize: (cols, rows) => {
             attachment?.resize(cols, rows);
           },
+          onProcessChange: (process) => propsRef.current.onProcessChange?.(process),
+          onTitleChange: (title) => propsRef.current.onTitleChange?.(title),
+          onExit: (exitCode) => propsRef.current.onExit?.(exitCode),
         });
       };
 
@@ -480,10 +610,13 @@ export function TerminalView({
       }
       attachment = nextAttachment;
       attachmentRef.current = nextAttachment;
+      // Re-sync appearance after async attach resolves so mid-boot theme toggles are reflected.
+      syncAppearanceNow();
       const latestGrid = terminal.appearance.grid;
       if (latestGrid.columns !== grid.columns || latestGrid.rows !== grid.rows) {
         nextAttachment.resize(latestGrid.columns, latestGrid.rows);
       }
+      propsRef.current.onAttached?.(terminal, nextAttachment);
     };
 
     void open().catch((cause: unknown) => {
@@ -521,13 +654,18 @@ export function TerminalView({
     const stopOverride = themeOverride?.subscribe(syncAppearanceNow);
     const stopFont = fontSize?.subscribe(syncAppearanceNow);
     const media = typeof matchMedia === "function" ? matchMedia("(max-width: 768px)") : undefined;
-    media?.addEventListener("change", syncAppearanceNow);
+    const onMediaChange = (): void => {
+      syncAppearanceNow();
+      applyInactiveCursorStyle(terminalRef.current);
+    };
+    media?.addEventListener("change", onMediaChange);
     syncAppearanceNow();
+    applyInactiveCursorStyle(terminalRef.current);
     return () => {
       stopTheme();
       stopOverride?.();
       stopFont?.();
-      media?.removeEventListener("change", syncAppearanceNow);
+      media?.removeEventListener("change", onMediaChange);
     };
   }, [
     themeOverride,
@@ -537,6 +675,7 @@ export function TerminalView({
     mobileFontSize,
     backgroundOpacity,
     cursorBlink,
+    cursorInactiveStyle,
   ]);
 
   // Re-read and reapply current appearance whenever a pane becomes active again after collapse/switch.
@@ -550,8 +689,11 @@ export function TerminalView({
   }, [active]);
 
   useEffect(() => {
-    terminalRef.current?.setAccessibilityEnabled(screenReader);
-  }, [screenReader]);
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.setAccessibilityEnabled(screenReader);
+    terminal.textarea?.setAttribute("aria-label", accessibilityLabel ?? "Terminal input");
+  }, [screenReader, accessibilityLabel]);
 
   function handleFocus(): void {
     focusedRef.current = true;
@@ -572,9 +714,14 @@ export function TerminalView({
   // Capture phase intercepts contextmenu before Ghostty's target-phase handler and snapshots selection.
   function handleContextMenuCapture(event: MouseEvent<HTMLDivElement>): void {
     const terminal = terminalRef.current;
+    if (disableContextMenu) {
+      propsRef.current.onContextMenuCapture?.(event, terminal);
+      return;
+    }
     if (!terminal) return;
     event.preventDefault();
     event.stopPropagation();
+    propsRef.current.onContextMenuCapture?.(event, terminal);
     const selectionText = terminal.getSelection() ?? "";
     setContextMenu({
       open: true,
@@ -630,9 +777,16 @@ export function TerminalView({
       separatorBefore: true,
       testId: "wb-term-ctx-clear",
       onSelect: () => {
-        terminalRef.current?.reset();
+        const terminal = terminalRef.current;
+        if (!terminal) return;
+        if (propsRef.current.onClear) {
+          propsRef.current.onClear(terminal, attachmentRef.current);
+          return;
+        }
+        terminal.reset();
       },
     },
+    ...(extraContextMenuItems ?? []),
   ];
 
   return (
@@ -640,22 +794,34 @@ export function TerminalView({
       ref={wrapperRef}
       data-wb-terminal=""
       data-session-id={sessionId}
+      data-position={dataPosition}
       data-ready={ready ? "true" : "false"}
       data-color-scheme={telemetry.scheme}
       data-background-opacity={String(telemetry.opacity)}
       data-font-size={String(telemetry.fontSize)}
       data-renderer-backend={telemetry.backend}
       className={cx("wb-terminal-view", telemetry.opacity === 0 && "wb-terminal-transparent", className)}
+      onPointerDown={onPointerDown}
       onFocus={handleFocus}
       onBlur={handleBlur}
       onContextMenuCapture={handleContextMenuCapture}
     >
-      <div ref={hostRef} className="wb-terminal-canvas-host" data-testid={`wb-terminal-host-${sessionId}`} />
+      <div
+        ref={hostRef}
+        className={cx("wb-terminal-canvas-host", canvasHostClassName)}
+        data-testid={`wb-terminal-host-${sessionId}`}
+        inert={inertWhenNotReady && !ready ? true : undefined}
+      />
       {errorMessage ? (
-        <div className="wb-terminal-error" role="alert" data-testid="wb-terminal-error">
-          {errorMessage}
-        </div>
+        renderError ? (
+          renderError(errorMessage)
+        ) : (
+          <div className="wb-terminal-error" role="alert" data-testid="wb-terminal-error">
+            {errorMessage}
+          </div>
+        )
       ) : null}
+      {children}
       {showAccessoryBar ? (
         <TerminalAccessoryBar
           terminalRef={hostRef}
@@ -664,14 +830,16 @@ export function TerminalView({
           }}
         />
       ) : null}
-      <PointContextMenu
-        open={contextMenu.open}
-        x={contextMenu.x}
-        y={contextMenu.y}
-        items={menuItems}
-        label="Terminal actions"
-        onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
-      />
+      {!disableContextMenu ? (
+        <PointContextMenu
+          open={contextMenu.open}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={menuItems}
+          label="Terminal actions"
+          onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
+        />
+      ) : null}
     </div>
   );
 }

@@ -1491,4 +1491,379 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(nestedScroller.scrollTop).toBe(0);
   });
+
+  it("loads unopened lazy ancestors before starting rename on a filtered result", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const loadedDirs: string[] = [];
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-lazy-rename",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["closed/sub/needle.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          loadedDirs.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loaded", entries: [{ name: "closed", kind: "directory" }] };
+          } else if (dirPath === "closed") {
+            slot.state = { status: "loaded", entries: [{ name: "sub", kind: "directory" }] };
+          } else if (dirPath === "closed/sub") {
+            slot.state = { status: "loaded", entries: [{ name: "needle.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+
+    const model = new FileTreeModel();
+    const handleRef = { current: null as FileTreeViewHandle | null };
+    const host = mount(<FileTreeView model={model} adapter={adapter} handleRef={handleRef} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Filter finds closed/sub/needle.txt without opening closed or closed/sub.
+    await act(async () => {
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.index.hasPath("closed/sub/needle.txt")).toBe(false);
+    const needleRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-closed/sub/needle.txt"]');
+    expect(needleRow).not.toBeNull();
+
+    // Pressing F2 loads unopened ancestors, clears filter, expands ancestors, and opens inline rename.
+    act(() => {
+      model.select("closed/sub/needle.txt", "replace", "keyboard");
+    });
+    await act(async () => {
+      needleRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(loadedDirs).toContain("closed");
+    expect(loadedDirs).toContain("closed/sub");
+    expect(model.getSnapshot().filter).toBe("");
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/sub/needle.txt" });
+    expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
+
+    // Also verify handleRef.startRename on the loaded path.
+    act(() => {
+      model.setDraft(undefined);
+    });
+    act(() => {
+      handleRef.current?.startRename("closed/sub/needle.txt");
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/sub/needle.txt" });
+  });
+
+  it("revalidates stale lazy ancestors before rename and cancels pending rename when context-menu create starts", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const invalidationListeners = new Set<
+      (event: {
+        readonly directories: readonly string[];
+        readonly reset: boolean;
+        readonly moves: readonly { readonly from: string; readonly to: string; readonly operation: number }[];
+        readonly removed: readonly string[];
+      }) => void
+    >();
+    let staleDeleted = false;
+    let holdSlowLoad: (() => void) | null = null;
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-stale-rename",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => (staleDeleted ? [] : ["closed/ghost.txt", "slow/file.txt"]),
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = {
+              status: "loaded",
+              entries: [
+                { name: "closed", kind: "directory" },
+                { name: "slow", kind: "directory" },
+              ],
+            };
+          } else if (dirPath === "closed") {
+            slot.state = {
+              status: "loaded",
+              entries: staleDeleted ? [] : [{ name: "ghost.txt", kind: "file" }],
+            };
+          } else if (dirPath === "slow") {
+            await new Promise<void>((resolve) => {
+              holdSlowLoad = resolve;
+            });
+            slot.state = { status: "loaded", entries: [{ name: "file.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation(listener) {
+          invalidationListeners.add(listener);
+          return () => invalidationListeners.delete(listener);
+        },
+      },
+    };
+
+    const model = new FileTreeModel({ initialExpanded: ["closed"] });
+    const handleRef = { current: null as FileTreeViewHandle | null };
+    const host = mount(
+      <WorkbenchPortalProvider>
+        <FileTreeView model={model} adapter={adapter} handleRef={handleRef} />
+      </WorkbenchPortalProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.index.hasPath("closed/ghost.txt")).toBe(true);
+
+    // Collapse closed, invalidate it while file was deleted on disk, then attempt rename -> must not open draft.
+    act(() => {
+      model.setExpanded("closed", false);
+      staleDeleted = true;
+      for (const listener of invalidationListeners) {
+        listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
+      }
+    });
+    await act(async () => {
+      handleRef.current?.startRename("closed/ghost.txt");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toBeUndefined();
+
+    // Start pending lazy rename on unloaded slow/file.txt, then trigger context-menu New file on closed.
+    act(() => {
+      handleRef.current?.startRename("slow/file.txt");
+    });
+    const closedRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-closed"]')!;
+    act(() => {
+      closedRow.focus();
+    });
+    await act(async () => {
+      closedRow.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+      await Promise.resolve();
+    });
+    const newFileItem = document.querySelector<HTMLElement>('[data-testid="wb-tree-ctx-new-file"]')!;
+    act(() => {
+      newFileItem.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "create", kind: "file", parent: "closed" });
+
+    // Resolving the earlier pending rename load must NOT overwrite the newer create draft.
+    await act(async () => {
+      holdSlowLoad?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "create", kind: "file", parent: "closed" });
+  });
+
+  it("loads nested initialExpanded lazy directories top-down after root resolves without dropping children as stale", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const rootDeferred = Promise.withResolvers<void>();
+    const loadOrder: string[] = [];
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-reload-race",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["area/inner/new.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          loadOrder.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await rootDeferred.promise;
+            slot.state = { status: "loaded", entries: [{ name: "area", kind: "directory" }] };
+          } else if (dirPath === "area") {
+            slot.state = { status: "loaded", entries: [{ name: "inner", kind: "directory" }] };
+          } else if (dirPath === "area/inner") {
+            slot.state = { status: "loaded", entries: [{ name: "new.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+
+    const model = new FileTreeModel({ compactFolders: true, initialExpanded: ["area", "area/inner"] });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+
+    // Before root finishes, nested directories must not be loaded prematurely against an empty root.
+    expect(loadOrder).toEqual([""]);
+
+    await act(async () => {
+      rootDeferred.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(loadOrder).toEqual(["", "area", "area/inner"]);
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/new.txt"]')).not.toBeNull();
+  });
+
+  it("force-reloads preloaded nested expanded directories after a lazy reset invalidation", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const invalidationListeners = new Set<
+      (event: {
+        readonly directories: readonly string[];
+        readonly reset: boolean;
+        readonly moves: readonly { readonly from: string; readonly to: string; readonly operation: number }[];
+        readonly removed: readonly string[];
+      }) => void
+    >();
+    let phase: "before" | "after" = "before";
+    const reloaded: string[] = [];
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-reset-nested",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => [phase === "before" ? "area/inner/old.txt" : "area/inner/fresh.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          if (phase === "after") reloaded.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loaded", entries: [{ name: "area", kind: "directory" }] };
+          } else if (dirPath === "area") {
+            slot.state = { status: "loaded", entries: [{ name: "inner", kind: "directory" }] };
+          } else if (dirPath === "area/inner") {
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: phase === "before" ? "old.txt" : "fresh.txt", kind: "file" }],
+            };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation(listener) {
+          invalidationListeners.add(listener);
+          return () => invalidationListeners.delete(listener);
+        },
+      },
+    };
+
+    const model = new FileTreeModel({ compactFolders: true, initialExpanded: ["area", "area/inner"] });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).not.toBeNull();
+
+    phase = "after";
+    await act(async () => {
+      for (const listener of invalidationListeners) {
+        listener({ directories: [], reset: true, moves: [], removed: [] });
+      }
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(reloaded).toEqual(["", "area", "area/inner"]);
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/fresh.txt"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/old.txt"]')).toBeNull();
+  });
 });
