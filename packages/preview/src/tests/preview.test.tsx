@@ -503,4 +503,58 @@ describe("@shaulavo/workbench-preview", () => {
     });
     expect(host.querySelector('[data-testid="custom-empty"]')).not.toBeNull();
   });
+
+  it("keeps Back and Forward delegated to controller history in controller mode even after internal frame back navigation", async () => {
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 3000 }]);
+    let emitFrameEvent: ((event: PreviewFrameEvent) => void) | undefined;
+    const backSpy = vi.fn();
+    const forwardSpy = vi.fn();
+    const navigateSpy = vi.fn();
+
+    const adapter: PreviewAdapter = {
+      kind: "mounted",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      tabUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      locate: () => undefined,
+      attachFrame(_frame, _port, onEvent) {
+        emitFrameEvent = onEvent;
+        return {
+          onFrameLoad: () => {},
+          navigate: navigateSpy,
+          reload: () => {},
+          back: backSpy,
+          forward: forwardSpy,
+          dispose: () => {},
+        };
+      },
+    };
+
+    const host = mount(<PreviewPane adapter={adapter} />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Frame navigates A -> B -> C then goes back internally to B: Forward must remain enabled.
+    act(() => {
+      emitFrameEvent?.({ type: "navigate", location: { port: 3000, path: "/a" } });
+      emitFrameEvent?.({ type: "navigate", location: { port: 3000, path: "/b" } });
+      emitFrameEvent?.({ type: "navigate", location: { port: 3000, path: "/c" } });
+      emitFrameEvent?.({ type: "navigate", location: { port: 3000, path: "/b" } });
+    });
+
+    const backBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-back"]')!;
+    const forwardBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-forward"]')!;
+    expect(backBtn.disabled).toBe(false);
+    expect(forwardBtn.disabled).toBe(false);
+
+    act(() => {
+      forwardBtn.click();
+      backBtn.click();
+    });
+    expect(forwardSpy).toHaveBeenCalledTimes(1);
+    expect(backSpy).toHaveBeenCalledTimes(1);
+    expect(navigateSpy).not.toHaveBeenCalled();
+  });
 });

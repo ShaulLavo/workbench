@@ -403,17 +403,24 @@ export function FileTreeView({
     };
   }, [pendingRename, adapter, model, onError]);
 
+  function beginCreate(parent: string, kind: "file" | "directory"): void {
+    if (!writable) return;
+    setPendingRename(null);
+    startModelCreate(model, parent, kind);
+  }
+
   function beginRename(rawPath: string): void {
     if (!writable) return;
     const path = normalizeTreePath(rawPath);
     if (!path) return;
+    if (adapter?.lazy) {
+      setPendingRename((prev) => ({ path, seq: (prev?.seq ?? 0) + 1 }));
+      return;
+    }
     if (model.index.hasPath(path)) {
       setPendingRename(null);
       startModelRename(model, path);
-      return;
     }
-    if (!adapter?.lazy) return;
-    setPendingRename((prev) => ({ path, seq: (prev?.seq ?? 0) + 1 }));
   }
 
   useImperativeHandle(handleRef, () => ({
@@ -454,9 +461,7 @@ export function FileTreeView({
       model.setFilter("");
     },
     startCreate(parent, kind) {
-      if (!isCurrentlyWritable()) return;
-      setPendingRename(null);
-      startModelCreate(model, parent, kind);
+      beginCreate(parent, kind);
     },
     startRename(path) {
       beginRename(path);
@@ -1182,13 +1187,13 @@ export function FileTreeView({
             id: "new-file",
             label: "New file",
             testId: "wb-tree-ctx-new-file",
-            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "file"),
+            onSelect: () => beginCreate(targetDirectory(menuRow.path, menuRow.kind), "file"),
           },
           {
             id: "new-folder",
             label: "New folder",
             testId: "wb-tree-ctx-new-folder",
-            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "directory"),
+            onSelect: () => beginCreate(targetDirectory(menuRow.path, menuRow.kind), "directory"),
           },
           {
             id: "rename",

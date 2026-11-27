@@ -512,6 +512,21 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(host.querySelector('[data-session-id="t2"]')?.getAttribute("data-position")).toBe("right");
     expect(host.querySelector('[data-session-id="t3"]')?.getAttribute("data-position")).toBe("hidden");
 
+    // Switching primary to t2 and secondary to t1 (where t1 precedes t2 in sessions) keeps left before right.
+    act(() => {
+      activeId.set("t2");
+      splitId.set("t1");
+    });
+    const orderedIds = Array.from(host.querySelectorAll<HTMLElement>("[data-wb-terminal]"), (el) => ({
+      id: el.dataset.sessionId,
+      pos: el.dataset.position,
+    }));
+    expect(orderedIds).toEqual([
+      { id: "t2", pos: "left" },
+      { id: "t1", pos: "right" },
+      { id: "t3", pos: "hidden" },
+    ]);
+
     act(() => {
       host.querySelector<HTMLButtonElement>('[data-testid="wb-term-collapse"]')?.click();
     });

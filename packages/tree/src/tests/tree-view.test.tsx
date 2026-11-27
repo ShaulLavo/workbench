@@ -1583,4 +1583,132 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/sub/needle.txt" });
   });
+
+  it("revalidates stale lazy ancestors before rename and cancels pending rename when context-menu create starts", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const invalidationListeners = new Set<
+      (event: {
+        readonly directories: readonly string[];
+        readonly reset: boolean;
+        readonly moves: readonly { readonly from: string; readonly to: string; readonly operation: number }[];
+        readonly removed: readonly string[];
+      }) => void
+    >();
+    let staleDeleted = false;
+    let holdSlowLoad: (() => void) | null = null;
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-stale-rename",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => (staleDeleted ? [] : ["closed/ghost.txt", "slow/file.txt"]),
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = {
+              status: "loaded",
+              entries: [
+                { name: "closed", kind: "directory" },
+                { name: "slow", kind: "directory" },
+              ],
+            };
+          } else if (dirPath === "closed") {
+            slot.state = {
+              status: "loaded",
+              entries: staleDeleted ? [] : [{ name: "ghost.txt", kind: "file" }],
+            };
+          } else if (dirPath === "slow") {
+            await new Promise<void>((resolve) => {
+              holdSlowLoad = resolve;
+            });
+            slot.state = { status: "loaded", entries: [{ name: "file.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation(listener) {
+          invalidationListeners.add(listener);
+          return () => invalidationListeners.delete(listener);
+        },
+      },
+    };
+
+    const model = new FileTreeModel({ initialExpanded: ["closed"] });
+    const handleRef = { current: null as FileTreeViewHandle | null };
+    const host = mount(
+      <WorkbenchPortalProvider>
+        <FileTreeView model={model} adapter={adapter} handleRef={handleRef} />
+      </WorkbenchPortalProvider>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.index.hasPath("closed/ghost.txt")).toBe(true);
+
+    // Collapse closed, invalidate it while file was deleted on disk, then attempt rename -> must not open draft.
+    act(() => {
+      model.setExpanded("closed", false);
+      staleDeleted = true;
+      for (const listener of invalidationListeners) {
+        listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
+      }
+    });
+    await act(async () => {
+      handleRef.current?.startRename("closed/ghost.txt");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toBeUndefined();
+
+    // Start pending lazy rename on unloaded slow/file.txt, then trigger context-menu New file on closed.
+    act(() => {
+      handleRef.current?.startRename("slow/file.txt");
+    });
+    const closedRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-closed"]')!;
+    act(() => {
+      closedRow.focus();
+    });
+    await act(async () => {
+      closedRow.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+      await Promise.resolve();
+    });
+    const newFileItem = document.querySelector<HTMLElement>('[data-testid="wb-tree-ctx-new-file"]')!;
+    act(() => {
+      newFileItem.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "create", kind: "file", parent: "closed" });
+
+    // Resolving the earlier pending rename load must NOT overwrite the newer create draft.
+    await act(async () => {
+      holdSlowLoad?.();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "create", kind: "file", parent: "closed" });
+  });
 });

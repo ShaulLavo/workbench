@@ -436,12 +436,11 @@ export function TerminalView({
       if (cancelled || signal.aborted) return;
 
       const current = propsRef.current;
-      const accessibility =
-        current.accessibilityLabel !== undefined
+      const accessibility = current.screenReader
+        ? current.accessibilityLabel !== undefined
           ? { label: current.accessibilityLabel }
-          : current.screenReader
-            ? {}
-            : undefined;
+          : {}
+        : undefined;
       const nextTerminal = await Terminal.create({
         runtime: { kind: "borrowed", runtime },
         renderWhenOffscreen: true,
@@ -483,9 +482,7 @@ export function TerminalView({
       // Read latest appearance at async handover BEFORE first paint so startup races never stick.
       syncAppearanceNow();
       applyInactiveCursorStyle(terminal);
-      if (propsRef.current.accessibilityLabel === undefined) {
-        terminal.setAccessibilityEnabled(propsRef.current.screenReader);
-      }
+      terminal.setAccessibilityEnabled(propsRef.current.screenReader);
 
       if (propsRef.current.hotkeys) {
         const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
@@ -688,10 +685,8 @@ export function TerminalView({
   }, [active]);
 
   useEffect(() => {
-    if (accessibilityLabel === undefined) {
-      terminalRef.current?.setAccessibilityEnabled(screenReader);
-    }
-  }, [screenReader, accessibilityLabel]);
+    terminalRef.current?.setAccessibilityEnabled(screenReader);
+  }, [screenReader]);
 
   function handleFocus(): void {
     focusedRef.current = true;

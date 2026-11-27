@@ -172,6 +172,11 @@ export function PreviewPane({
   const [historyState, setHistoryState] = useState<PreviewHistoryState>(() =>
     createInitialHistory("", normalizedInitial),
   );
+  const [controllerNav, setControllerNav] = useState<{
+    readonly key: string;
+    readonly canGoBack: boolean;
+    readonly canGoForward: boolean;
+  }>({ key: "", canGoBack: true, canGoForward: true });
   const [showErrors, setShowErrors] = useState(false);
   const [internalViewport, setInternalViewport] = useState<PreviewViewportPreset>("responsive");
 
@@ -205,8 +210,20 @@ export function PreviewPane({
   const frameErrors = bridgeState.key === sessionKey ? bridgeState.errors : [];
   const activeHistory =
     historyState.key === sessionKey ? historyState : createInitialHistory(sessionKey, committedPath);
-  const canGoBack = activePort !== undefined && activeHistory.index > 0;
-  const canGoForward = activePort !== undefined && activeHistory.index < activeHistory.entries.length - 1;
+  const canGoBack =
+    activePort !== undefined &&
+    (historyMode === "pane"
+      ? activeHistory.index > 0
+      : controllerNav.key === sessionKey
+        ? controllerNav.canGoBack
+        : true);
+  const canGoForward =
+    activePort !== undefined &&
+    (historyMode === "pane"
+      ? activeHistory.index < activeHistory.entries.length - 1
+      : controllerNav.key === sessionKey
+        ? controllerNav.canGoForward
+        : true);
 
   useEffect(() => {
     emitActivePort(activePort);
@@ -237,6 +254,15 @@ export function PreviewPane({
       return;
     }
 
+    const syncControllerNav = (ctrl: PreviewFrameController | null): void => {
+      if (!ctrl) return;
+      setControllerNav({
+        key: sessionKey,
+        canGoBack: ctrl.canGoBack ? ctrl.canGoBack() : true,
+        canGoForward: ctrl.canGoForward ? ctrl.canGoForward() : true,
+      });
+    };
+
     const handleEvent = (event: PreviewFrameEvent): void => {
       if (event.type === "bridge-ready") {
         setBridgeState((prev) => ({
@@ -246,6 +272,7 @@ export function PreviewPane({
           error: prev.key === sessionKey ? prev.error : null,
           errors: prev.key === sessionKey ? prev.errors : [],
         }));
+        syncControllerNav(controllerRef.current);
         return;
       }
       if (event.type === "started" || event.type === "navigate") {
@@ -253,7 +280,11 @@ export function PreviewPane({
         committedPathRef.current = nextPath;
         setCommittedPath(nextPath);
         if (!editingPathRef.current) setPathDraft(nextPath);
-        setHistoryState((prev) => recordHistoryVisit(prev, sessionKey, nextPath));
+        if (historyMode === "pane") {
+          setHistoryState((prev) => recordHistoryVisit(prev, sessionKey, nextPath));
+        } else {
+          syncControllerNav(controllerRef.current);
+        }
         setBridgeState((prev) => ({
           key: sessionKey,
           status: prev.key === sessionKey ? prev.status : "pending",
@@ -299,6 +330,7 @@ export function PreviewPane({
       initialPath: initialFramePath,
     });
     controllerRef.current = controller;
+    syncControllerNav(controller);
     const initialSrc = adapter.frameUrl(activePort, initialFramePath);
     // Always assign frame.src on controller attach so StrictMode remounts trigger a fresh load + handshake.
     frame.src = initialSrc;
@@ -314,7 +346,7 @@ export function PreviewPane({
         controllerRef.current = null;
       }
     };
-  }, [adapter, adapterReady, bootError, activePort, sessionKey]);
+  }, [adapter, adapterReady, bootError, activePort, sessionKey, historyMode]);
 
   function setViewport(next: PreviewViewportPreset): void {
     if (onViewportPresetChange) onViewportPresetChange(next);
@@ -322,19 +354,26 @@ export function PreviewPane({
   }
 
   function stepHistory(delta: -1 | 1): void {
-    const nextIndex = activeHistory.index + delta;
-    const target = activeHistory.entries[nextIndex];
-    if (target === undefined) return;
-    setHistoryState({ key: sessionKey, entries: activeHistory.entries, index: nextIndex });
-    committedPathRef.current = target;
-    setCommittedPath(target);
-    if (!editingPathRef.current) setPathDraft(target);
     if (historyMode === "pane") {
+      const nextIndex = activeHistory.index + delta;
+      const target = activeHistory.entries[nextIndex];
+      if (target === undefined) return;
+      setHistoryState({ key: sessionKey, entries: activeHistory.entries, index: nextIndex });
+      committedPathRef.current = target;
+      setCommittedPath(target);
+      if (!editingPathRef.current) setPathDraft(target);
       controllerRef.current?.navigate(target);
       return;
     }
-    if (delta < 0) controllerRef.current?.back();
-    else controllerRef.current?.forward();
+    const ctrl = controllerRef.current;
+    if (!ctrl) return;
+    if (delta < 0) ctrl.back();
+    else ctrl.forward();
+    setControllerNav({
+      key: sessionKey,
+      canGoBack: ctrl.canGoBack ? ctrl.canGoBack() : true,
+      canGoForward: ctrl.canGoForward ? ctrl.canGoForward() : true,
+    });
   }
 
   function handleNavigateSubmit(event: FormEvent<HTMLFormElement>): void {
@@ -343,9 +382,19 @@ export function PreviewPane({
     committedPathRef.current = normalized;
     setCommittedPath(normalized);
     setPathDraft(normalized);
-    setHistoryState((prev) => recordHistoryVisit(prev, sessionKey, normalized));
+    if (historyMode === "pane") {
+      setHistoryState((prev) => recordHistoryVisit(prev, sessionKey, normalized));
+    }
     editingPathRef.current = false;
-    controllerRef.current?.navigate(normalized);
+    const ctrl = controllerRef.current;
+    ctrl?.navigate(normalized);
+    if (historyMode !== "pane" && ctrl) {
+      setControllerNav({
+        key: sessionKey,
+        canGoBack: ctrl.canGoBack ? ctrl.canGoBack() : true,
+        canGoForward: ctrl.canGoForward ? ctrl.canGoForward() : true,
+      });
+    }
   }
 
   const openTabHref =

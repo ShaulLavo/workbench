@@ -301,21 +301,28 @@ export function TerminalPanel({
           data-split={secondarySession ? "true" : "false"}
         >
           {keepAlive ? (
-            sessions.map((session) => {
-              const position =
-                session.id === primarySession.id
-                  ? secondarySession
-                    ? "left"
-                    : "single"
-                  : session.id === secondarySession?.id
-                    ? "right"
-                    : "hidden";
-              return renderSessionView(
-                session,
-                position,
-                showAccessoryBar && session.id === primarySession.id,
-              );
-            })
+            [primarySession]
+              .concat(
+                secondarySession ? [secondarySession] : [],
+                sessions.filter(
+                  (session) => session.id !== primarySession.id && session.id !== secondarySession?.id,
+                ),
+              )
+              .map((session) => {
+                const position =
+                  session.id === primarySession.id
+                    ? secondarySession
+                      ? "left"
+                      : "single"
+                    : session.id === secondarySession?.id
+                      ? "right"
+                      : "hidden";
+                return renderSessionView(
+                  session,
+                  position,
+                  showAccessoryBar && session.id === primarySession.id,
+                );
+              })
           ) : (
             <>
               {renderSessionView(primarySession, secondarySession ? "left" : "single", showAccessoryBar)}

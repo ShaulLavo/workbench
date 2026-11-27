@@ -123,7 +123,12 @@
     display: none;
   }
 
+  .wb-terminal-view[data-position="left"] {
+    order: 1;
+  }
+
   .wb-terminal-view[data-position="right"] {
+    order: 2;
     border-left: 1px solid var(--wb-border-subtle);
   }
 

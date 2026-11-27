@@ -27,6 +27,8 @@ export interface PreviewFrameController {
   reload(): void;
   back(): void;
   forward(): void;
+  canGoBack?(): boolean;
+  canGoForward?(): boolean;
   dispose(): void;
 }
 
