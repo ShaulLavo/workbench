@@ -113,5 +113,6 @@ export function compareDirEntries(
     if (ca !== cb) return ca - cb;
   }
   if (a.length !== b.length) return a.length - b.length;
-  return a < b ? -1 : a > b ? 1 : 0;
+  if (a < b) return -1;
+  return a > b ? 1 : 0;
 }

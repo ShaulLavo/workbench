@@ -424,7 +424,11 @@ describe("@shaulavo/workbench-tree engine", () => {
       workspaceId: "test-lazy-edge",
       writable: createSubscribable(true),
       lazy: {
-        getDirectoryState: (dir) => (dir === "" ? rootState : dir === "sub" ? subState : docsState),
+        getDirectoryState(dir) {
+          if (dir === "") return rootState;
+          if (dir === "sub") return subState;
+          return docsState;
+        },
         async loadDirectory(dir, options) {
           loadCalls.push({ dir, force: options?.force });
           if (dir === "") {
@@ -566,8 +570,12 @@ describe("@shaulavo/workbench-tree engine", () => {
       workspaceId: "test-lazy-auto-expand",
       writable: createSubscribable(true),
       lazy: {
-        getDirectoryState: (dir) =>
-          dir === "" ? rootState : dir === "seeded" ? seededState : dir === "late" ? lateState : guideState,
+        getDirectoryState(dir) {
+          if (dir === "") return rootState;
+          if (dir === "seeded") return seededState;
+          if (dir === "late") return lateState;
+          return guideState;
+        },
         async loadDirectory(dir) {
           loaded.push(dir);
           if (dir === "") {

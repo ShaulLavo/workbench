@@ -164,6 +164,12 @@ function scanRelativeSpecifiers(filePath: string): readonly string[] {
   return matches;
 }
 
+function resolveRelativeTarget(current: string, spec: string, isDts: boolean): string {
+  const resolvedBase = path.resolve(path.dirname(current), spec);
+  if (isDts) return resolvedBase.replace(/\.js$/, ".d.ts");
+  return existsSync(resolvedBase) ? resolvedBase : `${resolvedBase}.js`;
+}
+
 function verifyTransitiveTreeModelPortability(pkgRoot: string): void {
   const distDir = path.join(pkgRoot, "dist");
   const checkGraph = (entryRel: string, isDts: boolean): void => {
@@ -178,12 +184,7 @@ function verifyTransitiveTreeModelPortability(pkgRoot: string): void {
         if (spec.endsWith(".css")) {
           throw new Error(`Portable tree/model graph unexpectedly imported CSS: ${spec} from ${current}`);
         }
-        const resolvedBase = path.resolve(path.dirname(current), spec);
-        const target = isDts
-          ? resolvedBase.replace(/\.js$/, ".d.ts")
-          : existsSync(resolvedBase)
-            ? resolvedBase
-            : `${resolvedBase}.js`;
+        const target = resolveRelativeTarget(current, spec, isDts);
         const relFromDist = path.relative(distDir, target).replaceAll(path.sep, "/");
         if (relFromDist === "core/index.js" || relFromDist === "core/index.d.ts") {
           throw new Error(`Portable tree/model graph must not reach ${relFromDist} (from ${current})`);
@@ -200,31 +201,37 @@ function verifyTransitiveTreeModelPortability(pkgRoot: string): void {
   checkGraph("tree/model.d.ts", true);
 }
 
+function collectTransitiveJsSpecs(
+  distDir: string,
+  entryRel: string,
+  jsTranspiler: Bun.Transpiler,
+): Set<string> {
+  const seenFiles = new Set<string>();
+  const specs = new Set<string>();
+  const queue = [path.join(distDir, entryRel)];
+  while (queue.length > 0) {
+    const current = queue.shift()!;
+    if (seenFiles.has(current) || !existsSync(current)) continue;
+    seenFiles.add(current);
+    const imported = jsTranspiler.scanImports(readFileSync(current, "utf8")).map((i) => i.path);
+    for (const spec of imported) {
+      specs.add(spec);
+      if (!spec.startsWith(".") || spec.endsWith(".css")) continue;
+      const next = path.resolve(path.dirname(current), spec);
+      if (existsSync(next)) queue.push(next);
+    }
+  }
+  return specs;
+}
+
 function verifyDistExternalImports(pkgRoot: string): void {
   const distDir = path.join(pkgRoot, "dist");
   const jsTranspiler = new Bun.Transpiler({ loader: "js" });
   const scanFile = (rel: string): Set<string> =>
     new Set(jsTranspiler.scanImports(readFileSync(path.join(distDir, rel), "utf8")).map((i) => i.path));
 
-  const collectTransitiveSpecs = (entryRel: string): Set<string> => {
-    const seenFiles = new Set<string>();
-    const specs = new Set<string>();
-    const queue = [path.join(distDir, entryRel)];
-    while (queue.length > 0) {
-      const current = queue.shift()!;
-      if (seenFiles.has(current) || !existsSync(current)) continue;
-      seenFiles.add(current);
-      const imported = jsTranspiler.scanImports(readFileSync(current, "utf8")).map((i) => i.path);
-      for (const spec of imported) {
-        specs.add(spec);
-        if (spec.startsWith(".") && !spec.endsWith(".css")) {
-          const next = path.resolve(path.dirname(current), spec);
-          if (existsSync(next)) queue.push(next);
-        }
-      }
-    }
-    return specs;
-  };
+  const collectTransitiveSpecs = (entryRel: string): Set<string> =>
+    collectTransitiveJsSpecs(distDir, entryRel, jsTranspiler);
 
   for (const headless of ["core/index.js", "tokens/index.js", "icons/core.js", "tree/model.js"]) {
     const specs = collectTransitiveSpecs(headless);

@@ -52,20 +52,18 @@ export interface HarnessEditorBundle {
   triggerConflict(documentId: DocumentId): void;
 }
 
+function harnessDiffLine(index: number, line4: string, line43: string): string {
+  if (index === 3) return line4;
+  if (index === 42) return line43;
+  return `  const line${index + 1} = ${index + 1};`;
+}
+
 export const HARNESS_DIFF_ORIGINAL = Array.from({ length: 70 }, (_, i) =>
-  i === 3
-    ? '  const greeting = "Old Workbench";'
-    : i === 42
-      ? '  return "Legacy line 42";'
-      : `  const line${i + 1} = ${i + 1};`,
+  harnessDiffLine(i, '  const greeting = "Old Workbench";', '  return "Legacy line 42";'),
 ).join("\n");
 
 export const HARNESS_DIFF_MODIFIED = Array.from({ length: 70 }, (_, i) =>
-  i === 3
-    ? '  const greeting = "Shared Workbench Ready";'
-    : i === 42
-      ? '  return "Updated line 42";'
-      : `  const line${i + 1} = ${i + 1};`,
+  harnessDiffLine(i, '  const greeting = "Shared Workbench Ready";', '  return "Updated line 42";'),
 ).join("\n");
 
 const INITIAL_DOCS: Readonly<Record<string, { readonly text: string; readonly languageId: string }>> = {

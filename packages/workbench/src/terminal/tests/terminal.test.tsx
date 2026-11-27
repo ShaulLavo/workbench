@@ -2155,11 +2155,57 @@ describe("@shaulavo/workbench-terminal", () => {
         host.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset.splitFocused,
       ).toBe("true");
 
-      // Rename button targets the focused right half (s2).
+      // Remounting with the same adapter while activeId === splitId preserves the split pair and focused right half.
       act(() => {
-        host.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
+        activeRoot?.unmount();
+        activeRoot = null;
       });
-      const renameInput = host.querySelector<HTMLInputElement>('[data-testid="wb-term-rename-input-s2"]');
+      const remountedHost = mount(
+        <TerminalPanel
+          adapter={adapter}
+          collapsed={false}
+          onToggleCollapsed={vi.fn()}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(remountedHost.querySelector("[data-wb-term-split-group]")).not.toBeNull();
+      expect(remountedHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
+      expect(
+        remountedHost.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset
+          .splitFocused,
+      ).toBe("true");
+
+      // ArrowRight from s2 (right half) selects s3, regroups s3+s2 into a new split group, and keeps keyboard focus on s3's live tab button.
+      const remountedRightTab = remountedHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s2"] button[role="tab"]',
+      )!;
+      act(() => {
+        remountedRightTab.focus();
+        remountedRightTab.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      const liveS3Tab = remountedHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s3"] button[role="tab"]',
+      )!;
+      expect(liveS3Tab).not.toBeNull();
+      expect(document.activeElement).toBe(liveS3Tab);
+
+      // Select s2 again and verify Rename button targets the focused right half (s2).
+      act(() => {
+        remountedHost
+          .querySelector<HTMLButtonElement>('[data-testid="wb-term-tab-s2"] button[role="tab"]')
+          ?.click();
+      });
+      act(() => {
+        remountedHost.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
+      });
+      const renameInput = remountedHost.querySelector<HTMLInputElement>(
+        '[data-testid="wb-term-rename-input-s2"]',
+      );
       expect(renameInput).not.toBeNull();
       act(() => {
         renameInput!.value = "Right pane";
@@ -2170,13 +2216,13 @@ describe("@shaulavo/workbench-terminal", () => {
 
       // Closing the right half exits split cleanly.
       await act(async () => {
-        host
+        remountedHost
           .querySelector<HTMLButtonElement>('[data-testid="wb-term-tab-s2"] button[aria-label^="Close"]')
           ?.click();
         await flushMicrotasks();
       });
-      expect(host.querySelector("[data-wb-term-split-group]")).toBeNull();
-      expect(host.querySelectorAll("[data-wb-terminal]")).toHaveLength(1);
+      expect(remountedHost.querySelector("[data-wb-term-split-group]")).toBeNull();
+      expect(remountedHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(1);
 
       // Collapsed state sets aria-expanded="false" for upward chevron rotation.
       act(() => {
@@ -2190,7 +2236,7 @@ describe("@shaulavo/workbench-terminal", () => {
         );
       });
       expect(
-        host
+        remountedHost
           .querySelector<HTMLButtonElement>('[data-testid="wb-term-collapse"]')
           ?.getAttribute("aria-expanded"),
       ).toBe("false");

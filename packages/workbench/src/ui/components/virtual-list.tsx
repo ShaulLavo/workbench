@@ -30,7 +30,7 @@ export type VirtualListMeasurement = VirtualListItem;
 
 export interface VirtualListScrollToOptions {
   readonly align?: "start" | "center" | "end" | "auto";
-  readonly behavior?: "auto" | "smooth";
+  readonly behavior?: "auto" | "instant" | "smooth";
 }
 
 export interface VirtualListHandle {

@@ -776,29 +776,8 @@ export function FileTreeView({
       return;
     }
     model.notifyIndexChange();
-    let completed = 0;
-    try {
-      for (let i = 0; i < moves.length; i += 1) {
-        const move = moves[i];
-        if (!move) continue;
-        if (!isCurrentlyWritable()) {
-          rollbackOptimisticFrom(optIds, i);
-          model.notifyIndexChange({ movedPaths: moves.slice(0, completed) });
-          if (completed > 0) void adapter.indexed?.requestResync();
-          return;
-        }
-        await adapter.move(move.from, move.to);
-        const doneId = optIds[i];
-        if (doneId) model.index.settleOptimistic(doneId);
-        completed += 1;
-      }
-      model.notifyIndexChange({ movedPaths: moves });
-    } catch (error) {
-      rollbackOptimisticFrom(optIds, completed);
-      model.notifyIndexChange({ movedPaths: moves.slice(0, completed) });
-      if (completed > 0) void adapter.indexed?.requestResync();
-      onError?.("Unable to move selected items", error);
-    }
+    const ok = await executeMoveBatch(moves, optIds);
+    if (ok) model.notifyIndexChange({ movedPaths: moves });
   }
 
   async function confirmDelete(): Promise<void> {
@@ -816,33 +795,88 @@ export function FileTreeView({
       model.index.applyOptimistic(id, { kind: "delete", path: target }, { inFlight: Boolean(adapter) });
     }
     model.notifyIndexChange();
+    const ok = await executeDeleteBatch(targets, optIds);
+    if (!ok) return;
+    model.notifyIndexChange({ removedPaths: targets });
+    setDeleteTarget(null);
+    setDeleting(false);
+  }
+
+  function abortInFlightMoves(
+    optIds: readonly string[],
+    startIndex: number,
+    moves: readonly { readonly from: string; readonly to: string }[],
+    completed: number,
+  ): void {
+    rollbackOptimisticFrom(optIds, startIndex);
+    model.notifyIndexChange({ movedPaths: moves.slice(0, completed) });
+    if (completed > 0) void adapter?.indexed?.requestResync();
+  }
+
+  function abortInFlightDeletes(
+    optIds: readonly string[],
+    startIndex: number,
+    targets: readonly string[],
+    completed: number,
+  ): void {
+    rollbackOptimisticFrom(optIds, startIndex);
+    model.notifyIndexChange({ removedPaths: targets.slice(0, completed) });
+    if (completed > 0) void adapter?.indexed?.requestResync();
+    setDeleteTarget(null);
+    setDeleting(false);
+  }
+
+  async function executeMoveBatch(
+    moves: readonly { readonly from: string; readonly to: string }[],
+    optIds: readonly string[],
+  ): Promise<boolean> {
+    if (!adapter) return false;
     let completed = 0;
     try {
-      for (let i = 0; adapter && i < targets.length; i += 1) {
+      for (let i = 0; i < moves.length; i += 1) {
+        const move = moves[i];
+        if (!move) continue;
+        if (!isCurrentlyWritable()) {
+          abortInFlightMoves(optIds, i, moves, completed);
+          return false;
+        }
+        await adapter.move(move.from, move.to);
+        const doneId = optIds[i];
+        if (doneId) model.index.settleOptimistic(doneId);
+        completed += 1;
+      }
+      return true;
+    } catch (error) {
+      abortInFlightMoves(optIds, completed, moves, completed);
+      onError?.("Unable to move selected items", error);
+      return false;
+    }
+  }
+
+  async function executeDeleteBatch(targets: readonly string[], optIds: readonly string[]): Promise<boolean> {
+    if (!adapter) return true;
+    let completed = 0;
+    try {
+      for (let i = 0; i < targets.length; i += 1) {
         const target = targets[i];
         if (!target) continue;
         if (!isCurrentlyWritable()) {
-          rollbackOptimisticFrom(optIds, i);
-          model.notifyIndexChange({ removedPaths: targets.slice(0, completed) });
-          if (completed > 0) void adapter.indexed?.requestResync();
-          setDeleteTarget(null);
-          setDeleting(false);
-          return;
+          abortInFlightDeletes(optIds, i, targets, completed);
+          return false;
         }
         await adapter.remove(target);
         const doneId = optIds[i];
         if (doneId) model.index.settleOptimistic(doneId);
         completed += 1;
       }
-      model.notifyIndexChange({ removedPaths: targets });
-      setDeleteTarget(null);
-      setDeleting(false);
+      return true;
     } catch (error) {
       rollbackOptimisticFrom(optIds, completed);
       model.notifyIndexChange({ removedPaths: targets.slice(0, completed) });
       setDeleting(false);
-      if (completed > 0) void adapter?.indexed?.requestResync();
+      if (completed > 0) void adapter.indexed?.requestResync();
       onError?.("Unable to delete selected items", error);
+      return false;
     }
   }
 
@@ -957,12 +991,12 @@ export function FileTreeView({
       writable
     ) {
       const visiblePaths = collectVisibleEntryPaths(state.rows);
-      const targets =
-        state.selected.size > 0
-          ? Array.from(state.selected).filter((path) => visiblePaths.has(path))
-          : focusedRow
-            ? [state.focusedPath ?? focusedRow.path]
-            : [];
+      let targets: string[] = [];
+      if (state.selected.size > 0) {
+        targets = Array.from(state.selected).filter((path) => visiblePaths.has(path));
+      } else if (focusedRow) {
+        targets = [state.focusedPath ?? focusedRow.path];
+      }
       if (targets.length === 0) return;
       event.preventDefault();
       requestDeletePaths(targets);

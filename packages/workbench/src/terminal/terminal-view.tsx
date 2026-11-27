@@ -620,12 +620,12 @@ export function TerminalView({
       const current = propsRef.current;
       // Preserve accessibilityLabel in Ghostty's stored options so toggling screenReader on later retains it;
       // setAccessibilityEnabled(screenReader) immediately below enforces the current enabled state.
-      const accessibility =
-        current.accessibilityLabel !== undefined
-          ? { label: current.accessibilityLabel }
-          : current.screenReader
-            ? {}
-            : undefined;
+      let accessibility: { readonly label?: string } | undefined;
+      if (current.accessibilityLabel !== undefined) {
+        accessibility = { label: current.accessibilityLabel };
+      } else if (current.screenReader) {
+        accessibility = {};
+      }
       const nextTerminal = await Terminal.create({
         runtime: { kind: "borrowed", runtime },
         renderWhenOffscreen: true,
@@ -947,6 +947,17 @@ export function TerminalView({
     terminal.reset();
   }
 
+  let errorOverlay: ReactNode = null;
+  if (errorMessage) {
+    errorOverlay = renderError ? (
+      renderError(errorMessage)
+    ) : (
+      <div className="wb-terminal-error" role="alert" data-testid="wb-terminal-error">
+        {errorMessage}
+      </div>
+    );
+  }
+
   return (
     <div
       ref={wrapperRef}
@@ -971,15 +982,7 @@ export function TerminalView({
         data-testid={`wb-terminal-host-${sessionId}`}
         inert={inertWhenNotReady && !ready ? true : undefined}
       />
-      {errorMessage ? (
-        renderError ? (
-          renderError(errorMessage)
-        ) : (
-          <div className="wb-terminal-error" role="alert" data-testid="wb-terminal-error">
-            {errorMessage}
-          </div>
-        )
-      ) : null}
+      {errorOverlay}
       {children}
       {showAccessoryBar ? (
         <TerminalAccessoryBar

@@ -227,20 +227,15 @@ export function PreviewPane({
   const frameErrors = bridgeState.key === sessionKey ? bridgeState.errors : [];
   const activeHistory =
     historyState.key === sessionKey ? historyState : createInitialHistory(sessionKey, committedPath);
+  const controllerCanGoBack = controllerNav.key === sessionKey ? controllerNav.canGoBack : true;
+  const controllerCanGoForward = controllerNav.key === sessionKey ? controllerNav.canGoForward : true;
   const canGoBack =
-    activePort !== undefined &&
-    (historyMode === "pane"
-      ? activeHistory.index > 0
-      : controllerNav.key === sessionKey
-        ? controllerNav.canGoBack
-        : true);
+    activePort !== undefined && (historyMode === "pane" ? activeHistory.index > 0 : controllerCanGoBack);
   const canGoForward =
     activePort !== undefined &&
     (historyMode === "pane"
       ? activeHistory.index < activeHistory.entries.length - 1
-      : controllerNav.key === sessionKey
-        ? controllerNav.canGoForward
-        : true);
+      : controllerCanGoForward);
 
   useEffect(() => {
     emitActivePort(activePort);
@@ -311,13 +306,16 @@ export function PreviewPane({
         } else {
           syncControllerNav(controllerRef.current);
         }
-        setBridgeState((prev) => ({
-          key: sessionKey,
-          status: prev.key === sessionKey ? prev.status : "pending",
-          title: prev.key === sessionKey ? prev.title : "",
-          error: null,
-          errors: event.type === "started" ? [] : prev.key === sessionKey ? prev.errors : [],
-        }));
+        setBridgeState((prev) => {
+          const retainedErrors = prev.key === sessionKey ? prev.errors : [];
+          return {
+            key: sessionKey,
+            status: prev.key === sessionKey ? prev.status : "pending",
+            title: prev.key === sessionKey ? prev.title : "",
+            error: null,
+            errors: event.type === "started" ? [] : retainedErrors,
+          };
+        });
         return;
       }
       if (event.type === "title") {
@@ -453,6 +451,114 @@ export function PreviewPane({
   const showPortSelect = alwaysShowPortSelect ? servers.length > 0 : servers.length > 1;
   const showViewports = !hideViewportsWhenEmpty || activePort !== undefined;
 
+  let portControl: ReactNode = null;
+  if (showPortSelect) {
+    portControl = (
+      <select
+        aria-label="Preview server port"
+        className="wb-preview-port-select"
+        data-testid="wb-preview-port-select"
+        value={activePort ?? ""}
+        onChange={(event) => {
+          const nextPort = Number(event.target.value);
+          if (!Number.isFinite(nextPort)) return;
+          setSelectedPort(nextPort);
+        }}
+      >
+        {servers.map((srv) => (
+          <option key={srv.port} value={srv.port}>
+            {portOptionText(srv)}
+          </option>
+        ))}
+      </select>
+    );
+  } else if (activeServer) {
+    portControl = (
+      <span className="wb-preview-port-badge" data-testid="wb-preview-port-badge">
+        {activeServer.label ? `${activeServer.label} :${activeServer.port}` : `:${activeServer.port}`}
+      </span>
+    );
+  }
+
+  let openInTabControl: ReactNode = null;
+  if (openInTabEnabled && onOpenInTab) {
+    openInTabControl = (
+      <button
+        type="button"
+        className="wb-preview-btn wb-preview-external"
+        aria-label={openInTabLabel}
+        title={openInTabLabel}
+        data-testid="wb-preview-open-tab"
+        disabled={!openTabHref}
+        onClick={() => {
+          if (openTabHref) onOpenInTab(openTabHref);
+        }}
+      >
+        ↗
+      </button>
+    );
+  } else if (openInTabEnabled && openTabHref) {
+    openInTabControl = (
+      <a
+        href={openTabHref}
+        target="_blank"
+        rel="noopener noreferrer"
+        className="wb-preview-btn wb-preview-external"
+        aria-label={openInTabLabel}
+        title={openInTabLabel}
+        data-testid="wb-preview-open-tab"
+      >
+        ↗
+      </a>
+    );
+  }
+
+  let stageContent: ReactNode;
+  if (bootError) {
+    stageContent = renderEmpty ? (
+      renderEmpty({ booting: false, bootError })
+    ) : (
+      <div className="wb-preview-state" role="alert" data-testid="wb-preview-boot-error">
+        <strong>Preview failed to start</strong>
+        <p>{bootError}</p>
+      </div>
+    );
+  } else if (!adapterReady) {
+    stageContent = renderEmpty ? (
+      renderEmpty({ booting: true, bootError: null })
+    ) : (
+      <div className="wb-preview-state" role="status" data-testid="wb-preview-booting">
+        <span>Starting preview…</span>
+      </div>
+    );
+  } else if (activePort === undefined) {
+    stageContent = renderEmpty ? (
+      renderEmpty({ booting: false, bootError: null })
+    ) : (
+      <div className="wb-preview-state" data-testid="wb-preview-empty">
+        <strong>{emptyTitle}</strong>
+        <p>{emptyDescription}</p>
+      </div>
+    );
+  } else {
+    stageContent = (
+      <div className="wb-preview-frame-wrap" data-viewport-preset={viewportPreset}>
+        <iframe
+          ref={frameRef}
+          title={frameTitle || `Preview :${activePort}`}
+          className="wb-preview-iframe"
+          data-testid="wb-preview-iframe"
+          sandbox={sandbox ?? undefined}
+          allow={allow}
+          onLoad={() => controllerRef.current?.onFrameLoad()}
+        />
+        {dragging ? (
+          <div className="wb-preview-drag-shield" data-testid="wb-preview-drag-shield" aria-hidden="true" />
+        ) : null}
+      </div>
+    );
+  }
+
   return (
     <section
       data-wb-preview=""
@@ -500,29 +606,7 @@ export function PreviewPane({
             </button>
           </div>
 
-          {showPortSelect ? (
-            <select
-              aria-label="Preview server port"
-              className="wb-preview-port-select"
-              data-testid="wb-preview-port-select"
-              value={activePort ?? ""}
-              onChange={(event) => {
-                const nextPort = Number(event.target.value);
-                if (!Number.isFinite(nextPort)) return;
-                setSelectedPort(nextPort);
-              }}
-            >
-              {servers.map((srv) => (
-                <option key={srv.port} value={srv.port}>
-                  {portOptionText(srv)}
-                </option>
-              ))}
-            </select>
-          ) : activeServer ? (
-            <span className="wb-preview-port-badge" data-testid="wb-preview-port-badge">
-              {activeServer.label ? `${activeServer.label} :${activeServer.port}` : `:${activeServer.port}`}
-            </span>
-          ) : null}
+          {portControl}
 
           <form className="wb-preview-url-form" onSubmit={handleNavigateSubmit}>
             <input
@@ -582,33 +666,7 @@ export function PreviewPane({
 
         <div className="wb-preview-toolbar-trailing">
           {toolbarActions}
-          {openInTabEnabled && onOpenInTab ? (
-            <button
-              type="button"
-              className="wb-preview-btn wb-preview-external"
-              aria-label={openInTabLabel}
-              title={openInTabLabel}
-              data-testid="wb-preview-open-tab"
-              disabled={!openTabHref}
-              onClick={() => {
-                if (openTabHref) onOpenInTab(openTabHref);
-              }}
-            >
-              ↗
-            </button>
-          ) : openInTabEnabled && openTabHref ? (
-            <a
-              href={openTabHref}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="wb-preview-btn wb-preview-external"
-              aria-label={openInTabLabel}
-              title={openInTabLabel}
-              data-testid="wb-preview-open-tab"
-            >
-              ↗
-            </a>
-          ) : null}
+          {openInTabControl}
         </div>
       </div>
 
@@ -629,52 +687,7 @@ export function PreviewPane({
       ) : null}
 
       <div className="wb-preview-stage" data-viewport-preset={viewportPreset}>
-        {bootError ? (
-          renderEmpty ? (
-            renderEmpty({ booting: false, bootError })
-          ) : (
-            <div className="wb-preview-state" role="alert" data-testid="wb-preview-boot-error">
-              <strong>Preview failed to start</strong>
-              <p>{bootError}</p>
-            </div>
-          )
-        ) : !adapterReady ? (
-          renderEmpty ? (
-            renderEmpty({ booting: true, bootError: null })
-          ) : (
-            <div className="wb-preview-state" role="status" data-testid="wb-preview-booting">
-              <span>Starting preview…</span>
-            </div>
-          )
-        ) : activePort === undefined ? (
-          renderEmpty ? (
-            renderEmpty({ booting: false, bootError: null })
-          ) : (
-            <div className="wb-preview-state" data-testid="wb-preview-empty">
-              <strong>{emptyTitle}</strong>
-              <p>{emptyDescription}</p>
-            </div>
-          )
-        ) : (
-          <div className="wb-preview-frame-wrap" data-viewport-preset={viewportPreset}>
-            <iframe
-              ref={frameRef}
-              title={frameTitle || `Preview :${activePort}`}
-              className="wb-preview-iframe"
-              data-testid="wb-preview-iframe"
-              sandbox={sandbox ?? undefined}
-              allow={allow}
-              onLoad={() => controllerRef.current?.onFrameLoad()}
-            />
-            {dragging ? (
-              <div
-                className="wb-preview-drag-shield"
-                data-testid="wb-preview-drag-shield"
-                aria-hidden="true"
-              />
-            ) : null}
-          </div>
-        )}
+        {stageContent}
       </div>
     </section>
   );

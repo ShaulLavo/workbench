@@ -101,6 +101,93 @@ export function FileTreeRow({
   const gitLetter =
     row.gitStatus && row.gitStatus !== "ignored" ? GIT_BADGE_LETTER[row.gitStatus] : undefined;
 
+  let chevronContent: ReactNode = null;
+  if (isDirectory) {
+    chevronContent = row.loading ? <span className="wb-tree-spinner" /> : <StrokeIcon name="chevron" />;
+  }
+
+  let labelContent: ReactNode;
+  if (row.editing) {
+    labelContent = (
+      <RenameField
+        initialValue={row.name}
+        siblingNames={siblingNames}
+        onCommit={(nextName) => onCommitRename(row.path, nextName)}
+        onCancel={onCancelDraft}
+      />
+    );
+  } else if (row.segments && row.segments.length > 1) {
+    labelContent = (
+      <span className="wb-tree-segments">
+        {row.segments.map((seg, idx) => (
+          <span key={seg.path} className="wb-tree-segment-wrap">
+            {idx > 0 ? (
+              <span className="wb-tree-segment-sep" aria-hidden="true">
+                /
+              </span>
+            ) : null}
+            <button
+              type="button"
+              tabIndex={-1}
+              className="wb-tree-segment"
+              data-wb-drop-segment={seg.path}
+              data-drop-active={dropTargetSegment === seg.path ? "true" : undefined}
+              data-testid={`wb-tree-segment-${seg.path}`}
+              onClick={(event) => {
+                event.stopPropagation();
+                onSegmentClick(row, seg.path, event);
+              }}
+              onDoubleClick={(event) => {
+                event.stopPropagation();
+                if (!onDoubleClickRename) return;
+                if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
+                  return;
+                }
+                onDoubleClickRename(row, seg.path);
+              }}
+              onDragOver={(event) => {
+                event.stopPropagation();
+                onRowDragOver?.(row, seg.path, event);
+              }}
+              onDrop={(event) => {
+                event.stopPropagation();
+                onRowDrop?.(row, seg.path, event);
+              }}
+            >
+              {seg.name}
+            </button>
+          </span>
+        ))}
+      </span>
+    );
+  } else if (split) {
+    labelContent = (
+      <span className="wb-tree-name">
+        <span className="wb-tree-stem">{split.stem}</span>
+        {split.ext ? <span className="wb-tree-ext">{split.ext}</span> : null}
+      </span>
+    );
+  } else {
+    labelContent = (
+      <span className="wb-tree-name">
+        <span className="wb-tree-stem">{row.name}</span>
+      </span>
+    );
+  }
+
+  let gitIndicator: ReactNode = null;
+  if (gitLetter) {
+    gitIndicator = (
+      <span className="wb-tree-git-badge" data-status={row.gitStatus} aria-label={`Git ${row.gitStatus}`}>
+        {gitLetter}
+      </span>
+    );
+  } else if (row.hasChangedDescendant) {
+    gitIndicator = (
+      <span className="wb-tree-git-dot" data-wb-git-dot="true" aria-label="Contains Git changes" />
+    );
+  }
+
   return (
     <div
       ref={(el) => {
@@ -188,76 +275,12 @@ export function FileTreeRow({
           onToggleDirectory(row.path);
         }}
       >
-        {isDirectory ? (
-          row.loading ? (
-            <span className="wb-tree-spinner" />
-          ) : (
-            <StrokeIcon name="chevron" />
-          )
-        ) : null}
+        {chevronContent}
       </span>
 
       <FileTypeIcon entry={{ name: row.name, type: row.kind }} open={row.expanded} sprite />
 
-      {row.editing ? (
-        <RenameField
-          initialValue={row.name}
-          siblingNames={siblingNames}
-          onCommit={(nextName) => onCommitRename(row.path, nextName)}
-          onCancel={onCancelDraft}
-        />
-      ) : row.segments && row.segments.length > 1 ? (
-        <span className="wb-tree-segments">
-          {row.segments.map((seg, idx) => (
-            <span key={seg.path} className="wb-tree-segment-wrap">
-              {idx > 0 ? (
-                <span className="wb-tree-segment-sep" aria-hidden="true">
-                  /
-                </span>
-              ) : null}
-              <button
-                type="button"
-                tabIndex={-1}
-                className="wb-tree-segment"
-                data-wb-drop-segment={seg.path}
-                data-drop-active={dropTargetSegment === seg.path ? "true" : undefined}
-                data-testid={`wb-tree-segment-${seg.path}`}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  onSegmentClick(row, seg.path, event);
-                }}
-                onDoubleClick={(event) => {
-                  event.stopPropagation();
-                  if (!onDoubleClickRename) return;
-                  if (typeof window !== "undefined" && window.matchMedia?.("(pointer: coarse)").matches) {
-                    return;
-                  }
-                  onDoubleClickRename(row, seg.path);
-                }}
-                onDragOver={(event) => {
-                  event.stopPropagation();
-                  onRowDragOver?.(row, seg.path, event);
-                }}
-                onDrop={(event) => {
-                  event.stopPropagation();
-                  onRowDrop?.(row, seg.path, event);
-                }}
-              >
-                {seg.name}
-              </button>
-            </span>
-          ))}
-        </span>
-      ) : split ? (
-        <span className="wb-tree-name">
-          <span className="wb-tree-stem">{split.stem}</span>
-          {split.ext ? <span className="wb-tree-ext">{split.ext}</span> : null}
-        </span>
-      ) : (
-        <span className="wb-tree-name">
-          <span className="wb-tree-stem">{row.name}</span>
-        </span>
-      )}
+      {labelContent}
 
       {decoration ? (
         <span className="wb-tree-decoration" data-wb-tree-decoration="">
@@ -265,13 +288,7 @@ export function FileTreeRow({
         </span>
       ) : null}
 
-      {gitLetter ? (
-        <span className="wb-tree-git-badge" data-status={row.gitStatus} aria-label={`Git ${row.gitStatus}`}>
-          {gitLetter}
-        </span>
-      ) : row.hasChangedDescendant ? (
-        <span className="wb-tree-git-dot" data-wb-git-dot="true" aria-label="Contains Git changes" />
-      ) : null}
+      {gitIndicator}
     </div>
   );
 }

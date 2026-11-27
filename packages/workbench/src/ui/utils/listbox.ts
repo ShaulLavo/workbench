@@ -22,8 +22,8 @@ export function resolveListboxKeyAction(input: ListboxKeyInput): ListboxKeyActio
     return { kind: "move", index: next };
   }
   if (key === "ArrowUp") {
-    const prev = activeIndex <= 0 ? (loop ? count - 1 : 0) : activeIndex - 1;
-    return { kind: "move", index: prev };
+    if (activeIndex <= 0) return { kind: "move", index: loop ? count - 1 : 0 };
+    return { kind: "move", index: activeIndex - 1 };
   }
   if (key === "Home") return { kind: "move", index: 0 };
   if (key === "End") return { kind: "move", index: count - 1 };

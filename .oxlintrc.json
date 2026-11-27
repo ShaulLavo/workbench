@@ -5,6 +5,9 @@
   "rules": {
     "no-unused-vars": "error",
     "no-debugger": "error",
-    "eqeqeq": ["error", "always", { "null": "ignore" }]
+    "eqeqeq": ["error", "always", { "null": "ignore" }],
+    "no-nested-ternary": "error",
+    "max-depth": ["error", 3],
+    "no-else-return": "error"
   }
 }

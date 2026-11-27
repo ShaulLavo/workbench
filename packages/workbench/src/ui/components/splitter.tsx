@@ -177,12 +177,14 @@ export function Splitter({
     }
     const space = measureSpace();
     const currentPx = isSplitterOpen(geometry, splitter) ? measurePaneSize() : 0;
-    const growth =
-      action === "min"
-        ? -currentPx - 10_000
-        : action === "max"
-          ? Math.max(space.width, space.height)
-          : action;
+    let growth: number;
+    if (action === "min") {
+      growth = -currentPx - 10_000;
+    } else if (action === "max") {
+      growth = Math.max(space.width, space.height);
+    } else {
+      growth = action;
+    }
     const next = dragPaneGeometry(splitter, {
       startGeometry: geometry,
       startPx: currentPx,

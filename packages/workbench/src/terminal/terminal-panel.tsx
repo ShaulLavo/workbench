@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   type KeyboardEvent,
@@ -73,10 +74,18 @@ interface SplitPairRecord {
   readonly rightId: string;
 }
 
+const rememberedSplitPairs = new WeakMap<TerminalAdapter, SplitPairRecord>();
+
 const EMPTY_SPLIT_ID = {
   getSnapshot: (): string | undefined => undefined,
   subscribe: () => () => {},
 };
+
+function findSplitPartnerId(pair: SplitPairRecord, sessionId: string): string | undefined {
+  if (pair.leftId === sessionId) return pair.rightId;
+  if (pair.rightId === sessionId) return pair.leftId;
+  return undefined;
+}
 
 function SessionStatusDot({ status }: { readonly status: TerminalSessionInfo["status"] }) {
   return <span className="wb-terminal-status-dot" data-status={status} aria-label={`Terminal ${status}`} />;
@@ -145,12 +154,7 @@ function resolveSplitSessions(
   // If an adapter sets activeId === splitId when the user selects the right split pane,
   // preserve the remembered split partner on the left so clicking the split tab never unsplits.
   if (previousPair) {
-    const partnerId =
-      previousPair.leftId === splitSession.id
-        ? previousPair.rightId
-        : previousPair.rightId === splitSession.id
-          ? previousPair.leftId
-          : undefined;
+    const partnerId = findSplitPartnerId(previousPair, splitSession.id);
     const partner = partnerId ? sessions.find((s) => s.id === partnerId) : undefined;
     if (partner && partner.id !== splitSession.id) {
       return { primary: partner, secondary: splitSession };
@@ -206,11 +210,15 @@ export function TerminalPanel({
   const splitId = useSubscribable(adapter.splitId ?? EMPTY_SPLIT_ID);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [focusTick, setFocusTick] = useState(0);
-  const [splitPair, setSplitPair] = useState<SplitPairRecord | null>(null);
+  const [tabFocusTick, setTabFocusTick] = useState(0);
+  const [splitPair, setSplitPair] = useState<SplitPairRecord | null>(
+    () => rememberedSplitPairs.get(adapter) ?? null,
+  );
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
 
   const headerRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusSessionRef = useRef<string | null>(null);
+  const pendingTabFocusRef = useRef<string | null>(null);
   const restoreFocusTargetRef = useRef<
     | { readonly closingId: string; readonly kind: "tab"; readonly id: string }
     | { readonly closingId: string; readonly kind: "new" }
@@ -224,7 +232,7 @@ export function TerminalPanel({
     sessions,
     activeId,
     splitId,
-    splitPair,
+    splitPair ?? rememberedSplitPairs.get(adapter) ?? null,
   );
 
   if (primarySession && secondarySession) {
@@ -235,8 +243,20 @@ export function TerminalPanel({
     setSplitPair(null);
   }
 
-  const focusedSession =
-    secondarySession && focusedPaneId === secondarySession.id ? secondarySession : primarySession;
+  useEffect(() => {
+    if (primarySession && secondarySession) {
+      rememberedSplitPairs.set(adapter, { leftId: primarySession.id, rightId: secondarySession.id });
+      return;
+    }
+    rememberedSplitPairs.delete(adapter);
+  }, [adapter, primarySession, secondarySession]);
+
+  let focusedSession = primarySession;
+  if (secondarySession) {
+    const wantsSecondary =
+      focusedPaneId === secondarySession.id || (focusedPaneId === null && activeId === secondarySession.id);
+    if (wantsSecondary) focusedSession = secondarySession;
+  }
 
   function focusTabButton(targetSessionId: string): void {
     const header = headerRef.current;
@@ -340,6 +360,13 @@ export function TerminalPanel({
 
   const orderedTabs = buildVisualTabOrder(sessions, primarySession, secondarySession);
 
+  useLayoutEffect(() => {
+    const targetId = pendingTabFocusRef.current;
+    if (!targetId) return;
+    pendingTabFocusRef.current = null;
+    focusTabButton(targetId);
+  }, [tabFocusTick, primarySession?.id, secondarySession?.id]);
+
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, sessionId: string): void {
     const index = orderedTabs.findIndex((session) => session.id === sessionId);
     if (event.key === "F2") {
@@ -362,8 +389,9 @@ export function TerminalPanel({
     event.preventDefault();
     clearPendingTerminalFocus();
     setFocusedPaneId(next.id);
+    pendingTabFocusRef.current = next.id;
+    setTabFocusTick((tick) => tick + 1);
     adapter.selectSession(next.id);
-    focusTabButton(next.id);
   }
 
   function renderSessionTab(session: TerminalSessionInfo, splitRole?: "left" | "right"): ReactNode {
@@ -484,6 +512,66 @@ export function TerminalPanel({
     );
   }
 
+  function resolveKeepAlivePosition(sessionId: string): "single" | "left" | "right" | "hidden" {
+    if (sessionId === primarySession?.id) {
+      return secondarySession ? "left" : "single";
+    }
+    if (sessionId === secondarySession?.id) {
+      return "right";
+    }
+    return "hidden";
+  }
+
+  let stageContent: ReactNode;
+  if (primarySession) {
+    const orderedKeepAlive = [primarySession].concat(
+      secondarySession ? [secondarySession] : [],
+      sessions.filter((session) => session.id !== primarySession.id && session.id !== secondarySession?.id),
+    );
+    stageContent = (
+      <div
+        className={cx("wb-terminal-stage", secondarySession && "wb-terminal-stage-split")}
+        data-split={secondarySession ? "true" : "false"}
+        onClick={handleStageClick}
+      >
+        {keepAlive ? (
+          orderedKeepAlive.map((session) =>
+            renderSessionView(
+              session,
+              resolveKeepAlivePosition(session.id),
+              showAccessoryBar && session.id === (focusedSession?.id ?? primarySession.id),
+            ),
+          )
+        ) : (
+          <>
+            {renderSessionView(primarySession, secondarySession ? "left" : "single", showAccessoryBar)}
+            {secondarySession ? (
+              <div className="wb-terminal-split-pane">
+                {renderSessionView(secondarySession, "right", false)}
+              </div>
+            ) : null}
+          </>
+        )}
+      </div>
+    );
+  } else if (renderEmpty) {
+    stageContent = renderEmpty();
+  } else {
+    stageContent = (
+      <div className="wb-terminal-empty" data-testid="wb-terminal-empty">
+        <p>No active terminal sessions.</p>
+        <button
+          type="button"
+          className="wb-button wb-button-primary"
+          data-testid="wb-term-empty-new"
+          onClick={handleCreateSession}
+        >
+          New terminal
+        </button>
+      </div>
+    );
+  }
+
   return (
     <section
       data-wb-terminal-panel=""
@@ -579,61 +667,7 @@ export function TerminalPanel({
         </div>
       </div>
 
-      {primarySession ? (
-        <div
-          className={cx("wb-terminal-stage", secondarySession && "wb-terminal-stage-split")}
-          data-split={secondarySession ? "true" : "false"}
-          onClick={handleStageClick}
-        >
-          {keepAlive ? (
-            [primarySession]
-              .concat(
-                secondarySession ? [secondarySession] : [],
-                sessions.filter(
-                  (session) => session.id !== primarySession.id && session.id !== secondarySession?.id,
-                ),
-              )
-              .map((session) => {
-                const position =
-                  session.id === primarySession.id
-                    ? secondarySession
-                      ? "left"
-                      : "single"
-                    : session.id === secondarySession?.id
-                      ? "right"
-                      : "hidden";
-                return renderSessionView(
-                  session,
-                  position,
-                  showAccessoryBar && session.id === (focusedSession?.id ?? primarySession.id),
-                );
-              })
-          ) : (
-            <>
-              {renderSessionView(primarySession, secondarySession ? "left" : "single", showAccessoryBar)}
-              {secondarySession ? (
-                <div className="wb-terminal-split-pane">
-                  {renderSessionView(secondarySession, "right", false)}
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-      ) : renderEmpty ? (
-        renderEmpty()
-      ) : (
-        <div className="wb-terminal-empty" data-testid="wb-terminal-empty">
-          <p>No active terminal sessions.</p>
-          <button
-            type="button"
-            className="wb-button wb-button-primary"
-            data-testid="wb-term-empty-new"
-            onClick={handleCreateSession}
-          >
-            New terminal
-          </button>
-        </div>
-      )}
+      {stageContent}
     </section>
   );
 }

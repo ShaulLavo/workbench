@@ -1,6 +1,15 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export interface CandidateManifest {
@@ -61,17 +70,24 @@ const pkgManifest = JSON.parse(readFileSync(path.join(PKG_DIR, "package.json"), 
 rmSync(path.join(PKG_DIR, "dist"), { recursive: true, force: true });
 run("bun", ["run", "--cwd", "packages/workbench", "build"], ROOT);
 
-rmSync(outDir, { recursive: true, force: true });
 mkdirSync(outDir, { recursive: true });
-run("bun", ["pm", "pack", "--destination", outDir, "--quiet"], PKG_DIR);
-
-const tarballs = readdirSync(outDir).filter((file) => file.endsWith(".tgz"));
-if (tarballs.length !== 1 || !tarballs[0]) {
-  throw new Error(`Expected exactly 1 tarball in ${outDir}, found: ${tarballs.join(", ")}`);
+const stageDir = mkdtempSync(path.join(os.tmpdir(), "workbench-pack-stage-"));
+let tarballFile = "";
+let sha256 = "";
+try {
+  run("bun", ["pm", "pack", "--destination", stageDir, "--quiet"], PKG_DIR);
+  const tarballs = readdirSync(stageDir).filter((file) => file.endsWith(".tgz"));
+  if (tarballs.length !== 1 || !tarballs[0]) {
+    throw new Error(`Expected exactly 1 tarball in ${stageDir}, found: ${tarballs.join(", ")}`);
+  }
+  tarballFile = tarballs[0];
+  const stagedTarballPath = path.join(stageDir, tarballFile);
+  const tarballPath = path.join(outDir, tarballFile);
+  copyFileSync(stagedTarballPath, tarballPath);
+  sha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
+} finally {
+  rmSync(stageDir, { recursive: true, force: true });
 }
-const tarballFile = tarballs[0];
-const tarballPath = path.join(outDir, tarballFile);
-const sha256 = createHash("sha256").update(readFileSync(tarballPath)).digest("hex");
 
 const manifest: CandidateManifest = {
   ciRunId: process.env.GITHUB_RUN_ID ?? null,
