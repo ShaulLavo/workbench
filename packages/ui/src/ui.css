@@ -522,6 +522,13 @@
     display: none;
   }
 
+  .wb-tab-strip-content {
+    display: flex;
+    align-items: stretch;
+    min-width: 100%;
+    width: max-content;
+  }
+
   .wb-tab-strip-actions {
     display: flex;
     align-items: center;

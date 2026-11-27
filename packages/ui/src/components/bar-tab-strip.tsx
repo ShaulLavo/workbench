@@ -40,6 +40,7 @@ export function BarTabStrip({
   ...props
 }: BarTabStripProps) {
   const internalRef = useRef<HTMLDivElement | null>(null);
+  const contentRef = useRef<HTMLDivElement | null>(null);
   const resolvedRef = stripRef ?? internalRef;
   const [edges, setEdges] = useState<{ readonly start: boolean; readonly end: boolean }>({
     start: false,
@@ -54,6 +55,7 @@ export function BarTabStrip({
   useEffect(() => {
     const element = resolvedRef.current;
     if (!element) return;
+    const content = contentRef.current;
     const sync = () => {
       const next = measureStripOverflow(element);
       setEdges((current) => (current.start === next.start && current.end === next.end ? current : next));
@@ -62,6 +64,7 @@ export function BarTabStrip({
     if (typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(sync);
     observer.observe(element);
+    if (content) observer.observe(content);
     return () => observer.disconnect();
   }, [resolvedRef, children]);
 
@@ -83,7 +86,9 @@ export function BarTabStrip({
           onStripScroll?.(event);
         }}
       >
-        {children}
+        <div ref={contentRef} role="presentation" className="wb-tab-strip-content">
+          {children}
+        </div>
       </div>
       {actions ? <div className="wb-tab-strip-actions">{actions}</div> : null}
     </div>

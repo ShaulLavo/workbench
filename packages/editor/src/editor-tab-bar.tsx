@@ -44,10 +44,12 @@ export interface EditorTabBarProps {
 }
 
 interface TabDragState {
-  index: number;
+  readonly tabId: TabId;
+  readonly groupId: GroupId;
   readonly startX: number;
   readonly pointerId: number;
   moved: boolean;
+  lastEmittedSlot: number | null;
 }
 
 function parentDirectory(path: string): string {
@@ -90,13 +92,11 @@ function revealElementInStrip(strip: HTMLDivElement, tab: HTMLElement): void {
   }
 }
 
-function findDragSlot(strip: HTMLDivElement | null, clientX: number, fromIndex: number): number {
+function findDragSlotByTabId(strip: HTMLDivElement | null, clientX: number, draggedTabId: TabId): number {
   const items = Array.from(strip?.querySelectorAll<HTMLElement>("[data-wb-tab]") ?? []);
   let slot = 0;
-  for (let index = 0; index < items.length; index += 1) {
-    if (index === fromIndex) continue;
-    const item = items[index];
-    if (!item) continue;
+  for (const item of items) {
+    if (item.dataset.tabId === draggedTabId) continue;
     const rect = item.getBoundingClientRect();
     if (rect.left + rect.width / 2 < clientX) slot += 1;
   }
@@ -156,14 +156,28 @@ export function EditorTabBar({
   const resolvedStripRef = stripRef ?? internalStripRef;
   const lastPointerTypeRef = useRef<string | undefined>(undefined);
   const tabNodesRef = useRef<Map<TabId, HTMLDivElement>>(new Map());
+  const tabsRef = useRef<readonly EditorTabDescriptor[]>(tabs);
+  const groupIdRef = useRef<GroupId>(groupId);
   const dragRef = useRef<TabDragState | null>(null);
   const suppressClickRef = useRef(false);
+  const suppressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reorderCallbackRef = useRef(onReorderTab);
-  const [draggingIndex, setDraggingIndex] = useState<number | null>(null);
+  const [draggingTabId, setDraggingTabId] = useState<TabId | null>(null);
 
   useEffect(() => {
+    tabsRef.current = tabs;
+    groupIdRef.current = groupId;
     reorderCallbackRef.current = onReorderTab;
-  }, [onReorderTab]);
+    const activeDrag = dragRef.current;
+    if (!activeDrag) return;
+    const stillPresent = activeDrag.groupId === groupId && tabs.some((tab) => tab.id === activeDrag.tabId);
+    if (stillPresent) {
+      activeDrag.lastEmittedSlot = null;
+      return;
+    }
+    dragRef.current = null;
+    queueMicrotask(() => setDraggingTabId(null));
+  }, [groupId, onReorderTab, tabs]);
 
   useEffect(() => {
     if (!selectedTabId) return;
@@ -174,45 +188,63 @@ export function EditorTabBar({
   }, [resolvedStripRef, selectedTabId, tabs]);
 
   useEffect(() => {
+    function cancelDrag(): void {
+      dragRef.current = null;
+      setDraggingTabId(null);
+    }
+
     function handlePointerMove(event: PointerEvent): void {
       const state = dragRef.current;
       if (!state || event.pointerId !== state.pointerId) return;
+      if (state.groupId !== groupIdRef.current) return cancelDrag();
+      const currentIndex = tabsRef.current.findIndex((tab) => tab.id === state.tabId);
+      if (currentIndex < 0) return cancelDrag();
       if (!state.moved && Math.abs(event.clientX - state.startX) < DRAG_THRESHOLD_PX) return;
       state.moved = true;
-      const slot = findDragSlot(resolvedStripRef.current, event.clientX, state.index);
-      setDraggingIndex(slot);
-      if (slot === state.index) return;
-      reorderCallbackRef.current?.(groupId, state.index, slot);
-      state.index = slot;
+      setDraggingTabId(state.tabId);
+      const slot = findDragSlotByTabId(resolvedStripRef.current, event.clientX, state.tabId);
+      if (slot === currentIndex || slot === state.lastEmittedSlot) return;
+      state.lastEmittedSlot = slot;
+      reorderCallbackRef.current?.(state.groupId, currentIndex, slot);
     }
 
     function handlePointerEnd(event: PointerEvent): void {
       const state = dragRef.current;
       if (!state || event.pointerId !== state.pointerId) return;
-      suppressClickRef.current = event.type !== "pointercancel" && state.moved;
-      dragRef.current = null;
-      setDraggingIndex(null);
+      const shouldSuppress = event.type !== "pointercancel" && state.moved;
+      cancelDrag();
+      clearTimeout(suppressTimerRef.current);
+      suppressClickRef.current = shouldSuppress;
+      if (!shouldSuppress) return;
+      // Only suppress the synthetic click that immediately follows pointerup on the dragged tab.
+      suppressTimerRef.current = setTimeout(() => {
+        suppressClickRef.current = false;
+      }, 0);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
     window.addEventListener("pointerup", handlePointerEnd);
     window.addEventListener("pointercancel", handlePointerEnd);
     return () => {
+      clearTimeout(suppressTimerRef.current);
       window.removeEventListener("pointermove", handlePointerMove);
       window.removeEventListener("pointerup", handlePointerEnd);
       window.removeEventListener("pointercancel", handlePointerEnd);
     };
-  }, [groupId, resolvedStripRef]);
+  }, [resolvedStripRef]);
 
-  function startPointerDrag(event: ReactPointerEvent<HTMLDivElement>, index: number): void {
+  function startPointerDrag(event: ReactPointerEvent<HTMLDivElement>, tabId: TabId): void {
     lastPointerTypeRef.current = event.pointerType;
+    clearTimeout(suppressTimerRef.current);
     suppressClickRef.current = false;
     if (!onReorderTab || event.button !== 0 || event.pointerType === "touch") return;
     dragRef.current = {
-      index,
+      tabId,
+      groupId,
       startX: event.clientX,
       pointerId: event.pointerId,
       moved: false,
+      lastEmittedSlot: null,
     };
   }
 
@@ -223,7 +255,9 @@ export function EditorTabBar({
   ): void {
     const recordedPointer = lastPointerTypeRef.current;
     lastPointerTypeRef.current = undefined;
-    if (suppressClickRef.current) {
+    const isKeyboardClick = event.detail === 0;
+    if (!isKeyboardClick && suppressClickRef.current) {
+      clearTimeout(suppressTimerRef.current);
       suppressClickRef.current = false;
       return;
     }
@@ -232,6 +266,12 @@ export function EditorTabBar({
       dismissSoftKeyboardOnTouchActivation(resolved, event.currentTarget);
     }
     onSelectTab(groupId, tab.id, resolved);
+  }
+
+  function handleTabMouseDown(event: MouseEvent<HTMLDivElement>, tabId: TabId): void {
+    if (event.button !== 1) return;
+    event.preventDefault();
+    onCloseTab(groupId, tabId);
   }
 
   function handleTabKeyDown(
@@ -289,13 +329,14 @@ export function EditorTabBar({
             preview={tab.preview}
             dirty={tab.dirty}
             missing={tab.missing}
-            dragging={draggingIndex === index}
+            dragging={draggingTabId === tab.id}
             dirtyTestId={dirtyTestId?.(tab, active)}
             data-testid={tabTestId ? tabTestId(tab) : `wb-editor-tab-${tab.id}`}
+            data-tab-id={tab.id}
             data-path={tab.path}
             data-tab-kind={tab.kind}
             icon={icon}
-            onPointerDown={(event) => startPointerDrag(event, index)}
+            onPointerDown={(event) => startPointerDrag(event, tab.id)}
             onPointerCancel={() => {
               lastPointerTypeRef.current = undefined;
             }}
@@ -303,12 +344,7 @@ export function EditorTabBar({
             onDoubleClickLabel={tab.preview && onPinTab ? () => onPinTab(groupId, tab.id) : undefined}
             onTabKeyDown={(event) => handleTabKeyDown(tab, index, event)}
             onClose={() => onCloseTab(groupId, tab.id)}
-            onMouseDown={(event) => {
-              if (event.button === 1) {
-                event.preventDefault();
-                onCloseTab(groupId, tab.id);
-              }
-            }}
+            onMouseDown={(event) => handleTabMouseDown(event, tab.id)}
             onContextMenu={onTabContextMenu ? (event) => onTabContextMenu(tab, event) : undefined}
           />
         );

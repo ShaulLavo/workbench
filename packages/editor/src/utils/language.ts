@@ -53,7 +53,7 @@ export function languageIdForPath(filePath: string | undefined): EditorSyntaxLan
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return null;
   const ext = name.slice(dot + 1);
-  return EXTENSION_TO_LANGUAGE[ext] ?? null;
+  return Object.hasOwn(EXTENSION_TO_LANGUAGE, ext) ? (EXTENSION_TO_LANGUAGE[ext] ?? null) : null;
 }
 
 const EXTENSION_TO_LABEL: Readonly<Record<string, string>> = {
@@ -108,5 +108,6 @@ export function languageLabelForPath(filePath: string | undefined): string {
   if (name === "makefile") return "Makefile";
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return "Plain Text";
-  return EXTENSION_TO_LABEL[name.slice(dot + 1)] ?? "Plain Text";
+  const ext = name.slice(dot + 1);
+  return Object.hasOwn(EXTENSION_TO_LABEL, ext) ? (EXTENSION_TO_LABEL[ext] ?? "Plain Text") : "Plain Text";
 }

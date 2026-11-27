@@ -1,6 +1,7 @@
 import {
   useEffect,
   useEffectEvent,
+  useLayoutEffect,
   useMemo,
   useRef,
   useState,
@@ -17,7 +18,7 @@ import type { EditorPlugin } from "@singapore-editor/core/extensions";
 import type { EditorTheme } from "@singapore-editor/core/rendering";
 import type { FoldGutterIcon } from "@singapore-editor/gutters/fold-gutter";
 import type { HighlightingService, HighlightingThemeSource } from "@singapore-editor/highlighting";
-import { useEditor } from "@singapore-editor/react";
+import { useEditor, useEditorSelector, type ReactEditorStoreSnapshot } from "@singapore-editor/react";
 import { createWorkbenchEditorPlugins } from "./utils/plugins";
 import { clampRestoredScroll } from "./utils/scroll";
 import { buildWorkbenchEditorTheme } from "./utils/theme";
@@ -79,6 +80,8 @@ export interface EditorSessionViewProps {
   readonly hostTestId?: string;
 }
 
+const selectEditorInstance = (snapshot: ReactEditorStoreSnapshot): Editor | null => snapshot.editor;
+
 function readNarrowViewport(): boolean {
   return typeof matchMedia === "function" && matchMedia("(max-width: 768px)").matches;
 }
@@ -88,6 +91,17 @@ function computeRevealOffset(session: EditorBufferSession, line: number, column:
   const row = Math.max(0, Math.min(line - 1, snapshot.lineCount - 1));
   const range = snapshot.lineRange(row);
   return Math.min(range.start + Math.max(0, (column ?? 1) - 1), range.end);
+}
+
+function applyClampedRestoredScroll(
+  editor: Editor,
+  savedScroll: EditorScrollPosition | undefined,
+  hostHeight: number,
+): void {
+  if (savedScroll?.top === undefined) return;
+  const clamped = clampRestoredScroll(savedScroll, editor.getContentHeight(), hostHeight);
+  if (!clamped || clamped.top === editor.getScrollPosition().top) return;
+  editor.setScrollPosition(clamped);
 }
 
 /**
@@ -133,7 +147,7 @@ export function EditorSessionView({
   const [detectedNarrow, setDetectedNarrow] = useState<boolean>(() => readNarrowViewport());
   const [tokenTheme, setTokenTheme] = useState<EditorTheme>(() => buildWorkbenchEditorTheme(null));
   const attachedRef = useRef<EditorSessionAttachment | null>(null);
-  const handledRevealRef = useRef<number>(0);
+  const handledRevealRef = useRef<number | null>(null);
 
   const narrow = narrowProp ?? detectedNarrow;
   const theme = themeOverride ?? tokenTheme;
@@ -156,18 +170,27 @@ export function EditorSessionView({
     onChange?.(state, editor);
   });
 
-  // Created once per mount so Singapore does not tear down and recreate its plugin stack on renders.
-  const [plugins] = useState(() =>
-    createWorkbenchEditorPlugins({
-      analysisAllowed: true,
-      narrowViewport: narrow,
+  const plugins = useMemo(
+    () =>
+      createWorkbenchEditorPlugins({
+        analysisAllowed: true,
+        narrowViewport: narrow,
+        useDefaultHighlighting,
+        highlightingService,
+        highlightingTheme,
+        foldIcons,
+        includeMergeConflict,
+        extraPlugins,
+      }),
+    [
+      narrow,
       useDefaultHighlighting,
       highlightingService,
       highlightingTheme,
       foldIcons,
       includeMergeConflict,
       extraPlugins,
-    }),
+    ],
   );
 
   const resolvedTheme = useMemo(() => theme, [theme]);
@@ -191,7 +214,7 @@ export function EditorSessionView({
     },
   });
   const { ref: editorMountRef } = controller;
-  const editor = controller.useEditorInstance();
+  const editor = useEditorSelector(controller, selectEditorInstance);
 
   useEffect(() => {
     if (!hostEl) return;
@@ -230,6 +253,19 @@ export function EditorSessionView({
     };
   }, [editor, fontFamily]);
 
+  // Layout cleanup runs before React detaches the host ref and disposes the Singapore editor.
+  useLayoutEffect(() => {
+    if (!editor) return;
+    return () => {
+      const current = attachedRef.current;
+      if (!current) return;
+      attachedRef.current = null;
+      emitBeforeDetach(current, editor.getScrollPosition());
+      editor.detachSession();
+      emitDetached(editor);
+    };
+  }, [editor]);
+
   useEffect(() => {
     emitEditorReady(editor);
     return () => {
@@ -244,9 +280,10 @@ export function EditorSessionView({
 
     if (!attachment) {
       if (!current) return;
+      attachedRef.current = null;
       emitBeforeDetach(current, editor.getScrollPosition());
       editor.detachSession();
-      attachedRef.current = null;
+      editor.clear();
       emitDetached(editor);
       return;
     }
@@ -261,27 +298,20 @@ export function EditorSessionView({
       emitBeforeDetach(current, editor.getScrollPosition());
     }
 
-    const savedScroll = attachment.scrollPosition;
     editor.attachSession(attachment.session, {
       documentId: attachment.documentId,
       languageId: attachment.languageId ?? null,
-      scrollPosition: savedScroll,
+      scrollPosition: attachment.scrollPosition,
     });
-    if (savedScroll?.top !== undefined) {
-      const hostHeight = hostElRef.current?.clientHeight ?? 0;
-      const clamped = clampRestoredScroll(savedScroll, editor.getContentHeight(), hostHeight);
-      if (clamped && clamped.top !== editor.getScrollPosition().top) {
-        editor.setScrollPosition(clamped);
-      }
-    }
+    applyClampedRestoredScroll(editor, attachment.scrollPosition, hostElRef.current?.clientHeight ?? 0);
     attachedRef.current = attachment;
     emitAttached(editor, attachment);
   }, [editor, attachment]);
 
-  // Apply reveal requests (jump to 1-based line/column and optional focus) once per monotonic seq.
+  // Apply reveal requests (jump to 1-based line/column and optional focus) strictly monotonically.
   useEffect(() => {
     if (!editor || !reveal || !attachedRef.current) return;
-    if (reveal.seq === handledRevealRef.current) return;
+    if (handledRevealRef.current !== null && reveal.seq <= handledRevealRef.current) return;
     handledRevealRef.current = reveal.seq;
     if (reveal.line !== undefined) {
       const offset = computeRevealOffset(attachedRef.current.session, reveal.line, reveal.column);
