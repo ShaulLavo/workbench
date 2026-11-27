@@ -76,7 +76,7 @@ export interface PointContextMenuProps {
   readonly items: readonly ContextMenuItem[];
   readonly label?: string;
   readonly portalContainer?: HTMLElement | null;
-  readonly onOpenChange: (open: boolean) => void;
+  readonly onOpenChange: (open: boolean, reason?: string) => void;
 }
 
 function createPointRect(x: number, y: number): DOMRect {
@@ -117,7 +117,7 @@ export function PointContextMenu({
   };
 
   return (
-    <BaseMenu.Root open={open} onOpenChange={onOpenChange}>
+    <BaseMenu.Root open={open} onOpenChange={(nextOpen, details) => onOpenChange(nextOpen, details.reason)}>
       <BaseMenu.Portal container={container}>
         <BaseMenu.Positioner
           anchor={anchor}
