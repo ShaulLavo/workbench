@@ -13,7 +13,15 @@ import {
   type PreparedFileTreeInput,
   type RawTreeEntry,
 } from "./index-store";
-import { ancestorsOf, isInside, isSameOrInside, joinPath, normalizeTreePath, parentOf } from "./paths";
+import {
+  ancestorsOf,
+  compareDirEntries,
+  isInside,
+  isSameOrInside,
+  joinPath,
+  normalizeTreePath,
+  parentOf,
+} from "./paths";
 
 export type TreeDraft =
   | { readonly mode: "create"; readonly kind: EntryKind; readonly parent: string }
@@ -140,11 +148,17 @@ function compactDirectoryChain(
 }
 
 function childrenForFilter(index: FileTreeIndex, filterIndex: FileTreeIndex | null | undefined, dir: string) {
-  if (!filterIndex) return index.getChildren(dir);
-  if (index.getDirectoryLoadState(dir).status !== "loaded") {
-    return filterIndex.getChildren(dir);
+  const primary = index.getChildren(dir);
+  if (!filterIndex || index.getDirectoryLoadState(dir).status === "loaded") return primary;
+  const extra = filterIndex.getChildren(dir);
+  if (primary.length === 0) return extra;
+  if (extra.length === 0) return primary;
+  const seen = new Set(primary.map((entry) => entry.name));
+  const merged = primary.slice();
+  for (const entry of extra) {
+    if (!seen.has(entry.name)) merged.push(entry);
   }
-  return index.getChildren(dir);
+  return merged.sort(compareDirEntries);
 }
 
 function computeFilterSets(

@@ -637,6 +637,14 @@ export class FileTreeIndex {
     for (const removed of event.removed) {
       deleteSubtreeInLayer(layer, normalizeTreePath(removed));
     }
+    for (const move of event.moves) {
+      const from = normalizeTreePath(move.from);
+      const to = normalizeTreePath(move.to);
+      if (!from || !to || from === to) continue;
+      const entryKind = layer.kinds.get(from);
+      if (!entryKind) continue;
+      applyMutationToLayer(layer, { kind: "move", moves: [{ from, to, entryKind }] });
+    }
     for (const dir of event.directories) {
       const normalized = normalizeTreePath(dir);
       this.lazyStates.delete(normalized);

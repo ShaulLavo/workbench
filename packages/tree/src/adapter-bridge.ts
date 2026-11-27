@@ -1,6 +1,39 @@
 import type { FileSystemAdapter, LazyInvalidationEvent } from "@shaulavo/workbench-core";
 import type { FileTreeModel } from "./model";
-import { ancestorsOf, normalizeTreePath } from "./paths";
+import { ancestorsOf, isInside, isSameOrInside, normalizeTreePath } from "./paths";
+
+interface NormalizedMove {
+  readonly from: string;
+  readonly to: string;
+}
+
+function rebaseFilterPath(path: string, moves: readonly NormalizedMove[]): string {
+  let current = path;
+  for (const move of moves) {
+    if (current === move.from) current = move.to;
+    else if (isInside(current, move.from)) current = `${move.to}${current.slice(move.from.length)}`;
+  }
+  return current;
+}
+
+function applyInvalidationToFilterPaths(paths: readonly string[], event: LazyInvalidationEvent): string[] {
+  const removed = event.removed.map(normalizeTreePath).filter(Boolean);
+  const moves: NormalizedMove[] = event.moves
+    .map((move) => ({ from: normalizeTreePath(move.from), to: normalizeTreePath(move.to) }))
+    .filter((move) => move.from.length > 0 && move.to.length > 0 && move.from !== move.to);
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const rawPath of paths) {
+    const normalized = normalizeTreePath(rawPath);
+    if (!normalized) continue;
+    if (removed.some((target) => isSameOrInside(normalized, target))) continue;
+    const rebased = moves.length > 0 ? rebaseFilterPath(normalized, moves) : normalized;
+    if (seen.has(rebased)) continue;
+    seen.add(rebased);
+    next.push(rebased);
+  }
+  return next;
+}
 
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
@@ -26,7 +59,13 @@ export function bindFileSystemAdapter(
   let handlingInvalidation = false;
   let wasFiltering = false;
   let filterListGen = 0;
+  let cachedFilterPaths: readonly string[] | undefined;
   let disposed = false;
+
+  function setFilterPaths(paths: readonly string[] | undefined): void {
+    cachedFilterPaths = paths;
+    model.setFilterPaths(paths);
+  }
 
   if (adapter.git) {
     model.setGitState(adapter.git.getSnapshot());
@@ -126,7 +165,7 @@ export function bindFileSystemAdapter(
     const isFiltering = model.getSnapshot().filter.trim().length > 0;
     if (!isFiltering) {
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      setFilterPaths(undefined);
       return;
     }
     const gen = ++filterListGen;
@@ -135,11 +174,11 @@ export function bindFileSystemAdapter(
       .then((paths) => {
         if (disposed || gen !== filterListGen) return;
         if (model.getSnapshot().filter.trim().length === 0) return;
-        model.setFilterPaths(paths);
+        setFilterPaths(paths);
       })
       .catch(() => {
         if (disposed || gen !== filterListGen) return;
-        if (options?.clearOnError) model.setFilterPaths(undefined);
+        if (options?.clearOnError) setFilterPaths(undefined);
       });
   }
 
@@ -200,8 +239,11 @@ export function bindFileSystemAdapter(
     handlingInvalidation = true;
     try {
       filterListGen += 1;
-      // Preserve filtered rows while re-listing so surviving entries stay mounted and retain focus.
-      if (!wasActiveFilter) model.setFilterPaths(undefined);
+      if (!wasActiveFilter || event.reset) {
+        setFilterPaths(undefined);
+      } else if (cachedFilterPaths && (event.removed.length > 0 || event.moves.length > 0)) {
+        setFilterPaths(applyInvalidationToFilterPaths(cachedFilterPaths, event));
+      }
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange(
         event.moves.length > 0 || event.removed.length > 0
@@ -235,7 +277,7 @@ export function bindFileSystemAdapter(
     dispose() {
       disposed = true;
       filterListGen += 1;
-      model.setFilterPaths(undefined);
+      setFilterPaths(undefined);
       for (const cleanup of cleanups) cleanup();
       cleanups.length = 0;
       for (const unsub of lazyUnsubs.values()) unsub();

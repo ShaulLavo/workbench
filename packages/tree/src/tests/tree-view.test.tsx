@@ -123,11 +123,19 @@ function createInvalidatingFilterAdapter() {
   const invalidationListeners = new Set<(event: LazyInvalidationEvent) => void>();
   let listCalls = 0;
   let pendingList: ReturnType<typeof Promise.withResolvers<readonly string[]>> | null = null;
-  const rootState: DirectoryLoadState = {
+  let pendingRootLoad: ReturnType<typeof Promise.withResolvers<void>> | null = null;
+  let rootState: DirectoryLoadState = {
     status: "loaded",
-    entries: [{ name: "closed", kind: "directory" }],
+    entries: [
+      { name: "closed", kind: "directory" },
+      { name: "needle-empty", kind: "directory" },
+    ],
   };
   const closedState: DirectoryLoadState = { status: "idle" };
+
+  function notifyRoot(): void {
+    for (const listener of rootListeners) listener();
+  }
 
   function getDirectoryState(dirPath: string): Subscribable<DirectoryLoadState> {
     const isRoot = dirPath === "";
@@ -139,6 +147,22 @@ function createInvalidatingFilterAdapter() {
         return () => listeners.delete(listener);
       },
     };
+  }
+
+  async function loadDirectory(dirPath: string): Promise<void> {
+    if (dirPath !== "") return;
+    rootState = { status: "loading" };
+    notifyRoot();
+    pendingRootLoad = Promise.withResolvers<void>();
+    await pendingRootLoad.promise;
+    rootState = {
+      status: "loaded",
+      entries: [
+        { name: "closed", kind: "directory" },
+        { name: "needle-empty", kind: "directory" },
+      ],
+    };
+    notifyRoot();
   }
 
   async function listFiles(): Promise<readonly string[]> {
@@ -159,7 +183,7 @@ function createInvalidatingFilterAdapter() {
     remove: async () => {},
     lazy: {
       getDirectoryState,
-      loadDirectory: async () => {},
+      loadDirectory,
       subscribeInvalidation(listener) {
         invalidationListeners.add(listener);
         return () => invalidationListeners.delete(listener);
@@ -173,8 +197,14 @@ function createInvalidatingFilterAdapter() {
       for (const listener of invalidationListeners) listener(event);
     },
     resolveNextListFiles(paths: readonly string[]) {
-      pendingList?.resolve(paths);
+      if (!pendingList) throw new Error("Expected a pending listFiles refresh");
+      pendingList.resolve(paths);
       pendingList = null;
+    },
+    resolveRootReload() {
+      if (!pendingRootLoad) throw new Error("Expected a pending root loadDirectory");
+      pendingRootLoad.resolve();
+      pendingRootLoad = null;
     },
   };
 }
@@ -2039,7 +2069,8 @@ describe("@shaulavo/workbench-tree React view", () => {
   });
 
   it("preserves DOM focus on a filtered lazy row across background invalidations", async () => {
-    const { adapter, emitInvalidation, resolveNextListFiles } = createInvalidatingFilterAdapter();
+    const { adapter, emitInvalidation, resolveNextListFiles, resolveRootReload } =
+      createInvalidatingFilterAdapter();
     const model = new FileTreeModel({ compactFolders: true });
     const host = mount(<FileTreeView model={model} adapter={adapter} />);
 
@@ -2057,7 +2088,7 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(document.activeElement).toBe(rowEl);
 
-    // Background root invalidation while listFiles() is still pending must not unmount the focused filtered row.
+    // Background root invalidation while listFiles() and root reload are pending must keep focus on the row.
     await act(async () => {
       emitInvalidation({ directories: [""], reset: false, moves: [], removed: [] });
       await Promise.resolve();
@@ -2066,11 +2097,50 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(document.activeElement).toBe(rowEl);
 
     await act(async () => {
-      resolveNextListFiles(["closed/needle.txt", "other.txt"]);
+      resolveNextListFiles(["closed/needle.txt", "closed/needle-two.txt"]);
+      resolveRootReload();
       await Promise.resolve();
       await Promise.resolve();
     });
+    expect(host.querySelector('[data-testid="wb-tree-row-closed/needle-two.txt"]')).not.toBeNull();
     expect(host.querySelector('[data-testid="wb-tree-row-closed/needle.txt"]')).toBe(rowEl);
     expect(document.activeElement).toBe(rowEl);
+  });
+
+  it("preserves DOM focus on a surviving empty directory while root reloads under a filter", async () => {
+    const { adapter, emitInvalidation, resolveNextListFiles, resolveRootReload } =
+      createInvalidatingFilterAdapter();
+    const model = new FileTreeModel({ compactFolders: true });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+
+    await act(async () => {
+      await Promise.resolve();
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    const emptyDirEl = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-needle-empty"]');
+    expect(emptyDirEl).not.toBeNull();
+    act(() => {
+      emptyDirEl?.focus();
+    });
+    expect(document.activeElement).toBe(emptyDirEl);
+
+    await act(async () => {
+      emitInvalidation({ directories: [""], reset: false, moves: [], removed: [] });
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-needle-empty"]')).toBe(emptyDirEl);
+    expect(document.activeElement).toBe(emptyDirEl);
+
+    await act(async () => {
+      resolveNextListFiles(["closed/needle.txt"]);
+      resolveRootReload();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(host.querySelector('[data-testid="wb-tree-row-needle-empty"]')).toBe(emptyDirEl);
+    expect(document.activeElement).toBe(emptyDirEl);
   });
 });
