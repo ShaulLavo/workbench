@@ -567,5 +567,16 @@ describe("@shaulavo/workbench-tree engine", () => {
     });
     expect(model.getSnapshot().focusedPath).toBeUndefined();
     expect(model.getSelectedPaths()).toEqual([]);
+
+    // Temporary absence via notifyIndexChange (e.g., optimistic delete rollback or lazy reset) preserves state.
+    model.select("other.ts", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "other.ts" });
+    model.index.applyOptimistic("opt-del", { kind: "delete", path: "other.ts" }, { inFlight: true });
+    model.notifyIndexChange();
+    model.index.rollbackOptimistic("opt-del");
+    model.notifyIndexChange();
+    expect(model.getSnapshot().focusedPath).toBe("other.ts");
+    expect(model.getSelectedPaths()).toEqual(["other.ts"]);
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "other.ts" });
   });
 });

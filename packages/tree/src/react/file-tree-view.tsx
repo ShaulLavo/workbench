@@ -755,7 +755,11 @@ export function FileTreeView({
       writable
     ) {
       const targets =
-        state.selected.size > 0 ? Array.from(state.selected) : focusedRow ? [focusedRow.path] : [];
+        state.selected.size > 0
+          ? Array.from(state.selected)
+          : focusedRow
+            ? [state.focusedPath ?? focusedRow.path]
+            : [];
       if (targets.length === 0) return;
       event.preventDefault();
       requestDeletePaths(targets);

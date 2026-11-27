@@ -946,8 +946,8 @@ describe("@shaulavo/workbench-tree React view", () => {
   it("falls back to focused row on keyboard Delete, honors externalCommands, and sets data-guide-level", () => {
     const onRequestDelete = vi.fn();
     const model = new FileTreeModel({
-      paths: ["src/a.ts", "README.md"],
-      initialExpanded: ["src"],
+      paths: ["src/a.ts", "a/b/c.ts", "README.md"],
+      initialExpanded: ["src", "a", "a/b"],
     });
     const host = mount(<FileTreeView model={model} onRequestDelete={onRequestDelete} />);
 
@@ -965,6 +965,17 @@ describe("@shaulavo/workbench-tree React view", () => {
       readmeRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
     });
     expect(onRequestDelete).toHaveBeenCalledWith(["README.md"]);
+
+    // Focused intermediate compact segment `a` inside `a/b` deletes `a`, not `a/b`.
+    onRequestDelete.mockClear();
+    const compactRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a/b"]');
+    act(() => {
+      model.setFocusedPath("a", "keyboard");
+    });
+    act(() => {
+      compactRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onRequestDelete).toHaveBeenCalledWith(["a"]);
 
     // externalCommands suppresses built-in F2/Mod+A/Space/Delete shortcuts so consumer keymaps own them.
     onRequestDelete.mockClear();
