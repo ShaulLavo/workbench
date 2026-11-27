@@ -1393,5 +1393,102 @@ describe("@shaulavo/workbench-tree React view", () => {
       await Promise.resolve();
     });
     expect(clampedScroller.scrollTop).toBe(0);
+
+    // Collapsed ancestor "outer" with saved nested "outer/inner" must not keep initial scroll pending.
+    const nestedScrollChanges: number[] = [];
+    const nestedSlots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getNestedSlot = (dir: string) => {
+      let slot = nestedSlots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        nestedSlots.set(dir, slot);
+      }
+      return slot;
+    };
+    let resolveNestedRoot!: () => void;
+    const nestedRootReady = new Promise<void>((resolve) => {
+      resolveNestedRoot = resolve;
+    });
+    const nestedAdapter: FileSystemAdapter = {
+      workspaceId: "nested-scroll",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => [],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getNestedSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getNestedSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await nestedRootReady;
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: "outer", kind: "directory" }],
+            };
+          } else if (dirPath === "outer") {
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: "inner", kind: "directory" }],
+            };
+          } else if (dirPath === "outer/inner") {
+            slot.state = { status: "loaded", entries: manyFiles };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+    const nestedModel = new FileTreeModel({ initialExpanded: ["outer/inner"] });
+    const nestedHost = mount(
+      <FileTreeView
+        model={nestedModel}
+        adapter={nestedAdapter}
+        rowHeight={26}
+        initialScrollTop={800}
+        onScrollTopChange={(top) => nestedScrollChanges.push(top)}
+      />,
+    );
+    const nestedScroller = nestedHost.querySelector<HTMLDivElement>("[data-wb-tree-scroller]")!;
+    let nestedTop = 0;
+    Object.defineProperty(nestedScroller, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(nestedScroller, "scrollHeight", {
+      get: () => nestedModel.getSnapshot().rows.length * 26,
+      configurable: true,
+    });
+    Object.defineProperty(nestedScroller, "scrollTop", {
+      get: () => nestedTop,
+      set: (value: number) => {
+        const max = Math.max(0, nestedModel.getSnapshot().rows.length * 26 - 400);
+        nestedTop = Math.max(0, Math.min(value, max));
+      },
+      configurable: true,
+    });
+    await act(async () => {
+      resolveNestedRoot();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(nestedScrollChanges).toEqual([0]);
+    await act(async () => {
+      nestedModel.setExpanded("outer", true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(nestedScroller.scrollTop).toBe(0);
   });
 });

@@ -173,11 +173,13 @@ function isInitialLazyDirPending(
   model: FileTreeModel,
   lazy: NonNullable<FileSystemAdapter["lazy"]>,
   dir: string,
+  expanded: ReadonlySet<string>,
 ): boolean {
   const chain = ancestorsOf(dir).concat([dir]);
   for (let i = 0; i < chain.length; i += 1) {
     const segment = chain[i];
     if (!segment) continue;
+    if (!expanded.has(segment)) return false;
     const parent = i === 0 ? "" : (chain[i - 1] ?? "");
     const parentStatus = lazyDirStatus(model, lazy, parent);
     if (parentStatus === "error") return false;
@@ -194,13 +196,14 @@ function hasPendingInitialLazyLoads(
   model: FileTreeModel,
   lazy: NonNullable<FileSystemAdapter["lazy"]>,
   initialExpanded: readonly string[],
+  expanded: ReadonlySet<string>,
 ): boolean {
   const rootStatus = lazyDirStatus(model, lazy, "");
   if (rootStatus === "idle" || rootStatus === "loading") return true;
   if (rootStatus === "error") return false;
   for (const rawDir of initialExpanded) {
     const dir = normalizeTreePath(rawDir);
-    if (dir && isInitialLazyDirPending(model, lazy, dir)) return true;
+    if (dir && isInitialLazyDirPending(model, lazy, dir, expanded)) return true;
   }
   return false;
 }
@@ -608,22 +611,28 @@ export function FileTreeView({
 
   async function ensureMoveDestinationReady(destinationDir: string): Promise<boolean> {
     if (!adapter?.lazy) return true;
-    const needsLoad =
-      model.index.getDirectoryLoadState(destinationDir).status !== "loaded" ||
-      Boolean(boundRef.current?.isDirectoryStale(destinationDir));
-    if (!needsLoad) return true;
-    try {
-      await boundRef.current?.ensureDirectoryLoaded(destinationDir, { force: true });
-    } catch (error) {
-      onError?.("Unable to inspect destination folder", error);
-      return false;
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      const needsLoad =
+        model.index.getDirectoryLoadState(destinationDir).status !== "loaded" ||
+        Boolean(boundRef.current?.isDirectoryStale(destinationDir));
+      if (!needsLoad) return true;
+      try {
+        await boundRef.current?.ensureDirectoryLoaded(destinationDir, { force: true });
+      } catch (error) {
+        onError?.("Unable to inspect destination folder", error);
+        return false;
+      }
+      if (!isCurrentlyWritable()) return false;
+      const destState = model.index.getDirectoryLoadState(destinationDir);
+      if (destState.status === "loaded" && !boundRef.current?.isDirectoryStale(destinationDir)) {
+        return true;
+      }
+      if (destState.status === "error") {
+        onError?.("Unable to move selected items", new Error(destState.message));
+        return false;
+      }
     }
-    if (!isCurrentlyWritable()) return false;
-    const destState = model.index.getDirectoryLoadState(destinationDir);
-    if (destState.status === "loaded") return true;
-    const message =
-      destState.status === "error" ? destState.message : "Destination folder could not be loaded";
-    onError?.("Unable to move selected items", new Error(message));
+    onError?.("Unable to move selected items", new Error("Destination folder changed before move"));
     return false;
   }
 
@@ -650,6 +659,14 @@ export function FileTreeView({
     }
     if (!onMove) {
       if (adapter?.lazy && !(await ensureMoveDestinationReady(destinationDir))) return;
+      if (
+        adapter?.lazy &&
+        (model.index.getDirectoryLoadState(destinationDir).status !== "loaded" ||
+          boundRef.current?.isDirectoryStale(destinationDir))
+      ) {
+        onError?.("Unable to move selected items", new Error("Destination folder changed before move"));
+        return;
+      }
       if (model.index.getDirectoryLoadState(destinationDir).status === "loaded") {
         const sourceSet = new Set(top);
         const collision = moves.find((move) => !sourceSet.has(move.to) && model.index.hasPath(move.to));
@@ -1193,7 +1210,7 @@ export function FileTreeView({
         initialScrollTop={initialScrollTop}
         deferInitialScroll={
           adapter?.lazy
-            ? hasPendingInitialLazyLoads(model, adapter.lazy, initialExpandedPaths)
+            ? hasPendingInitialLazyLoads(model, adapter.lazy, initialExpandedPaths, state.expanded)
             : state.rows.length === 0
         }
         onScrollTopChange={onScrollTopChange}
