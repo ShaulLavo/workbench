@@ -160,6 +160,16 @@ try {
     reactFreeDir,
   );
 
+  const rootManifest = JSON.parse(readFileSync(path.join(ROOT, "package.json"), "utf8")) as {
+    readonly workspaces: { readonly catalog: Readonly<Record<string, string>> };
+  };
+  const catalog = rootManifest.workspaces.catalog;
+  const catalogPin = (name: string): string => {
+    const version = catalog[name];
+    if (!version) throw new Error(`Missing root catalog pin for ${name}`);
+    return version;
+  };
+
   // Fixture B: Bare Sprockt-like consumer (editor root without @dnd-kit/*, diff, markdown, or lsp peers).
   writeFileSync(
     path.join(bareSprocktDir, "package.json"),
@@ -170,17 +180,17 @@ try {
         type: "module",
         dependencies: {
           ...allOverrides,
-          "@base-ui/react": "1.9.0",
-          "@shaulavo/hotkeys": "0.0.4",
-          "@singapore-editor/core": "0.2.13",
-          "@singapore-editor/find": "0.2.13",
-          "@singapore-editor/gutters": "0.2.13",
-          "@singapore-editor/highlighting": "0.2.16",
-          "@singapore-editor/plugin-ui": "0.2.13",
-          "@singapore-editor/react": "0.2.13",
-          "ghostty-webgpu": "0.3.34",
-          react: "19.3.1",
-          "react-dom": "19.3.1",
+          "@base-ui/react": catalogPin("@base-ui/react"),
+          "@shaulavo/hotkeys": catalogPin("@shaulavo/hotkeys"),
+          "@singapore-editor/core": catalogPin("@singapore-editor/core"),
+          "@singapore-editor/find": catalogPin("@singapore-editor/find"),
+          "@singapore-editor/gutters": catalogPin("@singapore-editor/gutters"),
+          "@singapore-editor/highlighting": catalogPin("@singapore-editor/highlighting"),
+          "@singapore-editor/plugin-ui": catalogPin("@singapore-editor/plugin-ui"),
+          "@singapore-editor/react": catalogPin("@singapore-editor/react"),
+          "ghostty-webgpu": catalogPin("ghostty-webgpu"),
+          react: catalogPin("react"),
+          "react-dom": catalogPin("react-dom"),
         },
         overrides: allOverrides,
       },
@@ -276,26 +286,26 @@ try {
         type: "module",
         dependencies: {
           ...allOverrides,
-          "@base-ui/react": "1.9.0",
-          "@dnd-kit/core": "6.3.1",
-          "@dnd-kit/sortable": "10.0.0",
-          "@dnd-kit/utilities": "3.2.2",
-          "@shaulavo/hotkeys": "0.0.4",
-          "@singapore-editor/core": "0.2.13",
-          "@singapore-editor/diff": "0.2.13",
-          "@singapore-editor/find": "0.2.13",
-          "@singapore-editor/gutters": "0.2.13",
-          "@singapore-editor/highlighting": "0.2.16",
-          "@singapore-editor/lsp": "0.2.13",
-          "@singapore-editor/lsp-plugin": "0.2.16",
-          "@singapore-editor/markdown": "0.2.13",
-          "@singapore-editor/minimap": "0.2.13",
-          "@singapore-editor/plugin-ui": "0.2.13",
-          "@singapore-editor/react": "0.2.13",
-          "@singapore-editor/scope-lines": "0.2.13",
-          "ghostty-webgpu": "0.3.34",
-          react: "19.3.1",
-          "react-dom": "19.3.1",
+          "@base-ui/react": catalogPin("@base-ui/react"),
+          "@dnd-kit/core": catalogPin("@dnd-kit/core"),
+          "@dnd-kit/sortable": catalogPin("@dnd-kit/sortable"),
+          "@dnd-kit/utilities": catalogPin("@dnd-kit/utilities"),
+          "@shaulavo/hotkeys": catalogPin("@shaulavo/hotkeys"),
+          "@singapore-editor/core": catalogPin("@singapore-editor/core"),
+          "@singapore-editor/diff": catalogPin("@singapore-editor/diff"),
+          "@singapore-editor/find": catalogPin("@singapore-editor/find"),
+          "@singapore-editor/gutters": catalogPin("@singapore-editor/gutters"),
+          "@singapore-editor/highlighting": catalogPin("@singapore-editor/highlighting"),
+          "@singapore-editor/lsp": catalogPin("@singapore-editor/lsp"),
+          "@singapore-editor/lsp-plugin": catalogPin("@singapore-editor/lsp-plugin"),
+          "@singapore-editor/markdown": catalogPin("@singapore-editor/markdown"),
+          "@singapore-editor/minimap": catalogPin("@singapore-editor/minimap"),
+          "@singapore-editor/plugin-ui": catalogPin("@singapore-editor/plugin-ui"),
+          "@singapore-editor/react": catalogPin("@singapore-editor/react"),
+          "@singapore-editor/scope-lines": catalogPin("@singapore-editor/scope-lines"),
+          "ghostty-webgpu": catalogPin("ghostty-webgpu"),
+          react: catalogPin("react"),
+          "react-dom": catalogPin("react-dom"),
         },
         overrides: allOverrides,
       },
