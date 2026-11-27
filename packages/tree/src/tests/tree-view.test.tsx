@@ -870,8 +870,76 @@ describe("@shaulavo/workbench-tree React view", () => {
       });
       expect(onMove).toHaveBeenCalledWith([{ from: "dir/child.ts", to: "a/b/child.ts" }]);
       expect(onError).toHaveBeenCalledWith("Unable to move selected items", expect.any(Error));
+
+      // 7. F2 rename while filtered clears the filter and expands collapsed ancestors before opening input.
+      act(() => {
+        model.setExpanded("dir", false);
+        model.setFilter("child");
+        model.select("dir/child.ts", "replace", "keyboard");
+      });
+      const filteredChildRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dir/child.ts"]');
+      expect(filteredChildRow).not.toBeNull();
+      act(() => {
+        filteredChildRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      });
+      expect(model.getSnapshot().filter).toBe("");
+      expect(model.getSnapshot().expanded.has("dir")).toBe(true);
+      expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "dir/child.ts" });
+      expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
+      act(() => {
+        model.setDraft(undefined);
+      });
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it("restores row focus when built-in context menu closes with Escape while keeping Rename input focused", async () => {
+    const model = new FileTreeModel({ paths: ["CLAUDE.md", "src/index.ts"], initialExpanded: ["src"] });
+    const host = mount(
+      <WorkbenchPortalProvider>
+        <FileTreeView model={model} />
+      </WorkbenchPortalProvider>,
+    );
+
+    const claudeRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-CLAUDE.md"]');
+    expect(claudeRow).not.toBeNull();
+    act(() => {
+      claudeRow?.focus();
+    });
+    expect(document.activeElement).toBe(claudeRow);
+
+    await act(async () => {
+      claudeRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+      await Promise.resolve();
+    });
+    const menuPopup = host.querySelector<HTMLElement>("[data-wb-point-context-menu]");
+    expect(menuPopup).not.toBeNull();
+
+    // Escape closes the menu and restores focus to the triggering row.
+    await act(async () => {
+      document.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+      await Promise.resolve();
+    });
+    expect(host.querySelector("[data-wb-point-context-menu]")).toBeNull();
+    expect(document.activeElement).toBe(claudeRow);
+
+    // Reopen and choose Rename: focus must stay on the newly mounted inline rename input.
+    await act(async () => {
+      claudeRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F10", shiftKey: true, bubbles: true }));
+      await Promise.resolve();
+    });
+    const renameItem = host.querySelector<HTMLElement>('[data-testid="wb-tree-ctx-rename"]');
+    expect(renameItem).not.toBeNull();
+    act(() => {
+      renameItem?.click();
+    });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "CLAUDE.md" });
+    const inlineInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
+    expect(inlineInput).not.toBeNull();
+    expect(document.activeElement).toBe(inlineInput);
   });
 });

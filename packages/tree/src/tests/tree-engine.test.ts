@@ -459,4 +459,58 @@ describe("@shaulavo/workbench-tree engine", () => {
     model.setExpanded("a", false);
     expect(model.getSnapshot().focusedPath).toBe("a");
   });
+
+  it("lazily subscribes and loads confirmed directories expanded programmatically without refetching pre-seeded dirs", async () => {
+    const rootState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [
+        { name: "guide", kind: "directory" },
+        { name: "seeded", kind: "directory" },
+      ],
+    });
+    const guideState = createSubscribable<DirectoryLoadState>({ status: "idle" });
+    const seededState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [{ name: "auto.ts", kind: "file" }],
+    });
+    const loaded: string[] = [];
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "test-lazy-auto-expand",
+      writable: createSubscribable(true),
+      lazy: {
+        getDirectoryState: (dir) => (dir === "" ? rootState : dir === "seeded" ? seededState : guideState),
+        async loadDirectory(dir) {
+          loaded.push(dir);
+          if (dir === "guide") {
+            guideState.set({ status: "loaded", entries: [{ name: "readme.md", kind: "file" }] });
+          }
+        },
+        subscribeInvalidation: () => () => {},
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+    };
+
+    const model = new FileTreeModel();
+    const bound = bindFileSystemAdapter(model, adapter);
+
+    // Expanding a confirmed directory programmatically (e.g., rebased after rename) loads it.
+    model.setExpanded("guide", true);
+    await Promise.resolve();
+    expect(loaded).toEqual(["guide"]);
+    expect(model.index.hasPath("guide/readme.md")).toBe(true);
+
+    // Expanding a pre-seeded loaded directory adopts its entries without calling loadDirectory.
+    model.setExpanded("seeded", true);
+    await Promise.resolve();
+    expect(loaded).toEqual(["guide"]);
+    expect(model.index.hasPath("seeded/auto.ts")).toBe(true);
+
+    bound.dispose();
+  });
 });
