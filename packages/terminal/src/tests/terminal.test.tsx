@@ -1055,11 +1055,28 @@ describe("@shaulavo/workbench-terminal", () => {
       expect(readWhenHidden).not.toHaveBeenCalled();
       expect(pasteSpy).not.toHaveBeenCalled();
 
-      // Returning to "one" keeps the closed menu dismissed, and pasting while active delivers text.
+      // Switching away with the menu still open (without clicking an item) or receiving a delayed
+      // contextmenu while hidden keeps the menu closed after returning to "one".
+      act(() => {
+        activeId.set("one");
+      });
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).not.toBeNull();
+      act(() => {
+        activeId.set("two");
+      });
+      expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+      act(() => {
+        viewOne!.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true, cancelable: true }));
+      });
       act(() => {
         activeId.set("one");
       });
       expect(document.querySelector('[data-testid="wb-term-ctx-paste"]')).toBeNull();
+
+      // Pasting normally while active delivers clipboard text.
       Object.defineProperty(navigator, "clipboard", {
         configurable: true,
         value: { readText: vi.fn(async () => "active paste") },

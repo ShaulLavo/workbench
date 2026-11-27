@@ -848,6 +848,7 @@ export function TerminalView({
 
   // Capture phase intercepts contextmenu before Ghostty's target-phase handler and snapshots selection.
   function handleContextMenuCapture(event: MouseEvent<HTMLDivElement>): void {
+    if (!activeRef.current) return;
     const terminal = terminalRef.current;
     if (disableContextMenu) {
       propsRef.current.onContextMenuCapture?.(event, terminal);
