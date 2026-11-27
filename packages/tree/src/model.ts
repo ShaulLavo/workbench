@@ -719,6 +719,35 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     }
   }
 
+  private rebaseMovedPaths(moves: readonly { readonly from: string; readonly to: string }[]): void {
+    if (moves.length === 0) return;
+    const rebase = (path: string): string => {
+      let current = path;
+      for (const move of moves) {
+        if (isSameOrInside(current, move.from)) {
+          current = move.to + current.slice(move.from.length);
+        }
+      }
+      return current;
+    };
+    if (this.selected.size > 0) {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of this.selected) {
+        const rebased = rebase(path);
+        if (rebased !== path) changed = true;
+        next.add(rebased);
+      }
+      if (changed) this.selected = next;
+    }
+    if (this.selectionAnchor) this.selectionAnchor = rebase(this.selectionAnchor);
+    if (this.focusedPath) this.focusedPath = rebase(this.focusedPath);
+    if (this.draft?.mode === "rename") {
+      const nextPath = rebase(this.draft.path);
+      if (nextPath !== this.draft.path) this.draft = { mode: "rename", path: nextPath };
+    }
+  }
+
   replacePreparedInput(prepared: PreparedFileTreeInput): void {
     this.index.replacePreparedInput(prepared);
     this.reconcileSelectionAndFocus();
@@ -740,7 +769,13 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     return result;
   }
 
-  notifyIndexChange(options?: { readonly removedPaths?: readonly string[] }): void {
+  notifyIndexChange(options?: {
+    readonly removedPaths?: readonly string[];
+    readonly movedPaths?: readonly { readonly from: string; readonly to: string }[];
+  }): void {
+    if (options?.movedPaths && options.movedPaths.length > 0) {
+      this.rebaseMovedPaths(options.movedPaths);
+    }
     if (options?.removedPaths && options.removedPaths.length > 0) {
       this.pruneRemovedPaths(options.removedPaths);
     }
