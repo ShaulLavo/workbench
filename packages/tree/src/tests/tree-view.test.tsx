@@ -1131,4 +1131,364 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(onFilteredDelete).not.toHaveBeenCalled();
   });
+
+  it("preflights multi-select move collisions before moving any item and restores initialScrollTop after lazy rows load", async () => {
+    const moveCalls: { from: string; to: string }[] = [];
+    const onMoveError = vi.fn();
+    const collisionModel = new FileTreeModel({
+      paths: ["a.txt", "b.txt", "dest/b.txt"],
+      initialExpanded: ["dest"],
+    });
+    const collisionAdapter: FileSystemAdapter = {
+      workspaceId: "move-preflight",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["a.txt", "b.txt", "dest/b.txt"],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async (from, to) => {
+        moveCalls.push({ from, to });
+      },
+      remove: async () => {},
+    };
+    const host = mount(
+      <FileTreeView model={collisionModel} adapter={collisionAdapter} onError={onMoveError} />,
+    );
+    act(() => {
+      collisionModel.setSelectedPaths(["a.txt", "b.txt"], {
+        focusedPath: "a.txt",
+        modality: "pointer",
+      });
+    });
+    const aRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a.txt"]');
+    const destRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-dest"]');
+    const dt = { effectAllowed: "", dropEffect: "", types: [] as string[], setData: vi.fn() };
+    const dragStart = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(dragStart, "dataTransfer", { value: dt });
+    const drop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(drop, "dataTransfer", { value: dt });
+    await act(async () => {
+      aRow?.dispatchEvent(dragStart);
+      destRow?.dispatchEvent(drop);
+      await Promise.resolve();
+    });
+    expect(moveCalls).toEqual([]);
+    expect(onMoveError).toHaveBeenCalledTimes(1);
+    expect(collisionModel.index.hasPath("a.txt")).toBe(true);
+    expect(collisionModel.index.hasPath("dest/a.txt")).toBe(false);
+
+    // Deferred initialScrollTop restoration waits until lazy rows arrive.
+    const lazyScrollModel = new FileTreeModel();
+    const onScrollTopChange = vi.fn();
+    const scrollHost = mount(
+      <FileTreeView
+        model={lazyScrollModel}
+        rowHeight={26}
+        initialScrollTop={800}
+        onScrollTopChange={onScrollTopChange}
+      />,
+    );
+    const scroller = scrollHost.querySelector<HTMLDivElement>("[data-wb-tree-scroller]")!;
+    expect(scroller.scrollTop).toBe(0);
+
+    const manyFiles = Array.from({ length: 100 }, (_, i) => ({
+      name: `file-${String(i).padStart(3, "0")}.txt`,
+      kind: "file" as const,
+    }));
+    act(() => {
+      lazyScrollModel.index.setLazyDirectoryState("", { status: "loaded", entries: manyFiles });
+      lazyScrollModel.notifyIndexChange();
+    });
+    expect(scroller.scrollTop).toBe(800);
+
+    // Dropping a.txt and b.txt onto an unopened lazy folder containing b.txt awaits its listing and aborts before moving a.txt.
+    const lazyMoveCalls: { from: string; to: string }[] = [];
+    const onLazyMoveError = vi.fn();
+    const lazySlots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getLazySlot = (dir: string) => {
+      let slot = lazySlots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        lazySlots.set(dir, slot);
+      }
+      return slot;
+    };
+    const setLazySlot = (dir: string, next: DirectoryLoadState) => {
+      const slot = getLazySlot(dir);
+      slot.state = next;
+      for (const listener of slot.listeners) listener();
+    };
+    const lazyMoveAdapter: FileSystemAdapter = {
+      workspaceId: "lazy-move-preflight",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["a.txt", "b.txt", "unopened/b.txt"],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async (from, to) => {
+        lazyMoveCalls.push({ from, to });
+      },
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getLazySlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          if (dirPath === "") {
+            setLazySlot("", {
+              status: "loaded",
+              entries: [
+                { name: "unopened", kind: "directory" },
+                { name: "a.txt", kind: "file" },
+                { name: "b.txt", kind: "file" },
+              ],
+            });
+            return;
+          }
+          if (dirPath === "unopened") {
+            setLazySlot("unopened", {
+              status: "loaded",
+              entries: [{ name: "b.txt", kind: "file" }],
+            });
+          }
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+    const lazyMoveModel = new FileTreeModel();
+    const lazyMoveHost = mount(
+      <FileTreeView model={lazyMoveModel} adapter={lazyMoveAdapter} onError={onLazyMoveError} />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    act(() => {
+      lazyMoveModel.setSelectedPaths(["a.txt", "b.txt"], {
+        focusedPath: "a.txt",
+        modality: "pointer",
+      });
+    });
+    const lazyARow = lazyMoveHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-a.txt"]');
+    const unopenedRow = lazyMoveHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-unopened"]');
+    const lazyStart = new Event("dragstart", { bubbles: true, cancelable: true });
+    Object.defineProperty(lazyStart, "dataTransfer", { value: dt });
+    const lazyDrop = new Event("drop", { bubbles: true, cancelable: true });
+    Object.defineProperty(lazyDrop, "dataTransfer", { value: dt });
+    await act(async () => {
+      lazyARow?.dispatchEvent(lazyStart);
+      unopenedRow?.dispatchEvent(lazyDrop);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(lazyMoveCalls).toEqual([]);
+    expect(onLazyMoveError).toHaveBeenCalledTimes(1);
+    expect(lazyMoveModel.index.hasPath("a.txt")).toBe(true);
+    expect(lazyMoveModel.index.hasPath("unopened/a.txt")).toBe(false);
+
+    // Clamped initialScrollTop finalizes once initial lazy load settles and does not jump on later expansion.
+    const clampedScrollChanges: number[] = [];
+    const clampedSlots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getClampedSlot = (dir: string) => {
+      let slot = clampedSlots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        clampedSlots.set(dir, slot);
+      }
+      return slot;
+    };
+    let resolveClampedRoot!: () => void;
+    const clampedRootReady = new Promise<void>((resolve) => {
+      resolveClampedRoot = resolve;
+    });
+    const clampedAdapter: FileSystemAdapter = {
+      workspaceId: "clamped-scroll",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => [],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getClampedSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getClampedSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await clampedRootReady;
+            slot.state = {
+              status: "loaded",
+              entries: [
+                { name: "big", kind: "directory" },
+                { name: "small.txt", kind: "file" },
+              ],
+            };
+          } else if (dirPath === "big") {
+            slot.state = { status: "loaded", entries: manyFiles };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+    const clampedModel = new FileTreeModel();
+    const clampedHost = mount(
+      <FileTreeView
+        model={clampedModel}
+        adapter={clampedAdapter}
+        rowHeight={26}
+        initialScrollTop={800}
+        onScrollTopChange={(top) => clampedScrollChanges.push(top)}
+      />,
+    );
+    const clampedScroller = clampedHost.querySelector<HTMLDivElement>("[data-wb-tree-scroller]")!;
+    let clampedTop = 0;
+    Object.defineProperty(clampedScroller, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(clampedScroller, "scrollHeight", {
+      get: () => clampedModel.getSnapshot().rows.length * 26,
+      configurable: true,
+    });
+    Object.defineProperty(clampedScroller, "scrollTop", {
+      get: () => clampedTop,
+      set: (value: number) => {
+        const max = Math.max(0, clampedModel.getSnapshot().rows.length * 26 - 400);
+        clampedTop = Math.max(0, Math.min(value, max));
+      },
+      configurable: true,
+    });
+    expect(clampedScrollChanges).toEqual([]);
+    await act(async () => {
+      resolveClampedRoot();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(clampedScroller.scrollTop).toBe(0);
+    expect(clampedScrollChanges).toEqual([0]);
+
+    // Later folder expansion must NOT jump scrollTop back to 800.
+    await act(async () => {
+      clampedModel.setExpanded("big", true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(clampedScroller.scrollTop).toBe(0);
+
+    // Collapsed ancestor "outer" with saved nested "outer/inner" must not keep initial scroll pending.
+    const nestedScrollChanges: number[] = [];
+    const nestedSlots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getNestedSlot = (dir: string) => {
+      let slot = nestedSlots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        nestedSlots.set(dir, slot);
+      }
+      return slot;
+    };
+    let resolveNestedRoot!: () => void;
+    const nestedRootReady = new Promise<void>((resolve) => {
+      resolveNestedRoot = resolve;
+    });
+    const nestedAdapter: FileSystemAdapter = {
+      workspaceId: "nested-scroll",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => [],
+      readText: async () => undefined,
+      size: async () => undefined,
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getNestedSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          const slot = getNestedSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await nestedRootReady;
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: "outer", kind: "directory" }],
+            };
+          } else if (dirPath === "outer") {
+            slot.state = {
+              status: "loaded",
+              entries: [{ name: "inner", kind: "directory" }],
+            };
+          } else if (dirPath === "outer/inner") {
+            slot.state = { status: "loaded", entries: manyFiles };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+    const nestedModel = new FileTreeModel({ initialExpanded: ["outer/inner"] });
+    const nestedHost = mount(
+      <FileTreeView
+        model={nestedModel}
+        adapter={nestedAdapter}
+        rowHeight={26}
+        initialScrollTop={800}
+        onScrollTopChange={(top) => nestedScrollChanges.push(top)}
+      />,
+    );
+    const nestedScroller = nestedHost.querySelector<HTMLDivElement>("[data-wb-tree-scroller]")!;
+    let nestedTop = 0;
+    Object.defineProperty(nestedScroller, "clientHeight", { value: 400, configurable: true });
+    Object.defineProperty(nestedScroller, "scrollHeight", {
+      get: () => nestedModel.getSnapshot().rows.length * 26,
+      configurable: true,
+    });
+    Object.defineProperty(nestedScroller, "scrollTop", {
+      get: () => nestedTop,
+      set: (value: number) => {
+        const max = Math.max(0, nestedModel.getSnapshot().rows.length * 26 - 400);
+        nestedTop = Math.max(0, Math.min(value, max));
+      },
+      configurable: true,
+    });
+    await act(async () => {
+      resolveNestedRoot();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(nestedScrollChanges).toEqual([0]);
+    await act(async () => {
+      nestedModel.setExpanded("outer", true);
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(nestedScroller.scrollTop).toBe(0);
+  });
 });

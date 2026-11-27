@@ -57,6 +57,8 @@ export interface FileTreeViewportProps {
   readonly scrollAlign?: "auto" | "start" | "center" | "end";
   readonly rowHeight?: number;
   readonly initialScrollTop?: number;
+  /** When true, keep waiting for lazy root/restored folders before finalizing a clamped initialScrollTop. */
+  readonly deferInitialScroll?: boolean;
   readonly onScrollTopChange?: (scrollTop: number) => void;
   readonly scrollerRef?: RefObject<HTMLDivElement | null>;
   readonly hasEntryTabStop: boolean;
@@ -90,6 +92,7 @@ export function FileTreeViewport({
   scrollAlign = "auto",
   rowHeight: explicitRowHeight,
   initialScrollTop,
+  deferInitialScroll = false,
   onScrollTopChange,
   scrollerRef: externalScrollerRef,
   hasEntryTabStop,
@@ -117,7 +120,10 @@ export function FileTreeViewport({
   const stickyKeyRef = useRef("");
   const stickyPushUpRef = useRef(0);
   const lastScrolledSeqRef = useRef(0);
-  const appliedInitialScrollRef = useRef(false);
+  const pendingInitialScrollRef = useRef<number | null>(
+    initialScrollTop !== undefined && initialScrollTop > 0 ? initialScrollTop : null,
+  );
+  const lastRestoredScrollTopRef = useRef<number | null>(null);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const dragPointerYRef = useRef<number | null>(null);
   const [measuredRowHeight, setMeasuredRowHeight] = useState(DEFAULT_ROW_HEIGHT);
@@ -190,20 +196,39 @@ export function FileTreeViewport({
   }, [rowHeight, virtualizer]);
 
   useLayoutEffect(() => {
-    if (appliedInitialScrollRef.current) return;
+    const pending = pendingInitialScrollRef.current;
+    if (pending === null) return;
     const node = internalScrollerRef.current;
     if (!node) return;
-    appliedInitialScrollRef.current = true;
-    if (initialScrollTop !== undefined && initialScrollTop > 0) {
-      node.scrollTop = initialScrollTop;
-      syncStickyFromScrollTop(initialScrollTop);
+    if (rows.length === 0) {
+      if (deferInitialScroll) return;
+      pendingInitialScrollRef.current = null;
+      lastRestoredScrollTopRef.current = null;
+      syncStickyFromScrollTop(node.scrollTop);
+      onScrollTopChange?.(node.scrollTop);
+      return;
+    }
+    const totalSize = virtualizer.getTotalSize();
+    if (totalSize <= 0) return;
+    const before = node.scrollTop;
+    node.scrollTop = pending;
+    const applied = node.scrollTop;
+    if (applied !== before) lastRestoredScrollTopRef.current = applied;
+    syncStickyFromScrollTop(applied);
+    const scrollable = node.scrollHeight > 0 ? Math.max(0, node.scrollHeight - node.clientHeight) : totalSize;
+    const reached = applied >= pending - 1 && scrollable >= pending - 1;
+    if (reached || !deferInitialScroll) {
+      pendingInitialScrollRef.current = null;
+      onScrollTopChange?.(applied);
     }
     // oxlint-disable-next-line react/exhaustive-deps
-  }, [initialScrollTop]);
+  }, [initialScrollTop, rows.length, rowHeight, deferInitialScroll]);
 
   useLayoutEffect(() => {
     if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
     if (activeIndex < 0 || activeIndex >= rows.length) return;
+    pendingInitialScrollRef.current = null;
+    lastRestoredScrollTopRef.current = null;
     lastScrolledSeqRef.current = scrollSeq;
     virtualizer.scrollToIndex(activeIndex, { align: scrollAlign, behavior: scrollBehavior });
   }, [activeIndex, scrollAlign, scrollBehavior, scrollSeq, rows.length, virtualizer]);
@@ -258,9 +283,21 @@ export function FileTreeViewport({
     // oxlint-disable-next-line react/exhaustive-deps
   }, [rows, rowHeight]);
 
+  function cancelPendingInitialScroll(): void {
+    pendingInitialScrollRef.current = null;
+    lastRestoredScrollTopRef.current = null;
+  }
+
   function handleScroll(): void {
     const node = internalScrollerRef.current;
     if (!node) return;
+    const restored = lastRestoredScrollTopRef.current;
+    if (restored !== null && Math.abs(node.scrollTop - restored) <= 1) {
+      lastRestoredScrollTopRef.current = null;
+      syncStickyFromScrollTop(node.scrollTop);
+      return;
+    }
+    cancelPendingInitialScroll();
     node.dataset.isScrolling = "true";
     if (scrollTimerRef.current !== undefined) window.clearTimeout(scrollTimerRef.current);
     scrollTimerRef.current = window.setTimeout(() => {
@@ -302,6 +339,8 @@ export function FileTreeViewport({
         data-touch-dragging={touchDragging ? "true" : undefined}
         className="wb-tree-scroller"
         onScroll={handleScroll}
+        onWheel={cancelPendingInitialScroll}
+        onTouchStart={cancelPendingInitialScroll}
         onKeyDown={onKeyDown}
         onContextMenu={(event) => {
           if (!onRootContextMenu) return;

@@ -5,6 +5,8 @@ import { normalizeTreePath } from "./paths";
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
   ensureDirectoryLoaded(dirPath: string, options?: { readonly force?: boolean }): Promise<void>;
+  /** True when a lazy directory was invalidated while collapsed and has not been reloaded yet. */
+  isDirectoryStale(dirPath: string): boolean;
   /** Stops all snapshot, patch, lazy directory, invalidation, and git subscriptions. */
   dispose(): void;
 }
@@ -22,6 +24,8 @@ export function bindFileSystemAdapter(
   const lazyUnsubs = new Map<string, () => void>();
   const staleLazyDirs = new Set<string>();
   let handlingInvalidation = false;
+  let wasFiltering = false;
+  let filterListGen = 0;
   let disposed = false;
 
   if (adapter.git) {
@@ -104,8 +108,38 @@ export function bindFileSystemAdapter(
     await lazy.loadDirectory(normalized, force ? { force: true } : options);
   }
 
+  function refreshFilterFiles(): void {
+    if (disposed || !adapter.lazy) return;
+    const isFiltering = model.getSnapshot().filter.trim().length > 0;
+    if (!isFiltering) {
+      filterListGen += 1;
+      model.setFilterPaths(undefined);
+      return;
+    }
+    const gen = ++filterListGen;
+    void adapter
+      .listFiles()
+      .then((paths) => {
+        if (disposed || gen !== filterListGen) return;
+        if (model.getSnapshot().filter.trim().length === 0) return;
+        model.setFilterPaths(paths);
+      })
+      .catch(() => {
+        // Keep currently loaded entries filterable if workspace listing fails.
+      });
+  }
+
+  function syncLazyFilterSubscription(): void {
+    if (disposed) return;
+    const isFiltering = model.getSnapshot().filter.trim().length > 0;
+    if (isFiltering === wasFiltering) return;
+    wasFiltering = isFiltering;
+    refreshFilterFiles();
+  }
+
   function syncExpandedLazyDirectories(): void {
     if (disposed || handlingInvalidation) return;
+    syncLazyFilterSubscription();
     for (const dir of model.getSnapshot().expanded) {
       const normalized = normalizeTreePath(dir);
       if (!normalized || model.index.getConfirmedKind(normalized) !== "directory") continue;
@@ -140,6 +174,8 @@ export function bindFileSystemAdapter(
     if (disposed) return;
     handlingInvalidation = true;
     try {
+      filterListGen += 1;
+      model.setFilterPaths(undefined);
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange(
         event.moves.length > 0 || event.removed.length > 0
@@ -151,6 +187,9 @@ export function bindFileSystemAdapter(
       handlingInvalidation = false;
     }
     syncExpandedLazyDirectories();
+    if (model.getSnapshot().filter.trim().length > 0) {
+      refreshFilterFiles();
+    }
   }
 
   if (adapter.lazy) {
@@ -163,14 +202,20 @@ export function bindFileSystemAdapter(
       if (current.status === "idle") void ensureDirectoryLoaded(dir);
     }
 
+    syncLazyFilterSubscription();
     cleanups.push(model.subscribe(syncExpandedLazyDirectories));
     cleanups.push(lazy.subscribeInvalidation(handleLazyInvalidation));
   }
 
   return {
     ensureDirectoryLoaded,
+    isDirectoryStale(dirPath) {
+      return staleLazyDirs.has(normalizeTreePath(dirPath));
+    },
     dispose() {
       disposed = true;
+      filterListGen += 1;
+      model.setFilterPaths(undefined);
       for (const cleanup of cleanups) cleanup();
       cleanups.length = 0;
       for (const unsub of lazyUnsubs.values()) unsub();
