@@ -62,6 +62,9 @@ export function buildWorkbenchEditorTheme(host: Element | null): EditorTheme {
   const variable = readVar(style, "--wb-syn-var", fg);
   const prop = readVar(style, "--wb-syn-prop", fg);
 
+  const danger = readVar(style, "--wb-danger", scheme === "dark" ? "#f87171" : "#c81e2b");
+  const warning = readVar(style, "--wb-warning", scheme === "dark" ? "#f2c779" : "#9a5b00");
+
   return {
     type: scheme,
     backgroundColor: bg,
@@ -72,6 +75,13 @@ export function buildWorkbenchEditorTheme(host: Element | null): EditorTheme {
     inactiveSelectionColor: inactiveSel,
     popupBackgroundColor: popup,
     caretColor: caret,
+    colors: {
+      "lsp.diagnostic.error": fg,
+      "lsp.diagnostic.errorBackground": "transparent",
+      "lsp.diagnostic.errorUnderline": danger,
+      "lsp.diagnostic.warningBackground": `color-mix(in oklab, ${warning} 20%, transparent)`,
+      "lsp.diagnostic.informationBackground": `color-mix(in oklab, ${caret} 16%, transparent)`,
+    },
     syntax: {
       comment,
       keyword,

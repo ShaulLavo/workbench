@@ -38,7 +38,9 @@ export interface EditorTabDescriptor {
   readonly kind: "file" | "diff" | "virtual";
   readonly path?: string;
   readonly label: string;
+  readonly hint?: string;
   readonly title: string;
+  readonly tone?: string;
   readonly preview?: boolean;
   readonly dirty?: boolean;
   readonly missing?: boolean;

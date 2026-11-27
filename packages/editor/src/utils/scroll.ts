@@ -17,3 +17,17 @@ export function capOverscrollTop(top: number, snapshot: EditorViewSnapshot | nul
   if (totalHeight <= 0 || viewport.clientHeight <= 0) return top;
   return Math.min(top, Math.max(0, totalHeight - viewport.clientHeight));
 }
+
+/** Clamps a restored scroll offset against known content and viewport heights. */
+export function clampRestoredScroll(
+  scroll: EditorScrollPosition | undefined,
+  contentHeight: number,
+  viewportHeight: number,
+): EditorScrollPosition | undefined {
+  if (!scroll || scroll.top === undefined) return scroll;
+  if (contentHeight <= 0 || viewportHeight <= 0) return scroll;
+  const maxTop = Math.max(0, contentHeight - viewportHeight);
+  const top = Math.min(scroll.top, maxTop);
+  if (top === scroll.top) return scroll;
+  return { ...scroll, top };
+}
