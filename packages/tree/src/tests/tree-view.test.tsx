@@ -1021,5 +1021,72 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(delModel.index.hasPath("gone.ts")).toBe(false);
     expect(delModel.getSelectedPaths()).toEqual([]);
     expect(delModel.getSnapshot().focusedPath).toBeUndefined();
+
+    // Partial batch delete rollback during a lazy reset prunes only the deleted path and keeps the surviving row's focus/selection.
+    const rootState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [
+        { name: "first.ts", kind: "file" },
+        { name: "second.ts", kind: "file" },
+      ],
+    });
+    const invListeners = new Set<
+      (event: {
+        readonly reset: boolean;
+        readonly directories: readonly string[];
+        readonly moves: readonly [];
+        readonly removed: readonly [];
+      }) => void
+    >();
+    const onPartialError = vi.fn();
+    const partialAdapter: FileSystemAdapter = {
+      workspaceId: "test-partial-reset",
+      writable: createSubscribable(true),
+      lazy: {
+        getDirectoryState: () => rootState,
+        loadDirectory: async () => {},
+        subscribeInvalidation(listener) {
+          invListeners.add(listener as never);
+          return () => invListeners.delete(listener as never);
+        },
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      async remove(path) {
+        if (path === "first.ts") {
+          for (const listener of invListeners) {
+            listener({ reset: true, directories: [], moves: [], removed: [] });
+          }
+          return;
+        }
+        throw new Error("second delete failed");
+      },
+    };
+    const partialModel = new FileTreeModel();
+    const partialHost = mount(
+      <FileTreeView model={partialModel} adapter={partialAdapter} onError={onPartialError} />,
+    );
+    act(() => {
+      partialModel.setSelectedPaths(["first.ts", "second.ts"], {
+        focusedPath: "second.ts",
+        modality: "keyboard",
+      });
+    });
+    const secondRow = partialHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-second.ts"]');
+    act(() => {
+      secondRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const partialConfirm = partialHost.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    await act(async () => {
+      partialConfirm?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onPartialError).toHaveBeenCalledTimes(1);
+    expect(partialModel.getSelectedPaths()).toEqual(["second.ts"]);
+    expect(partialModel.getSnapshot().focusedPath).toBe("second.ts");
   });
 });

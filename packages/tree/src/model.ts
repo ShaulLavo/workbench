@@ -695,6 +695,30 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     }
   }
 
+  private pruneRemovedPaths(removedPaths: readonly string[]): void {
+    if (removedPaths.length === 0) return;
+    const isRemoved = (path: string): boolean =>
+      removedPaths.some((removed) => isSameOrInside(path, removed));
+    if (this.selected.size > 0) {
+      let changed = false;
+      const next = new Set<string>();
+      for (const path of this.selected) {
+        if (isRemoved(path)) changed = true;
+        else next.add(path);
+      }
+      if (changed) this.selected = next;
+    }
+    if (this.selectionAnchor && isRemoved(this.selectionAnchor)) {
+      this.selectionAnchor = undefined;
+    }
+    if (this.focusedPath && isRemoved(this.focusedPath)) {
+      this.focusedPath = undefined;
+    }
+    if (this.draft?.mode === "rename" && isRemoved(this.draft.path)) {
+      this.draft = undefined;
+    }
+  }
+
   replacePreparedInput(prepared: PreparedFileTreeInput): void {
     this.index.replacePreparedInput(prepared);
     this.reconcileSelectionAndFocus();
@@ -716,8 +740,10 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     return result;
   }
 
-  notifyIndexChange(options?: { readonly reconcile?: boolean }): void {
-    if (options?.reconcile) this.reconcileSelectionAndFocus();
+  notifyIndexChange(options?: { readonly removedPaths?: readonly string[] }): void {
+    if (options?.removedPaths && options.removedPaths.length > 0) {
+      this.pruneRemovedPaths(options.removedPaths);
+    }
     this.emit();
   }
 }
