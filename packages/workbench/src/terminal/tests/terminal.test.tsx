@@ -2451,4 +2451,77 @@ describe("@shaulavo/workbench-terminal", () => {
       createSpy.mockRestore();
     }
   });
+
+  it("routes TerminalAccessoryBar input to the focused split pane when keepAlive is false", async () => {
+    const frameListeners = new Set<() => void>();
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => createMockPanelTerminal(frameListeners, () => {}));
+    const written: string[] = [];
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "s1", title: "Shell 1", status: "ready" },
+      { id: "s2", title: "Shell 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("s1");
+    const splitId = createSubscribable<string | undefined>("s2");
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "s3",
+      closeSession: async () => {},
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      async attach(id, { onEvent }) {
+        queueMicrotask(() => {
+          onEvent({ type: "ready" });
+          onEvent({ type: "replay-complete" });
+        });
+        return {
+          write: (data) => written.push(`${id}:${data}`),
+          resize: () => {},
+          detach: () => {},
+        };
+      },
+    };
+
+    try {
+      const host = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive={false}
+          showAccessoryBar={true}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+        for (const onFrame of frameListeners) onFrame();
+      });
+
+      // Initially s1 is focused -> accessory bar renders on s1 and routes "|" to s1.
+      expect(host.querySelectorAll("[data-wb-terminal-accessory-bar]")).toHaveLength(1);
+      act(() => {
+        host.querySelector<HTMLButtonElement>('[data-testid="wb-term-key-pipe"]')?.click();
+      });
+      expect(written).toEqual(["s1:|"]);
+
+      // Selecting the right split tab s2 moves the accessory bar to s2 and routes "|" to s2.
+      act(() => {
+        host.querySelector<HTMLButtonElement>('[data-testid="wb-term-tab-s2"] button[role="tab"]')?.click();
+      });
+      expect(host.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
+      expect(host.querySelectorAll("[data-wb-terminal-accessory-bar]")).toHaveLength(1);
+      expect(
+        host.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset.splitFocused,
+      ).toBe("true");
+      act(() => {
+        host.querySelector<HTMLButtonElement>('[data-testid="wb-term-key-pipe"]')?.click();
+      });
+      expect(written).toEqual(["s1:|", "s2:|"]);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 });

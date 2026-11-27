@@ -677,6 +677,7 @@ export function TerminalPanel({
 
   let stageContent: ReactNode;
   if (primarySession) {
+    const accessoryTargetId = focusedSession?.id ?? primarySession.id;
     const orderedKeepAlive = [primarySession].concat(
       secondarySession ? [secondarySession] : [],
       sessions.filter((session) => session.id !== primarySession.id && session.id !== secondarySession?.id),
@@ -692,15 +693,23 @@ export function TerminalPanel({
             renderSessionView(
               session,
               resolveKeepAlivePosition(session.id),
-              showAccessoryBar && session.id === (focusedSession?.id ?? primarySession.id),
+              showAccessoryBar && session.id === accessoryTargetId,
             ),
           )
         ) : (
           <>
-            {renderSessionView(primarySession, secondarySession ? "left" : "single", showAccessoryBar)}
+            {renderSessionView(
+              primarySession,
+              secondarySession ? "left" : "single",
+              showAccessoryBar && primarySession.id === accessoryTargetId,
+            )}
             {secondarySession ? (
               <div className="wb-terminal-split-pane">
-                {renderSessionView(secondarySession, "right", false)}
+                {renderSessionView(
+                  secondarySession,
+                  "right",
+                  showAccessoryBar && secondarySession.id === accessoryTargetId,
+                )}
               </div>
             ) : null}
           </>
