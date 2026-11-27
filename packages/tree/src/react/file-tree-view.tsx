@@ -770,10 +770,9 @@ export function FileTreeView({
       writable
     ) {
       const visiblePaths = collectVisibleEntryPaths(state.rows);
-      const visibleSelected = Array.from(state.selected).filter((path) => visiblePaths.has(path));
       const targets =
-        visibleSelected.length > 0
-          ? visibleSelected
+        state.selected.size > 0
+          ? Array.from(state.selected).filter((path) => visiblePaths.has(path))
           : focusedRow
             ? [state.focusedPath ?? focusedRow.path]
             : [];

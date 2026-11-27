@@ -568,6 +568,27 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(model.getSnapshot().focusedPath).toBeUndefined();
     expect(model.getSelectedPaths()).toEqual([]);
 
+    // Indexed move patch rebases selection and focus before reconciling.
+    model.replaceSnapshot({
+      revision: 3,
+      entries: [
+        { path: "src", kind: "directory" },
+        { path: "src/a.txt", kind: "file" },
+        { path: "dst", kind: "directory" },
+      ],
+      loadedDirectoryPaths: new Set(["", "src", "dst"]),
+    });
+    model.select("src/a.txt", "replace", "keyboard");
+    const moveRes = model.applyPatch({
+      kind: "move",
+      baseRevision: 3,
+      nextRevision: 4,
+      moves: [{ from: "src/a.txt", to: "dst/a.txt", entryKind: "file" }],
+    });
+    expect(moveRes).toEqual({ status: "applied", revision: 4 });
+    expect(model.getSelectedPaths()).toEqual(["dst/a.txt"]);
+    expect(model.getSnapshot().focusedPath).toBe("dst/a.txt");
+
     // Temporary absence via notifyIndexChange (e.g., optimistic delete rollback or lazy reset) preserves state.
     model.select("other.ts", "replace", "keyboard");
     model.setDraft({ mode: "rename", path: "other.ts" });

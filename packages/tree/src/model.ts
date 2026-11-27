@@ -763,6 +763,7 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   applyPatch(patch: IndexedTreePatch): PatchApplyResult {
     const result = this.index.applyPatch(patch);
     if (result.status === "applied") {
+      if (patch.kind === "move") this.rebaseMovedPaths(patch.moves);
       this.reconcileSelectionAndFocus();
       this.emit();
     }

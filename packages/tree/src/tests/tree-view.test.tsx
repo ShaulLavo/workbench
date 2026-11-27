@@ -1120,5 +1120,15 @@ describe("@shaulavo/workbench-tree React view", () => {
       alphaRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
     });
     expect(onFilteredDelete).toHaveBeenCalledWith(["alpha.txt"]);
+
+    // When filter hides every selected path, Delete does not fall back to an unrelated focused row.
+    onFilteredDelete.mockClear();
+    act(() => {
+      moveModel.setSelectedPaths(["beta.txt"], { focusedPath: "alpha.txt", modality: "keyboard" });
+    });
+    act(() => {
+      alphaRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onFilteredDelete).not.toHaveBeenCalled();
   });
 });
