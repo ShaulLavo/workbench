@@ -3,7 +3,11 @@ import { createPortal } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { renderToStaticMarkup } from "react-dom/server";
 import { afterEach, describe, expect, it } from "vitest";
-import { validateSafeSvgGlyph } from "../../../scripts/icon-generator";
+import {
+  combineEvenOddCutoutPaths,
+  normalizeLeadingMoveToAbsolute,
+  validateSafeSvgGlyph,
+} from "../../../scripts/icon-generator";
 import {
   buildFileIconSpriteMarkup,
   EXCLUDED_VSCODE_ICON_SOURCES,
@@ -58,6 +62,69 @@ describe("@shaulavo/workbench-icons", () => {
     }
     expect(FILE_ICON_GLYPHS.claude.viewBox).toBe("0 0 24 24");
     expect(FILE_ICON_GLYPHS.claude.paths).toContain("<path");
+  });
+
+  it("normalizes the html icon as a single evenodd cutout path so the inner 5 stays visible", () => {
+    const resolved = resolveFileIcon({ name: "index.html", type: "file" });
+    expect(resolved.name).toBe("html");
+    expect(resolved.rule.glyph).toBe("html");
+    expect(resolved.rule.hue).toBe("orange");
+
+    const htmlGlyph = FILE_ICON_GLYPHS.html;
+    const pathMatches = htmlGlyph.paths.match(/<path\b[^>]*>/g) ?? [];
+    expect(pathMatches).toHaveLength(1);
+    expect(htmlGlyph.paths).toContain('fill-rule="evenodd"');
+    expect(htmlGlyph.paths).toContain('clip-rule="evenodd"');
+    expect(htmlGlyph.paths).toContain("ZM25 6l-.32 3.5");
+  });
+
+  it("converts leading relative movetos and merges opaque cutout paths safely", () => {
+    expect(normalizeLeadingMoveToAbsolute("m25 6-.32 3.5H10z")).toBe("M25 6l-.32 3.5H10z");
+    expect(normalizeLeadingMoveToAbsolute("m10 20L30 40")).toBe("M10 20L30 40");
+    expect(normalizeLeadingMoveToAbsolute("M1 2 3 4")).toBe("M1 2 3 4");
+
+    const merged = combineEvenOddCutoutPaths(
+      "demo",
+      '<path fill="currentColor" d="M0 0h10v10H0"/> <path fill="currentColor" d="m2 2 6 0v6H2z"/>',
+    );
+    expect(merged).toBe(
+      '<path fill="currentColor" fill-rule="evenodd" d="M0 0h10v10H0ZM2 2l6 0v6H2z" clip-rule="evenodd"/>',
+    );
+
+    expect(() => combineEvenOddCutoutPaths("demo", '<path fill="currentColor" d="M0 0h10v10H0z"/>')).toThrow(
+      /expected >=2 plain currentColor/,
+    );
+    expect(() =>
+      combineEvenOddCutoutPaths(
+        "demo",
+        '<path fill="currentColor" d="M0 0h10v10H0z" opacity=".5"/> <path fill="currentColor" d="M2 2h6v6H2z"/>',
+      ),
+    ).toThrow(/non-plain element/);
+  });
+
+  it("prevents unreviewed glyphs with multiple plain opaque currentColor paths from flattening inner details", () => {
+    // Only genuinely disjoint multi-path monochrome glyphs may ship >1 plain opaque currentColor <path>.
+    // Overlapping shield/badge cutouts (like html) must be merged with fill-rule="evenodd".
+    const allowedDisjointMultiPathGlyphs = new Set([
+      "browserslist-duo",
+      "mcp",
+      "nextjs",
+      "server-duo",
+      "stylelint",
+      "zig",
+    ]);
+    const plainOpaquePathRe =
+      /^<path\s+(?:fill="currentColor"\s+d="[^"]+"|d="[^"]+"\s+fill="currentColor")\s*\/>$/;
+
+    const unexpected: string[] = [];
+    for (const [name, glyph] of Object.entries(FILE_ICON_GLYPHS)) {
+      const elements = glyph.paths.match(/<[^>]+>/g) ?? [];
+      const plainOpaquePaths = elements.filter((el) => plainOpaquePathRe.test(el));
+      if (plainOpaquePaths.length >= 2 && !allowedDisjointMultiPathGlyphs.has(name)) {
+        unexpected.push(name);
+      }
+    }
+    expect(unexpected).toEqual([]);
   });
 
   it("matches multi-dot extensions and exact filenames before fallback extensions", () => {

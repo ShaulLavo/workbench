@@ -346,7 +346,7 @@ export const FILE_ICON_GLYPHS: Readonly<Record<FileIconGlyphName, FileIconGlyph>
   html: {
     viewBox: "0 0 32 32",
     paths:
-      '<path fill="currentColor" d="M4.5 28.5 2 0h28l-2.5 28.5L16 32"/> <path fill="currentColor" d="m25 6-.32 3.5H10.94l.32 3.63h13.1L23.35 24l-7.32 2-7.44-2-.45-5.56h3.57l.25 2.81 4.07 1.06 3.94-1.06.45-4.56H7.95L7 6z"/>',
+      '<path fill="currentColor" fill-rule="evenodd" d="M4.5 28.5 2 0h28l-2.5 28.5L16 32ZM25 6l-.32 3.5H10.94l.32 3.63h13.1L23.35 24l-7.32 2-7.44-2-.45-5.56h3.57l.25 2.81 4.07 1.06 3.94-1.06.45-4.56H7.95L7 6z" clip-rule="evenodd"/>',
   },
   IconLayers3Middle: {
     viewBox: "0 0 16 16",
