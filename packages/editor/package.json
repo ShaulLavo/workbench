@@ -14,23 +14,28 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./groups": {
       "types": "./dist/groups/index.d.ts",
-      "import": "./dist/groups/index.js"
+      "import": "./dist/groups/index.js",
+      "default": "./dist/groups/index.js"
     },
     "./lsp": {
       "types": "./dist/lsp/index.d.ts",
-      "import": "./dist/lsp/index.js"
+      "import": "./dist/lsp/index.js",
+      "default": "./dist/lsp/index.js"
     },
     "./composer": {
       "types": "./dist/composer/index.d.ts",
-      "import": "./dist/composer/index.js"
+      "import": "./dist/composer/index.js",
+      "default": "./dist/composer/index.js"
     },
     "./diff": {
       "types": "./dist/diff/index.d.ts",
-      "import": "./dist/diff/index.js"
+      "import": "./dist/diff/index.js",
+      "default": "./dist/diff/index.js"
     },
     "./editor.css": "./dist/editor.css"
   },
