@@ -3,23 +3,14 @@ import type {
   LazyInvalidationEvent,
   LazyInvalidationOperation,
 } from "@shaulavo/workbench-core";
-import { resolveLazyOperations } from "./index-store";
+import { applyLazyOpsToPath, resolveLazyOperations } from "./index-store";
 import type { FileTreeModel } from "./model";
-import { ancestorsOf, isInside, isSameOrInside, normalizeTreePath } from "./paths";
+import { ancestorsOf, normalizeTreePath } from "./paths";
 
-function applyOpsToFilterPath(path: string, ops: readonly LazyInvalidationOperation[]): string | null {
-  let current = path;
-  for (const op of ops) {
-    if (op.kind === "remove" && isSameOrInside(current, op.path)) return null;
-    if (op.kind === "remove") continue;
-    if (current === op.from) current = op.to;
-    else if (isInside(current, op.from)) current = `${op.to}${current.slice(op.from.length)}`;
-  }
-  return current;
-}
-
-function applyInvalidationToFilterPaths(paths: readonly string[], event: LazyInvalidationEvent): string[] {
-  const ops = resolveLazyOperations(event);
+function applyOpsToFilterPaths(
+  paths: readonly string[],
+  ops: readonly LazyInvalidationOperation[],
+): string[] {
   if (ops.length === 0) return paths.slice();
   const next: string[] = [];
   const seen = new Set<string>();
@@ -27,7 +18,7 @@ function applyInvalidationToFilterPaths(paths: readonly string[], event: LazyInv
     const isExplicitDir = rawPath.endsWith("/");
     const normalized = normalizeTreePath(rawPath);
     if (!normalized) continue;
-    const rebased = applyOpsToFilterPath(normalized, ops);
+    const rebased = applyLazyOpsToPath(normalized, ops);
     if (!rebased || seen.has(rebased)) continue;
     seen.add(rebased);
     next.push(isExplicitDir ? `${rebased}/` : rebased);
@@ -233,35 +224,29 @@ export function bindFileSystemAdapter(
     }
   }
 
-  function syncFilterPathsForInvalidation(event: LazyInvalidationEvent, wasActiveFilter: boolean): void {
+  function syncFilterPathsForInvalidation(
+    event: LazyInvalidationEvent,
+    ops: readonly LazyInvalidationOperation[],
+    wasActiveFilter: boolean,
+  ): void {
     if (!wasActiveFilter || event.reset) {
       setFilterPaths(undefined);
       return;
     }
-    if (!cachedFilterPaths) return;
-    if (
-      event.removed.length === 0 &&
-      event.moves.length === 0 &&
-      (!event.operations || event.operations.length === 0)
-    ) {
-      return;
-    }
-    setFilterPaths(applyInvalidationToFilterPaths(cachedFilterPaths, event));
+    if (!cachedFilterPaths || ops.length === 0) return;
+    setFilterPaths(applyOpsToFilterPaths(cachedFilterPaths, ops));
   }
 
   function handleLazyInvalidation(event: LazyInvalidationEvent): void {
     if (disposed) return;
     const wasActiveFilter = model.getSnapshot().filter.trim().length > 0;
+    const ops = event.reset ? [] : resolveLazyOperations(event);
     handlingInvalidation = true;
     try {
       filterListGen += 1;
-      syncFilterPathsForInvalidation(event, wasActiveFilter);
+      syncFilterPathsForInvalidation(event, ops, wasActiveFilter);
       model.index.applyLazyInvalidation(event);
-      model.notifyIndexChange(
-        event.moves.length > 0 || event.removed.length > 0
-          ? { movedPaths: event.moves, removedPaths: event.removed }
-          : undefined,
-      );
+      model.notifyIndexChange(ops.length > 0 ? { operations: ops } : undefined);
       reloadInvalidatedLazyDirs(event);
     } finally {
       handlingInvalidation = false;

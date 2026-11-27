@@ -13,6 +13,7 @@ import {
   ancestorsOf,
   baseName,
   compareDirEntries,
+  isInside,
   isSameOrInside,
   joinPath,
   normalizeTreePath,
@@ -351,6 +352,17 @@ function normalizeLazyOperations(
   return ops;
 }
 
+export function applyLazyOpsToPath(path: string, ops: readonly LazyInvalidationOperation[]): string | null {
+  let current = path;
+  for (const op of ops) {
+    if (op.kind === "remove" && isSameOrInside(current, op.path)) return null;
+    if (op.kind === "remove") continue;
+    if (current === op.from) current = op.to;
+    else if (isInside(current, op.from)) current = `${op.to}${current.slice(op.from.length)}`;
+  }
+  return current;
+}
+
 export function resolveLazyOperations(event: LazyInvalidationEvent): LazyInvalidationOperation[] {
   if (event.operations) return normalizeLazyOperations(event.operations);
   const removed = event.removed.map(normalizeTreePath).filter(Boolean);
@@ -362,7 +374,7 @@ export function resolveLazyOperations(event: LazyInvalidationEvent): LazyInvalid
     return moves.map((move): LazyInvalidationOperation => ({ kind: "move", from: move.from, to: move.to }));
   }
   const preRemoves = removed
-    .filter((path) => !moves.some((move) => isSameOrInside(move.from, path)))
+    .filter((path) => !moves.some((move) => isSameOrInside(move.from, path) || isSameOrInside(path, move.to)))
     .map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
   const moveOps = moves.map((move): LazyInvalidationOperation => ({
     kind: "move",

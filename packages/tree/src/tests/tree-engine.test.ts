@@ -859,13 +859,15 @@ describe("@shaulavo/workbench-tree engine", () => {
     expect(deleteBeforeRenameIndex.hasPath("renamed/needle.txt")).toBe(false);
     expect(deleteBeforeRenameIndex.hasPath("closed/needle.txt")).toBe(false);
 
-    // Also verify delete-then-rename on the filtered lazy bridge while listFiles() is still pending.
+    // Also verify delete-then-rename on the filtered lazy bridge clears selection, focus, and rename draft.
     const model = new FileTreeModel();
     const fixture = createLazyFilterInvalidationFixture(["open.ts", "closed/keep.txt", "closed/needle.txt"]);
     const bound = bindFileSystemAdapter(model, fixture.adapter);
     model.setFilter("needle");
     await Promise.resolve();
     await Promise.resolve();
+    model.select("closed/needle.txt", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "closed/needle.txt" });
     fixture.setDeferListFiles(true);
     fixture.emitInvalidation({
       directories: [""],
@@ -880,12 +882,64 @@ describe("@shaulavo/workbench-tree engine", () => {
         .map((row) => row.path),
     ).toEqual([]);
     expect(model.getEntryKind("renamed/needle.txt")).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSnapshot().draft).toBeUndefined();
     fixture.resolvePendingList(["open.ts", "renamed/keep.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+
+    // Explicit operations (delete x.txt then move y.txt -> x.txt) rebase selection/focus onto x.txt even with summary lists or empty summaries.
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "open.ts", to: "closed/keep.txt", operation: 2 }],
+      removed: ["closed/keep.txt"],
+      operations: [
+        { kind: "remove", path: "closed/keep.txt" },
+        { kind: "move", from: "open.ts", to: "closed/keep.txt" },
+      ],
+    });
+    fixture.resolvePendingList(["closed/keep.txt", "y.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    model.select("y.txt", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "y.txt" });
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [],
+      removed: [],
+      operations: [
+        { kind: "remove", path: "x.txt" },
+        { kind: "move", from: "y.txt", to: "x.txt" },
+      ],
+    });
+    expect(model.getSelectedPaths()).toEqual(["x.txt"]);
+    expect(model.getSnapshot().focusedPath).toBe("x.txt");
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "x.txt" });
+    fixture.resolvePendingList(["x.txt"]);
     await Promise.resolve();
     await Promise.resolve();
     bound.dispose();
 
-    // 2. Rename-then-delete in the same batch must not resurrect the deleted child either.
+    // 2. Reused directory path fallback preserves surviving file moved out of the reused directory.
+    const reusedDirIndex = FileTreeIndex.fromPaths(["closed/needle.txt", "incoming/needle.txt"], {
+      loadedDirectoryPaths: new Set(["", "closed", "incoming"]),
+    });
+    reusedDirIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [
+        { from: "closed", to: "renamed", operation: 1 },
+        { from: "incoming", to: "closed", operation: 2 },
+      ],
+      removed: ["closed/needle.txt"],
+    });
+    expect(reusedDirIndex.hasPath("renamed/needle.txt")).toBe(true);
+    expect(reusedDirIndex.hasPath("closed/needle.txt")).toBe(false);
+
+    // 3. Rename-then-delete in the same batch must not resurrect the deleted child either.
     const renameBeforeDeleteIndex = FileTreeIndex.fromPaths(
       ["closed/keep.txt", "closed/needle.txt", "a.txt", "d.txt"],
       {
