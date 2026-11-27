@@ -2142,7 +2142,7 @@ describe("@shaulavo/workbench-terminal", () => {
       expect(splitGroup?.querySelector('[data-testid="wb-term-tab-s2"]')).not.toBeNull();
       expect(host.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
 
-      // Clicking the right half tab notifies adapter.selectSession("s2") AND keeps the split active while mounted.
+      // Clicking the right half tab notifies adapter.selectSession("s2") AND keeps the split active.
       const rightTabBtn = splitGroup!.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-s2"] button[role="tab"]',
       )!;
@@ -2156,13 +2156,40 @@ describe("@shaulavo/workbench-terminal", () => {
         host.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset.splitFocused,
       ).toBe("true");
 
-      // Remounting after unmounting and changing the split pair externally to s3 + s2 restores s3 + s2 (never stale s1 + s2).
+      // Remounting with the SAME adapter state (activeId === splitId === "s2", no splitPair) preserves s1 + s2 with s2 focused!
+      act(() => {
+        activeRoot?.unmount();
+        activeRoot = null;
+      });
+      const sameStateHost = mount(
+        <TerminalPanel
+          adapter={adapter}
+          collapsed={false}
+          onToggleCollapsed={vi.fn()}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const sameStateGroup = sameStateHost.querySelector<HTMLElement>("[data-wb-term-split-group]");
+      expect(sameStateGroup).not.toBeNull();
+      expect(sameStateGroup?.querySelector('[data-testid="wb-term-tab-s1"]')).not.toBeNull();
+      expect(sameStateGroup?.querySelector('[data-testid="wb-term-tab-s2"]')).not.toBeNull();
+      expect(sameStateHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
+      expect(
+        sameStateHost.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset
+          .splitFocused,
+      ).toBe("true");
+
+      // Remounting after unmounting, changing the split to s3 + s2, and selecting s2 while unmounted restores s3 + s2 (never stale s1 + s2).
       act(() => {
         activeRoot?.unmount();
         activeRoot = null;
       });
       activeId.set("s3");
       splitId.set("s2");
+      activeId.set("s2");
       const remountedHost = mount(
         <TerminalPanel
           adapter={adapter}
@@ -2180,6 +2207,10 @@ describe("@shaulavo/workbench-terminal", () => {
       expect(remountedGroup?.querySelector('[data-testid="wb-term-tab-s2"]')).not.toBeNull();
       expect(remountedGroup?.querySelector('[data-testid="wb-term-tab-s1"]')).toBeNull();
       expect(remountedHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
+      expect(
+        remountedHost.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset
+          .splitFocused,
+      ).toBe("true");
 
       // Authoritative adapter.splitPair also survives remount with focused right half (activeId === splitId).
       const splitPairSub = createSubscribable<readonly [string, string] | undefined>(["s3", "s2"]);

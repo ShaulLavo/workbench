@@ -1,6 +1,7 @@
 import {
   useEffect,
   useLayoutEffect,
+  useMemo,
   useRef,
   useState,
   type FocusEvent,
@@ -80,6 +81,97 @@ const EMPTY_SPLIT_PAIR = {
   subscribe: () => () => {},
 };
 
+interface PreservedSplitState {
+  pair: readonly [string, string] | undefined;
+  readonly listeners: Set<() => void>;
+  unsubAdapter: (() => void) | null;
+}
+
+const preservedSplitStores = new WeakMap<TerminalAdapter, PreservedSplitState>();
+
+function getOrCreatePreservedSplitState(adapter: TerminalAdapter): PreservedSplitState {
+  let state = preservedSplitStores.get(adapter);
+  if (!state) {
+    state = { pair: undefined, listeners: new Set(), unsubAdapter: null };
+    preservedSplitStores.set(adapter, state);
+  }
+  return state;
+}
+
+function notifyPreservedSplit(state: PreservedSplitState): void {
+  for (const listener of state.listeners) listener();
+}
+
+function detachPreservedSplitWatcher(state: PreservedSplitState): void {
+  if (!state.unsubAdapter) return;
+  const unsub = state.unsubAdapter;
+  state.unsubAdapter = null;
+  unsub();
+}
+
+function clearPreservedSplitPair(adapter: TerminalAdapter): void {
+  const state = preservedSplitStores.get(adapter);
+  if (!state) return;
+  detachPreservedSplitWatcher(state);
+  if (state.pair === undefined) return;
+  state.pair = undefined;
+  notifyPreservedSplit(state);
+}
+
+function reconcilePreservedSplit(adapter: TerminalAdapter, state: PreservedSplitState): void {
+  const currentPair = state.pair;
+  if (!currentPair) {
+    detachPreservedSplitWatcher(state);
+    return;
+  }
+  const sessions = adapter.sessions.getSnapshot();
+  const active = adapter.activeId.getSnapshot();
+  const split = adapter.splitId?.getSnapshot();
+  if (!split) {
+    clearPreservedSplitPair(adapter);
+    return;
+  }
+  if (active && active !== split) {
+    const hasBoth = sessions.some((s) => s.id === active) && sessions.some((s) => s.id === split);
+    if (!hasBoth) {
+      clearPreservedSplitPair(adapter);
+      return;
+    }
+    if (currentPair[0] !== active || currentPair[1] !== split) {
+      state.pair = [active, split];
+      notifyPreservedSplit(state);
+    }
+    return;
+  }
+  const stillValid =
+    currentPair[1] === split &&
+    sessions.some((s) => s.id === currentPair[0]) &&
+    sessions.some((s) => s.id === currentPair[1]);
+  if (!stillValid) {
+    clearPreservedSplitPair(adapter);
+  }
+}
+
+function preserveSplitPair(adapter: TerminalAdapter, pair: readonly [string, string]): void {
+  if (adapter.splitPair || !adapter.splitId) return;
+  const state = getOrCreatePreservedSplitState(adapter);
+  state.pair = pair;
+  if (!state.unsubAdapter) {
+    const onAdapterChange = (): void => {
+      reconcilePreservedSplit(adapter, state);
+    };
+    const unsubActive = adapter.activeId.subscribe(onAdapterChange);
+    const unsubSplit = adapter.splitId.subscribe(onAdapterChange);
+    const unsubSessions = adapter.sessions.subscribe(onAdapterChange);
+    state.unsubAdapter = () => {
+      unsubActive();
+      unsubSplit();
+      unsubSessions();
+    };
+  }
+  notifyPreservedSplit(state);
+}
+
 function SessionStatusDot({ status }: { readonly status: TerminalSessionInfo["status"] }) {
   return <span className="wb-terminal-status-dot" data-status={status} aria-label={`Terminal ${status}`} />;
 }
@@ -149,7 +241,7 @@ function resolveSplitSessions(
   activeId: string | undefined,
   splitId: string | undefined,
   splitPair: readonly [string, string] | undefined,
-  preservedSplitPair: readonly [string, string] | null,
+  preservedSplitPair: readonly [string, string] | undefined,
 ): {
   readonly primary: TerminalSessionInfo | undefined;
   readonly secondary: TerminalSessionInfo | undefined;
@@ -217,26 +309,29 @@ export function TerminalPanel({
   const activeId = useSubscribable(adapter.activeId);
   const splitId = useSubscribable(adapter.splitId ?? EMPTY_SPLIT_ID);
   const splitPair = useSubscribable(adapter.splitPair ?? EMPTY_SPLIT_PAIR);
+  const preservedSplitSource = useMemo<Subscribable<readonly [string, string] | undefined>>(() => {
+    if (adapter.splitPair) return EMPTY_SPLIT_PAIR;
+    const state = getOrCreatePreservedSplitState(adapter);
+    return {
+      getSnapshot: () => state.pair,
+      subscribe(listener) {
+        state.listeners.add(listener);
+        return () => {
+          state.listeners.delete(listener);
+        };
+      },
+    };
+  }, [adapter]);
+  const preservedSplitPair = useSubscribable(preservedSplitSource);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [focusTick, setFocusTick] = useState(0);
   const [tabFocusTick, setTabFocusTick] = useState(0);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
-  const [preservedSplitPair, setPreservedSplitPair] = useState<readonly [string, string] | null>(null);
-  const [prevAdapterSplit, setPrevAdapterSplit] = useState<{
-    readonly activeId: string | undefined;
-    readonly splitId: string | undefined;
-  }>({ activeId, splitId });
+  const [prevActiveId, setPrevActiveId] = useState<string | undefined>(activeId);
 
-  if (prevAdapterSplit.activeId !== activeId || prevAdapterSplit.splitId !== splitId) {
-    setPrevAdapterSplit({ activeId, splitId });
-    const splitStale =
-      preservedSplitPair !== null &&
-      (splitId !== preservedSplitPair[1] ||
-        (activeId !== preservedSplitPair[0] && activeId !== preservedSplitPair[1]));
-    if (splitStale) {
-      setPreservedSplitPair(null);
-    }
-    if (prevAdapterSplit.activeId !== activeId && focusedPaneId !== null && activeId !== focusedPaneId) {
+  if (prevActiveId !== activeId) {
+    setPrevActiveId(activeId);
+    if (focusedPaneId !== null && activeId !== focusedPaneId) {
       setFocusedPaneId(null);
     }
   }
@@ -275,9 +370,9 @@ export function TerminalPanel({
     setFocusedPaneId(sessionId);
     if (!adapter.splitPair && primarySession && secondarySession) {
       if (sessionId === secondarySession.id) {
-        setPreservedSplitPair([primarySession.id, secondarySession.id]);
+        preserveSplitPair(adapter, [primarySession.id, secondarySession.id]);
       } else if (sessionId !== primarySession.id) {
-        setPreservedSplitPair(null);
+        clearPreservedSplitPair(adapter);
       }
     }
     adapter.selectSession(sessionId);
@@ -330,7 +425,7 @@ export function TerminalPanel({
 
   function handleCreateSession(): void {
     pendingTabFocusRef.current = null;
-    setPreservedSplitPair(null);
+    clearPreservedSplitPair(adapter);
     focusSeqRef.current += 1;
     const reqSeq = focusSeqRef.current;
     if (collapsed) onToggleCollapsed?.();
@@ -707,7 +802,7 @@ export function TerminalPanel({
             disabled={splitCreatesSession ? false : sessions.length < 2}
             onClick={() => {
               pendingTabFocusRef.current = null;
-              setPreservedSplitPair(null);
+              clearPreservedSplitPair(adapter);
               adapter.toggleSplit(focusedSession?.id ?? primarySession?.id);
               if (collapsed) onToggleCollapsed?.();
               const target = adapter.splitId.getSnapshot() ?? adapter.activeId.getSnapshot();
