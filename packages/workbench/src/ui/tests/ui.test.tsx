@@ -420,6 +420,47 @@ describe("@shaulavo/workbench-ui", () => {
     ]);
   });
 
+  it("aborts drag start cleanly when setPointerCapture throws", () => {
+    const draggingStates: boolean[] = [];
+    const host = mount(
+      <Splitter
+        splitter="explorer"
+        label="Resize explorer"
+        controls="explorer-pane"
+        geometry={DEFAULT_PANE_GEOMETRY}
+        valueNow={20}
+        measureSpace={() => ({ width: 1200, height: 800 })}
+        measurePaneSize={() => 240}
+        onPreviewGeometry={vi.fn()}
+        onCommitGeometry={vi.fn()}
+        onDraggingChange={(dragging) => draggingStates.push(dragging)}
+      />,
+    );
+
+    const handle = host.querySelector<HTMLDivElement>('[role="separator"]');
+    expect(handle).not.toBeNull();
+    if (handle) {
+      handle.setPointerCapture = () => {
+        throw new DOMException("No active pointer", "NotFoundError");
+      };
+    }
+
+    act(() => {
+      handle?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 77,
+          clientX: 240,
+          clientY: 100,
+        }),
+      );
+    });
+
+    expect(draggingStates).toEqual([]);
+    expect(handle?.getAttribute("data-dragging")).toBeNull();
+  });
+
   it("hides MobilePaneShell switcher while keyboardOpen is true", () => {
     const onSelectPane = vi.fn();
     const host = mount(

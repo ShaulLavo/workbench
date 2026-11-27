@@ -182,12 +182,13 @@ export function Splitter({
   function handlePointerDown(event: PointerEvent<HTMLDivElement>): void {
     const state = stateRef.current;
     if (event.button !== 0 || state.gesture) return;
-    event.preventDefault();
     try {
       event.currentTarget.setPointerCapture?.(event.pointerId);
     } catch {
-      // Synthetic or already-cancelled pointers cannot be captured.
+      // An uncapturable or already-cancelled pointer cannot reliably deliver pointerup/cancel.
+      return;
     }
+    event.preventDefault();
     const startCoord = readCoord(event);
     const startPx = isSplitterOpen(geometry, splitter) ? measurePaneSize() : 0;
     state.gesture = {

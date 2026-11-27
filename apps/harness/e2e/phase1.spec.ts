@@ -140,6 +140,20 @@ test("layout-splitter-mobile resizes desktop panes and switches/collapses mobile
   await expect(explorerPane).toBeVisible();
   expect((await explorerPane.boundingBox())?.width).toBe(minBox?.width);
 
+  // An uncapturable synthetic pointerdown must not leave the splitter stuck in drag mode.
+  await explorerSplitter.evaluate((el) => {
+    el.dispatchEvent(
+      new PointerEvent("pointerdown", {
+        bubbles: true,
+        button: 0,
+        pointerId: 77,
+        clientX: 200,
+        clientY: 100,
+      }),
+    );
+  });
+  await expect(explorerSplitter).not.toHaveAttribute("data-dragging", "true");
+
   // Secondary pointer release over the separator must not end an active primary drag.
   const beforeDrag = await explorerPane.boundingBox();
   const splitterBox = await explorerSplitter.boundingBox();
