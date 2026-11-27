@@ -127,7 +127,11 @@ export function TerminalPanel({
   const [focusTick, setFocusTick] = useState(0);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusSessionRef = useRef<string | null>(null);
+  const restoreFocusTargetRef = useRef<
+    { readonly kind: "tab"; readonly id: string } | { readonly kind: "new" } | null
+  >(null);
   const pendingFocusRef = useRef<string | null>(null);
+  const focusSeqRef = useRef(0);
   const terminalsByIdRef = useRef(new Map<string, Terminal>());
 
   function focusTabButton(targetSessionId: string): void {
@@ -142,6 +146,7 @@ export function TerminalPanel({
 
   function requestTerminalFocus(sessionId: string | undefined): void {
     if (!sessionId) return;
+    focusSeqRef.current += 1;
     pendingFocusRef.current = sessionId;
     if (terminalsByIdRef.current.has(sessionId)) {
       setFocusTick((tick) => tick + 1);
@@ -149,7 +154,18 @@ export function TerminalPanel({
   }
 
   function clearPendingTerminalFocus(): void {
+    focusSeqRef.current += 1;
     pendingFocusRef.current = null;
+  }
+
+  function handleCreateSession(): void {
+    focusSeqRef.current += 1;
+    const reqSeq = focusSeqRef.current;
+    if (collapsed) onToggleCollapsed?.();
+    void Promise.resolve(adapter.createSession()).then((id) => {
+      if (focusSeqRef.current !== reqSeq || !id) return;
+      requestTerminalFocus(id);
+    });
   }
 
   useEffect(() => {
@@ -165,6 +181,19 @@ export function TerminalPanel({
     for (const id of terminalsByIdRef.current.keys()) {
       if (!activeIds.has(id)) terminalsByIdRef.current.delete(id);
     }
+    const pendingRestore = restoreFocusTargetRef.current;
+    if (!pendingRestore) return;
+    restoreFocusTargetRef.current = null;
+    if (pendingRestore.kind === "tab" && activeIds.has(pendingRestore.id)) {
+      focusTabButton(pendingRestore.id);
+      return;
+    }
+    const fallbackTab = sessions[0];
+    if (fallbackTab) {
+      focusTabButton(fallbackTab.id);
+      return;
+    }
+    headerRef.current?.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')?.focus();
   }, [sessions]);
 
   const primarySession = sessions.find((s) => s.id === activeId) ?? sessions[0];
@@ -192,6 +221,9 @@ export function TerminalPanel({
     }
     if (event.key === "Delete") {
       event.preventDefault();
+      clearPendingTerminalFocus();
+      const survivor = sessions[index + 1] ?? sessions[index - 1];
+      restoreFocusTargetRef.current = survivor ? { kind: "tab", id: survivor.id } : { kind: "new" };
       void adapter.closeSession(sessionId);
       return;
     }
@@ -341,12 +373,7 @@ export function TerminalPanel({
             aria-label="New terminal"
             title="New terminal"
             data-testid="wb-term-new"
-            onClick={() => {
-              void Promise.resolve(adapter.createSession()).then((id) => {
-                if (id) requestTerminalFocus(id);
-              });
-              if (collapsed) onToggleCollapsed?.();
-            }}
+            onClick={handleCreateSession}
           >
             <StrokeIcon name="plus" />
           </button>
@@ -431,11 +458,7 @@ export function TerminalPanel({
             type="button"
             className="wb-button wb-button-primary"
             data-testid="wb-term-empty-new"
-            onClick={() => {
-              void Promise.resolve(adapter.createSession()).then((id) => {
-                if (id) requestTerminalFocus(id);
-              });
-            }}
+            onClick={handleCreateSession}
           >
             New terminal
           </button>

@@ -192,6 +192,7 @@ export function PreviewPane({
   const editingPathRef = useRef(false);
   const committedPathRef = useRef(normalizedInitial);
   const lastAttachedPortRef = useRef<number | undefined>(undefined);
+  const hasAttachedOnceRef = useRef(false);
 
   const emitConsole = useEffectEvent(
     (entry: { readonly level: "log" | "warn" | "error"; readonly text: string }) => {
@@ -208,16 +209,17 @@ export function PreviewPane({
   const activeServer = servers.find((srv) => srv.port === selectedPort) ?? servers[0];
   const activePort = activeServer?.port;
   const [trackedPort, setTrackedPort] = useState<number | undefined>(activePort);
+  const [hasHadPort, setHasHadPort] = useState(activePort !== undefined);
   if (trackedPort !== activePort) {
-    const hadPreviousPort = trackedPort !== undefined;
+    const hadPreviousPort = trackedPort !== undefined || hasHadPort;
     setTrackedPort(activePort);
-    if (activePort !== undefined && selectedPort !== activePort) {
-      setSelectedPort(activePort);
+    if (activePort !== undefined) {
+      if (!hasHadPort) setHasHadPort(true);
+      if (selectedPort !== activePort) setSelectedPort(activePort);
     }
     if (hadPreviousPort) {
-      const resetPath = activePort === undefined ? normalizedInitial : "/";
-      setCommittedPath(resetPath);
-      setPathDraft(resetPath);
+      setCommittedPath("/");
+      setPathDraft("/");
     }
   }
   const viewportPreset = controlledViewport ?? internalViewport;
@@ -274,7 +276,7 @@ export function PreviewPane({
       controllerRef.current = null;
       if (activePort === undefined) {
         lastAttachedPortRef.current = undefined;
-        committedPathRef.current = normalizedInitial;
+        committedPathRef.current = hasAttachedOnceRef.current ? "/" : normalizedInitial;
       }
       return;
     }
@@ -354,8 +356,11 @@ export function PreviewPane({
     };
 
     const switchedPort =
-      lastAttachedPortRef.current !== undefined && lastAttachedPortRef.current !== activePort;
+      lastAttachedPortRef.current !== undefined
+        ? lastAttachedPortRef.current !== activePort
+        : hasAttachedOnceRef.current;
     lastAttachedPortRef.current = activePort;
+    hasAttachedOnceRef.current = true;
     const initialFramePath = switchedPort ? "/" : committedPathRef.current;
     if (switchedPort) {
       committedPathRef.current = "/";

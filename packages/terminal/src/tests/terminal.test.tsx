@@ -1116,6 +1116,17 @@ describe("@shaulavo/workbench-terminal", () => {
       { path: "Makefile" },
       { path: "src/other.ts", line: 7, column: 2 },
     ]);
+
+    // Malformed parenthesized suffixes must not emit partial paths or bogus line links.
+    const malformed = "src/App.tsx(12,) src/App.tsx(12,4)junk";
+    const malformedBounds = Array.from({ length: malformed.length + 1 }, (_, i) => i);
+    expect(
+      findTerminalSnapshotFileLinks({
+        text: malformed,
+        startCellByTextBoundary: malformedBounds,
+        endCellByTextBoundary: malformedBounds,
+      }),
+    ).toEqual([]);
   });
 
   it("moves focus to the terminal on New terminal, tab click, and Split while keeping arrow-key navigation on tabs", async () => {
@@ -1226,6 +1237,133 @@ describe("@shaulavo/workbench-terminal", () => {
         );
       });
       expect(closed).toEqual(["t1"]);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("restores focus on Delete, expands collapsed empty New, and ignores stale createSession focus", async () => {
+    const focusSpies = new Map<string, ReturnType<typeof vi.fn>>();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      const focusSpy = vi.fn();
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "a", title: "bash 1", status: "ready" },
+      { id: "b", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("a");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    let resolveCreate: ((id: string) => void) | undefined;
+    let resolveAttachB: (() => void) | undefined;
+    const onToggleCollapsed = vi.fn();
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession() {
+        return new Promise<string>((resolve) => {
+          resolveCreate = resolve;
+        });
+      },
+      async closeSession(id) {
+        const next = sessions.getSnapshot().filter((s) => s.id !== id);
+        sessions.set(next);
+        if (activeId.getSnapshot() === id) activeId.set(next[0]?.id);
+      },
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {},
+      async attach(id) {
+        if (id === "b") {
+          await new Promise<void>((resolve) => {
+            resolveAttachB = resolve;
+          });
+        }
+        return { write: () => {}, resize: () => {}, detach: () => {} };
+      },
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            focusSpies.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // Click New, then click B before either resolves -> late New resolution must not cancel B's focus.
+      const newBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
+      const tabBBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      act(() => {
+        newBtn.click();
+        tabBBtn.click();
+      });
+      await act(async () => {
+        resolveCreate?.("c");
+        await flushMicrotasks();
+      });
+      await act(async () => {
+        resolveAttachB?.();
+        await flushMicrotasks();
+      });
+      expect(focusSpies.get("b")).toHaveBeenCalled();
+
+      // Delete on focused tab A moves focus to surviving tab B; Delete on last tab B moves focus to New.
+      const tabABtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-a"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabABtn.focus();
+        tabABtn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      const survivingB = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      expect(document.activeElement).toBe(survivingB);
+
+      act(() => {
+        survivingB.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(document.activeElement).toBe(newBtn);
+
+      // Empty New while collapsed calls onToggleCollapsed.
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            <TerminalPanel
+              adapter={adapter}
+              collapsed
+              onToggleCollapsed={onToggleCollapsed}
+              loadRuntime={async () => ({}) as GhosttyRuntime}
+            />
+          </WorkbenchPortalProvider>,
+        );
+      });
+      act(() => {
+        root.querySelector<HTMLButtonElement>('[data-testid="wb-term-empty-new"]')?.click();
+      });
+      expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
     } finally {
       createSpy.mockRestore();
     }

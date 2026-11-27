@@ -633,4 +633,55 @@ describe("@shaulavo/workbench-preview", () => {
     const iframe = host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]');
     expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:3000/");
   });
+
+  it("preserves initialPath on first attach under StrictMode but resets to / after all servers stop and restart", async () => {
+    const { StrictMode } = await import("react");
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 3000 }]);
+    const attachCalls: { readonly port: number; readonly initialPath: string | undefined }[] = [];
+    const adapter: PreviewAdapter = {
+      kind: "remote",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      tabUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      locate: () => undefined,
+      attachFrame(_frame, port, _onEvent, options) {
+        attachCalls.push({ port, initialPath: options?.initialPath });
+        return {
+          onFrameLoad: () => {},
+          navigate: () => {},
+          reload: () => {},
+          back: () => {},
+          forward: () => {},
+          dispose: () => {},
+        };
+      },
+    };
+
+    const host = mount(
+      <StrictMode>
+        <PreviewPane adapter={adapter} initialPath="/welcome" historyMode="pane" />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3000, initialPath: "/welcome" });
+    expect(
+      host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]')?.getAttribute("src"),
+    ).toBe("http://127.0.0.1:3000/welcome");
+
+    // Stop all servers, then restart -> must open at "/" instead of "/welcome".
+    act(() => {
+      servers.set([]);
+    });
+    act(() => {
+      servers.set([{ port: 3000 }]);
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3000, initialPath: "/" });
+    expect(host.querySelector<HTMLInputElement>('[data-testid="wb-preview-url-input"]')?.value).toBe("/");
+    expect(
+      host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]')?.getAttribute("src"),
+    ).toBe("http://127.0.0.1:3000/");
+  });
 });
