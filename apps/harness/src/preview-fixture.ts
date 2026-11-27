@@ -1,8 +1,8 @@
-import type { PreviewAdapter, PreviewServerInfo, Subscribable } from "@shaulavo/workbench-core";
+import type { PreviewAdapter, PreviewServerInfo, Subscribable } from "@shaulavo/workbench/core";
 import {
   createBridgelessPreviewController,
   createPreviewBridgeController,
-} from "@shaulavo/workbench-preview";
+} from "@shaulavo/workbench/preview";
 
 function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): void } {
   let value = initial;

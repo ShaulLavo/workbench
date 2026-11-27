@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { FileTreeModel, prepareFileTreeInput } from "../packages/tree/src/index";
+import { FileTreeModel, prepareFileTreeInput } from "../packages/workbench/src/tree/model";
 
 const PATH_COUNTS = [10_000, 50_000] as const;
 const WARMUP_ROUNDS = 3;
@@ -127,6 +127,8 @@ if (process.argv.includes("--gate")) {
   const baseline = JSON.parse(readFileSync(baselinePath, "utf8")) as BaselineFile;
   const failures: string[] = [];
 
+  const isCiRunner = process.env.CI === "true";
+
   for (const expectedCount of PATH_COUNTS) {
     const actual = results.find((row) => row.pathCount === expectedCount);
     const ref = baseline.results.find((row) => row.pathCount === expectedCount);
@@ -140,6 +142,17 @@ if (process.argv.includes("--gate")) {
       );
       continue;
     }
+    if (actual.remountSpeedup < REMOUNT_SPEEDUP_GATE) {
+      failures.push(
+        `${actual.pathCount} paths remount speedup ${actual.remountSpeedup} is below ${REMOUNT_SPEEDUP_GATE}`,
+      );
+    }
+    if (actual.coldSlowdown > COLD_SLOWDOWN_GATE) {
+      failures.push(
+        `${actual.pathCount} paths cold slowdown ${actual.coldSlowdown} exceeds ${COLD_SLOWDOWN_GATE}`,
+      );
+    }
+    if (isCiRunner) continue;
     const coldLimit = round(ref.preparedColdMedianMs * BASELINE_HEADROOM);
     const remountLimit = round(ref.preparedRemountMedianMs * BASELINE_HEADROOM);
     if (actual.preparedColdMedianMs > coldLimit) {

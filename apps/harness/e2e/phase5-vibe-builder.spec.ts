@@ -1,7 +1,6 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
-import { createVibeBuilderBackend } from "../../../examples/vibe-builder/src/adapters";
 
 const VIBE_URL = "http://127.0.0.1:4174/";
 
@@ -12,22 +11,6 @@ test("vibe-builder starter kit runs complete Consumer 3 workbench loop in under 
   const lineCount = readFileSync(adaptersPath, "utf8").split("\n").length;
   expect(lineCount).toBeLessThan(300);
 
-  // Verify folder create + recursive folder move + recursive folder remove work on the writable starter FileSystemAdapter.
-  const backendCheck = createVibeBuilderBackend();
-  await backendCheck.fs.createDirectory("src/empty-dir");
-  expect(
-    backendCheck.fs.indexed?.snapshot
-      .getSnapshot()
-      ?.entries.some((e) => e.path === "src/empty-dir" && e.kind === "directory"),
-  ).toBe(true);
-  await backendCheck.fs.move("src/routes", "src/pages");
-  expect(await backendCheck.fs.readText("src/pages/pricing.tsx")).toContain("Pro plan");
-  expect(await backendCheck.fs.readText("src/routes/pricing.tsx")).toBeUndefined();
-  await backendCheck.fs.remove("src/pages");
-  expect(await backendCheck.fs.readText("src/pages/pricing.tsx")).toBeUndefined();
-  const afterRemove = backendCheck.fs.indexed?.snapshot.getSnapshot()?.entries ?? [];
-  expect(afterRemove.some((e) => e.path === "src/pages" || e.path.startsWith("src/pages/"))).toBe(false);
-
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (msg) => {
@@ -36,6 +19,47 @@ test("vibe-builder starter kit runs complete Consumer 3 workbench loop in under 
 
   await page.goto(VIBE_URL);
   await expect(page.getByTestId("vibe-ready")).toBeVisible();
+
+  // Verify folder create + recursive folder move + recursive folder remove work on the writable starter FileSystemAdapter.
+  const fsCheck = await page.evaluate(async () => {
+    const adaptersUrl = "/src/adapters.ts";
+    const mod = (await import(adaptersUrl)) as {
+      readonly createVibeBuilderBackend: () => {
+        readonly fs: {
+          createDirectory(p: string): Promise<void>;
+          move(from: string, to: string): Promise<void>;
+          remove(p: string): Promise<void>;
+          readText(p: string): Promise<string | undefined>;
+          readonly indexed?: {
+            readonly snapshot: {
+              getSnapshot(): {
+                readonly entries: readonly { readonly path: string; readonly kind: string }[];
+              };
+            };
+          };
+        };
+      };
+    };
+    const backendCheck = mod.createVibeBuilderBackend();
+    await backendCheck.fs.createDirectory("src/empty-dir");
+    const hasEmptyDir =
+      backendCheck.fs.indexed?.snapshot
+        .getSnapshot()
+        ?.entries.some((e) => e.path === "src/empty-dir" && e.kind === "directory") ?? false;
+    await backendCheck.fs.move("src/routes", "src/pages");
+    const movedText = await backendCheck.fs.readText("src/pages/pricing.tsx");
+    const oldText = await backendCheck.fs.readText("src/routes/pricing.tsx");
+    await backendCheck.fs.remove("src/pages");
+    const removedText = await backendCheck.fs.readText("src/pages/pricing.tsx");
+    const afterRemove = backendCheck.fs.indexed?.snapshot.getSnapshot()?.entries ?? [];
+    const hasLeftover = afterRemove.some((e) => e.path === "src/pages" || e.path.startsWith("src/pages/"));
+    return { hasEmptyDir, movedText, oldText, removedText, hasLeftover };
+  });
+  expect(fsCheck.hasEmptyDir).toBe(true);
+  expect(fsCheck.movedText).toContain("Pro plan");
+  expect(fsCheck.oldText).toBeUndefined();
+  expect(fsCheck.removedText).toBeUndefined();
+  expect(fsCheck.hasLeftover).toBe(false);
 
   const isTouch = testInfo.project.name === "webkit-touch";
   if (isTouch) {

@@ -71,8 +71,31 @@ for (const host of [
       await expect(page.getByTestId("terminal-stats-probe")).toContainText("detaches: 1");
       await expect(page.getByTestId("terminal-stats-probe")).toContainText("closes: 0");
 
+      // Collapse button chevron points down (90deg) when expanded and up (-90deg) when collapsed.
+      const collapseBtn = page.getByTestId("wb-term-collapse");
+      const collapseIcon = collapseBtn.locator("svg");
+      await expect(collapseBtn).toHaveAttribute("aria-expanded", "true");
+      await expect(collapseIcon).toHaveCSS("transform", "matrix(0, 1, -1, 0, 0, 0)");
+      await collapseBtn.click();
+      await expect(collapseBtn).toHaveAttribute("aria-expanded", "false");
+      await expect(collapseIcon).toHaveCSS("transform", "matrix(0, -1, 1, 0, 0, 0)");
+      await collapseBtn.click();
+      await expect(collapseBtn).toHaveAttribute("aria-expanded", "true");
+      await expect(collapseIcon).toHaveCSS("transform", "matrix(0, 1, -1, 0, 0, 0)");
+
       await page.getByTestId("wb-term-split").click();
       await expect(page.locator("[data-wb-terminal]")).toHaveCount(2);
+      const splitGroup = page.locator("[data-wb-term-split-group]");
+      await expect(splitGroup).toHaveCount(1);
+      await expect(splitGroup.locator('[data-testid="wb-term-tab-logs-2"]')).toHaveCount(1);
+      await expect(splitGroup.locator('[data-testid="wb-term-tab-bash-1"]')).toHaveCount(1);
+      // Clicking the secondary tab inside the split group focuses it without unsplitting.
+      await splitGroup.locator('[data-testid="wb-term-tab-bash-1"] button[role="tab"]').click();
+      await expect(page.locator("[data-wb-terminal]")).toHaveCount(2);
+      await expect(page.locator('[data-wb-terminal][data-session-id="bash-1"]')).toHaveAttribute(
+        "data-split-focused",
+        "true",
+      );
 
       // Keyboard F2 on focused terminal tab enters inline rename; Escape and Enter both restore focus to the tab.
       const tabButton = page.locator('[data-testid="wb-term-tab-logs-2"] button[role="tab"]');

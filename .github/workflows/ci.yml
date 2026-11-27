@@ -4,26 +4,80 @@ on:
   pull_request:
   push:
     branches: [main]
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Optional git ref or commit SHA to check out
+        required: false
+        type: string
 
 concurrency:
-  group: ci-${{ github.ref }}
-  cancel-in-progress: true
+  group: ${{ github.event_name == 'push' && format('ci-push-{0}', github.sha) || format('ci-{0}', github.ref) }}
+  cancel-in-progress: ${{ github.event_name != 'push' }}
 
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref }}
       - uses: oven-sh/setup-bun@v2
         with:
           bun-version: "1.4.4"
       - run: bun install --frozen-lockfile
-      - run: bun run build
-      - run: bun run gates
-      - run: bun run test:unit
-      - run: bun run bench:tree:gate
-      - run: bun run pack:check
+      - name: Build and pack single release candidate
+        run: bun run pack:candidate -- --out-dir release-candidate
+      - name: Static gates, unit tests, and tree benchmark
+        run: bun run gates:no-build && bun run test:unit:no-build && bun run bench:tree:gate
       - name: Install Playwright browsers (Chromium & WebKit)
         run: bunx playwright install --with-deps chromium webkit
-      - run: bun run test:browser
+      - name: Verify packed release candidate
+        run: |
+          VERSION=$(bun -p 'JSON.parse(require("node:fs").readFileSync("packages/workbench/package.json","utf8")).version')
+          bun run pack:check -- \
+            --tarball "release-candidate/shaulavo-workbench-${VERSION}.tgz" \
+            --manifest release-candidate/candidate-manifest.json \
+            --record release-candidate/pack-check-record.json
+      - name: Browser E2E tests
+        run: bun run test:browser:run
+      - name: Pre-upload release candidate integrity check
+        run: |
+          bun -e '
+          import { createHash } from "node:crypto";
+          import { existsSync, readFileSync } from "node:fs";
+          const pkg = JSON.parse(readFileSync("packages/workbench/package.json", "utf8"));
+          const tgz = `release-candidate/shaulavo-workbench-${pkg.version}.tgz`;
+          const mPath = "release-candidate/candidate-manifest.json";
+          const rPath = "release-candidate/pack-check-record.json";
+          for (const p of [tgz, mPath, rPath]) {
+            if (!existsSync(p)) throw new Error(`Missing required release artifact: ${p}`);
+          }
+          const manifest = JSON.parse(readFileSync(mPath, "utf8"));
+          const record = JSON.parse(readFileSync(rPath, "utf8"));
+          if (manifest.dirty !== false || record.dirty !== false) {
+            throw new Error("Release candidate must have dirty === false");
+          }
+          for (const key of ["ciRunId", "ciRunAttempt", "workflowEvent", "gitCommit", "gitTree", "packageName", "packageVersion", "tarballFile"]) {
+            if (manifest[key] !== record[key]) {
+              throw new Error(`Manifest/record mismatch on ${key}: ${manifest[key]} !== ${record[key]}`);
+            }
+          }
+          if (manifest.sha256 !== record.verifiedSha256) {
+            throw new Error(`Manifest sha256 !== record verifiedSha256`);
+          }
+          const actual = createHash("sha256").update(readFileSync(tgz)).digest("hex");
+          if (actual !== manifest.sha256) {
+            throw new Error(`Disk tarball sha256 (${actual}) !== manifest sha256 (${manifest.sha256})`);
+          }
+          console.log(`integrity-check: ok (${tgz}, sha256=${actual.slice(0, 12)})`);
+          '
+      - uses: actions/upload-artifact@v4
+        with:
+          name: workbench-release-candidate
+          if-no-files-found: error
+          path: |
+            release-candidate/shaulavo-workbench-*.tgz
+            release-candidate/candidate-manifest.json
+            release-candidate/pack-check-record.json

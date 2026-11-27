@@ -1,45 +1,29 @@
-import { useEffect, useState } from "react";
-import { ensurePointerModalityTracking } from "@shaulavo/workbench-core";
-import { useSubscribable } from "@shaulavo/workbench-core/react";
-import { EditorWorkbench } from "@shaulavo/workbench-editor";
-import { MarkdownComposer } from "@shaulavo/workbench-editor/composer";
-import { FileIconSprite } from "@shaulavo/workbench-icons/react";
-import { PreviewPane } from "@shaulavo/workbench-preview";
-import { TerminalPanel } from "@shaulavo/workbench-terminal";
-import { FileTreeView } from "@shaulavo/workbench-tree/react";
+import { useState } from "react";
 import {
   DesktopSplitGrid,
   MobilePaneShell,
   StatusBar,
   TitleBar,
   ToolPane,
+  useSubscribable,
+  useViewportMode,
   WorkbenchShell,
-} from "@shaulavo/workbench-ui";
+} from "@shaulavo/workbench";
+import { EditorWorkbench } from "@shaulavo/workbench/editor";
+import { MarkdownComposer } from "@shaulavo/workbench/editor/composer";
+import { PreviewPane } from "@shaulavo/workbench/preview";
+import { TerminalPanel } from "@shaulavo/workbench/terminal";
+import { FileTreeView } from "@shaulavo/workbench/tree";
 import { createVibeBuilderBackend } from "./adapters";
 
 export function VibeBuilderApp() {
   const [backend] = useState(() => createVibeBuilderBackend());
   const [mode, setMode] = useState<"light" | "dark">("dark");
   const [lastCommand, setLastCommand] = useState("none");
-  const [isPhone, setIsPhone] = useState(
-    () => typeof window !== "undefined" && window.matchMedia("(max-width: 768px)").matches,
-  );
+  const viewport = useViewportMode();
+  const isPhone = viewport === "phone";
   const messages = useSubscribable(backend.messages);
   const mobilePane = useSubscribable(backend.layout.mobileActivePane);
-
-  useEffect(() => {
-    ensurePointerModalityTracking();
-    const mq = window.matchMedia("(max-width: 768px)");
-    const onChange = (): void => setIsPhone(mq.matches);
-    mq.addEventListener("change", onChange);
-    return () => mq.removeEventListener("change", onChange);
-  }, []);
-
-  useEffect(() => {
-    document.documentElement.dataset.wbTheme = "fregat";
-    document.documentElement.dataset.theme = mode;
-    document.documentElement.classList.toggle("dark", mode === "dark");
-  }, [mode]);
 
   const explorerPane = (
     <ToolPane title="Files">
@@ -82,7 +66,7 @@ export function VibeBuilderApp() {
     <WorkbenchShell
       theme="fregat"
       colorScheme={mode}
-      shell={isPhone ? "phone" : "desktop"}
+      syncDocumentAttributes
       data-testid="vibe-ready"
       titleBar={
         <TitleBar
@@ -106,7 +90,6 @@ export function VibeBuilderApp() {
         />
       }
     >
-      <FileIconSprite />
       {isPhone ? (
         <MobilePaneShell
           activePane={mobilePane}

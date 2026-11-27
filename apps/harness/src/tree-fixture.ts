@@ -6,8 +6,8 @@ import type {
   IndexedTreePatch,
   IndexedTreeSnapshot,
   Subscribable,
-} from "@shaulavo/workbench-core";
-import { FileTreeModel, prepareFileTreeInput, type PreparedFileTreeInput } from "@shaulavo/workbench-tree";
+} from "@shaulavo/workbench/core";
+import { FileTreeModel, prepareFileTreeInput, type PreparedFileTreeInput } from "@shaulavo/workbench/tree";
 
 function createSubscribable<T>(initial: T): Subscribable<T> & { set(next: T): void } {
   let value = initial;

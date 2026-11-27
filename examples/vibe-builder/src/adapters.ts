@@ -15,9 +15,9 @@ import {
   type TerminalSessionInfo,
   type TerminalStreamEvent,
   type WorkbenchPaneId,
-} from "@shaulavo/workbench-core";
-import type { ComposerMentionItem, ComposerSlashCommand } from "@shaulavo/workbench-editor/composer";
-import { createBridgelessPreviewController } from "@shaulavo/workbench-preview";
+} from "@shaulavo/workbench/core";
+import type { ComposerMentionItem, ComposerSlashCommand } from "@shaulavo/workbench/editor/composer";
+import { createBridgelessPreviewController } from "@shaulavo/workbench/preview";
 
 function cell<T>(initial: T): Subscribable<T> & { set(next: T): void } {
   let value = initial;
