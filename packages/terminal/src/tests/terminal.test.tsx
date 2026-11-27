@@ -1784,4 +1784,140 @@ describe("@shaulavo/workbench-terminal", () => {
       container.remove();
     }
   });
+
+  it("focuses the primary terminal when clicking .wb-terminal-stage and ignores accessory buttons", async () => {
+    const focusSpy = vi.fn();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () =>
+      Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      ),
+    );
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "s1", title: "Shell 1", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("s1");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({
+        write: () => {},
+        resize: () => {},
+        detach: () => {},
+      }),
+    };
+
+    try {
+      const host = mount(
+        <TerminalPanel adapter={adapter} showAccessoryBar loadRuntime={async () => ({}) as GhosttyRuntime} />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      const stage = host.querySelector<HTMLElement>(".wb-terminal-stage");
+      expect(stage).not.toBeNull();
+      act(() => {
+        stage!.click();
+      });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+
+      const accessoryButton = host.querySelector<HTMLButtonElement>(
+        "[data-wb-terminal-accessory-bar] button",
+      );
+      expect(accessoryButton).not.toBeNull();
+      act(() => {
+        accessoryButton!.click();
+      });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+
+      // SVG descendants inside interactive buttons/menus must also be ignored.
+      const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+      accessoryButton!.appendChild(svg);
+      act(() => {
+        svg.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("clears a pending split-pane focus request when clicking an already-mounted pane", async () => {
+    const focus1 = vi.fn();
+    const focus2 = vi.fn();
+    let resolveSecondAttach!: () => void;
+    let createCall = 0;
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      createCall += 1;
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: createCall === 1 ? focus1 : focus2 },
+      );
+    });
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "s1", title: "Shell 1", status: "ready" },
+      { id: "s2", title: "Shell 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("s1");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => splitId.set("s2"),
+      attach: async (id) => {
+        if (id === "s2") {
+          await new Promise<void>((resolve) => {
+            resolveSecondAttach = resolve;
+          });
+        }
+        return { write: () => {}, resize: () => {}, detach: () => {} };
+      },
+    };
+
+    try {
+      const host = mount(
+        <TerminalPanel adapter={adapter} loadRuntime={async () => ({}) as GhosttyRuntime} />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      const splitButton = host.querySelector<HTMLButtonElement>('[data-testid="wb-term-split"]');
+      expect(splitButton).not.toBeNull();
+      act(() => {
+        splitButton!.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      const s1View = host.querySelector<HTMLElement>('[data-session-id="s1"]');
+      expect(s1View).not.toBeNull();
+      act(() => {
+        s1View!.click();
+      });
+      expect(focus1).toHaveBeenCalledTimes(1);
+
+      await act(async () => {
+        resolveSecondAttach();
+        await flushMicrotasks();
+      });
+      expect(focus2).not.toHaveBeenCalled();
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 });
