@@ -26,6 +26,16 @@ describe("layout", () => {
     expect(collapsed.explorerOpen).toBe(false);
   });
 
+  test("dragging back within click threshold restores exact start geometry", () => {
+    const restored = dragPaneGeometry("preview", {
+      startGeometry: DEFAULT_PANE_GEOMETRY,
+      startPx: 417,
+      growth: -1,
+      space: { width: 1200, height: 800 },
+    });
+    expect(restored).toBe(DEFAULT_PANE_GEOMETRY);
+  });
+
   test("persists and reloads global pane geometry safely", () => {
     const map = new Map<string, string>();
     const storage = {

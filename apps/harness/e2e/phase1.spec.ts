@@ -14,6 +14,24 @@ for (const host of [
     await page.goto(host.path);
     await expect(page.getByTestId("harness-ready")).toBeVisible();
 
+    // Verify [data-wb-theme-scope] inherits explicit <html data-theme="dark"> even when OS prefers light.
+    await page.emulateMedia({ colorScheme: "light" });
+    const inheritedScheme = await page.evaluate(() => {
+      const prev = document.documentElement.getAttribute("data-theme");
+      document.documentElement.setAttribute("data-theme", "dark");
+      const probe = document.createElement("div");
+      probe.setAttribute("data-wb-theme-scope", "");
+      probe.setAttribute("data-wb-theme", "sprockt");
+      document.body.append(probe);
+      const scheme = getComputedStyle(probe).colorScheme;
+      const bg = getComputedStyle(probe).getPropertyValue("--wb-bg").trim();
+      probe.remove();
+      if (prev === null) document.documentElement.removeAttribute("data-theme");
+      else document.documentElement.setAttribute("data-theme", prev);
+      return { scheme, bg };
+    });
+    expect(inheritedScheme.scheme).toBe("dark");
+
     // Verify CLAUDE.md rich icon uses the MIT/CC0 claude glyph in the tab strip.
     const claudeTab = page.getByTestId("sample-tab-CLAUDE.md");
     await expect(claudeTab.locator('[data-wb-icon="claude"]')).toBeVisible();
