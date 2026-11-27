@@ -96,8 +96,9 @@ export interface DragGeometryInput {
   readonly space: Space;
 }
 
-/** Updates geometry during a splitter drag; dragging below half the minimum snaps the pane closed. */
+/** Updates geometry during a splitter drag; returning within the click threshold restores start geometry, and dragging below half the minimum snaps closed. */
 export function dragPaneGeometry(splitter: SplitterId, input: DragGeometryInput): GlobalPaneGeometry {
+  if (Math.abs(input.growth) < DRAG_THRESHOLD_PX) return input.startGeometry;
   const raw = input.startPx + input.growth;
   if (splitter === "explorer") {
     if (raw < LAYOUT_LIMITS.explorerMinPx / 2) return { ...input.startGeometry, explorerOpen: false };
