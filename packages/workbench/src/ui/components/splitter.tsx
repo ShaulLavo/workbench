@@ -3,6 +3,7 @@ import {
   DRAG_THRESHOLD_PX,
   dragPaneGeometry,
   isSplitterOpen,
+  LAYOUT_LIMITS,
   setSplitterOpen,
   type GlobalPaneGeometry,
   type Space,
@@ -14,6 +15,12 @@ const GROWTH: Readonly<Record<SplitterId, 1 | -1>> = {
   explorer: 1,
   preview: -1,
   terminal: -1,
+};
+
+const MIN_PX: Readonly<Record<SplitterId, number>> = {
+  explorer: LAYOUT_LIMITS.explorerMinPx,
+  preview: LAYOUT_LIMITS.previewMinPx,
+  terminal: LAYOUT_LIMITS.terminalMinPx,
 };
 
 const KEY_STEP_PX = 24;
@@ -35,6 +42,16 @@ interface DragState {
   frameId: number;
 }
 
+export type SplitterKeyAction = "grow" | "shrink" | "min" | "max" | "toggle";
+
+export interface SplitterChangeMeta {
+  readonly source: "drag" | "keyboard" | "double-click";
+  /** Signed drag distance along the grow axis in CSS pixels when `source === "drag"`. */
+  readonly dragGrowthPx?: number;
+  /** Keyboard action when `source === "keyboard"`. */
+  readonly keyAction?: SplitterKeyAction;
+}
+
 export interface SplitterProps {
   readonly splitter: SplitterId;
   readonly label: string;
@@ -43,8 +60,8 @@ export interface SplitterProps {
   readonly valueNow: number;
   readonly measureSpace: () => Space;
   readonly measurePaneSize: () => number;
-  readonly onPreviewGeometry: (next: GlobalPaneGeometry) => void;
-  readonly onCommitGeometry: (next: GlobalPaneGeometry) => void;
+  readonly onPreviewGeometry: (next: GlobalPaneGeometry, meta: SplitterChangeMeta) => void;
+  readonly onCommitGeometry: (next: GlobalPaneGeometry, meta: SplitterChangeMeta) => void;
   readonly onDraggingChange?: (dragging: boolean) => void;
   readonly className?: string;
 }
@@ -63,6 +80,49 @@ function keyDeltaPx(splitter: SplitterId, event: KeyboardEvent): number | "min" 
   if (event.key === "ArrowDown") return GROWTH[splitter] * step;
   if (event.key === "ArrowUp") return -GROWTH[splitter] * step;
   return null;
+}
+
+function computeKeyboardGeometry(
+  splitter: SplitterId,
+  geometry: GlobalPaneGeometry,
+  action: number | "min" | "max" | "toggle",
+  space: Space,
+  currentPx: number,
+): { readonly next: GlobalPaneGeometry; readonly keyAction: SplitterKeyAction } {
+  const open = isSplitterOpen(geometry, splitter);
+  if (action === "toggle") {
+    return { next: setSplitterOpen(geometry, splitter, !open), keyAction: "toggle" };
+  }
+  const minPx = MIN_PX[splitter];
+  if (action === "min") {
+    const next = dragPaneGeometry(splitter, {
+      startGeometry: geometry,
+      startPx: minPx + DRAG_THRESHOLD_PX,
+      growth: -DRAG_THRESHOLD_PX,
+      space,
+    });
+    return { next, keyAction: "min" };
+  }
+  if (action === "max") {
+    const next = dragPaneGeometry(splitter, {
+      startGeometry: geometry,
+      startPx: open ? currentPx : minPx,
+      growth: Math.max(space.width, space.height),
+      space,
+    });
+    return { next, keyAction: "max" };
+  }
+  const keyAction: SplitterKeyAction = action > 0 ? "grow" : "shrink";
+  if (!open && action < 0) {
+    return { next: setSplitterOpen(geometry, splitter, false), keyAction };
+  }
+  const next = dragPaneGeometry(splitter, {
+    startGeometry: geometry,
+    startPx: open ? currentPx : minPx,
+    growth: action,
+    space,
+  });
+  return { next, keyAction };
 }
 
 /**
@@ -116,14 +176,18 @@ export function Splitter({
       space: gesture.space,
     });
     gesture.currentGeometry = next;
-    onPreviewGeometry(next);
+    onPreviewGeometry(next, { source: "drag", dragGrowthPx: growth });
   }
 
   function handlePointerDown(event: PointerEvent<HTMLDivElement>): void {
     const state = stateRef.current;
     if (event.button !== 0 || state.gesture) return;
     event.preventDefault();
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    try {
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    } catch {
+      // Synthetic or already-cancelled pointers cannot be captured.
+    }
     const startCoord = readCoord(event);
     const startPx = isSplitterOpen(geometry, splitter) ? measurePaneSize() : 0;
     state.gesture = {
@@ -148,50 +212,34 @@ export function Splitter({
     if (!state.frameId) state.frameId = requestAnimationFrame(flushFrame);
   }
 
-  function endDrag(): void {
+  function endDrag(event: PointerEvent<HTMLDivElement>): void {
     const state = stateRef.current;
     const gesture = state.gesture;
-    if (!gesture) return;
+    if (!gesture || event.pointerId !== gesture.pointerId) return;
     if (state.frameId) cancelAnimationFrame(state.frameId);
     flushFrame();
     const didDrag = gesture.dragged;
     const finalGeometry = gesture.currentGeometry;
+    const growth = GROWTH[splitter] * (gesture.latestCoord - gesture.startCoord);
     state.gesture = undefined;
     setDragging(false);
     onDraggingChange?.(false);
-    if (didDrag) onCommitGeometry(finalGeometry);
+    if (didDrag) onCommitGeometry(finalGeometry, { source: "drag", dragGrowthPx: growth });
   }
 
   function handleDoubleClick(): void {
     const next = setSplitterOpen(geometry, splitter, !isSplitterOpen(geometry, splitter));
-    onCommitGeometry(next);
+    onCommitGeometry(next, { source: "double-click" });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     const action = keyDeltaPx(splitter, event);
     if (action === null) return;
     event.preventDefault();
-    if (action === "toggle") {
-      onCommitGeometry(setSplitterOpen(geometry, splitter, !isSplitterOpen(geometry, splitter)));
-      return;
-    }
     const space = measureSpace();
     const currentPx = isSplitterOpen(geometry, splitter) ? measurePaneSize() : 0;
-    let growth: number;
-    if (action === "min") {
-      growth = -currentPx - 10_000;
-    } else if (action === "max") {
-      growth = Math.max(space.width, space.height);
-    } else {
-      growth = action;
-    }
-    const next = dragPaneGeometry(splitter, {
-      startGeometry: geometry,
-      startPx: currentPx,
-      growth,
-      space,
-    });
-    onCommitGeometry(next);
+    const { next, keyAction } = computeKeyboardGeometry(splitter, geometry, action, space, currentPx);
+    onCommitGeometry(next, { source: "keyboard", keyAction });
   }
 
   return (

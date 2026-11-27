@@ -277,6 +277,149 @@ describe("@shaulavo/workbench-ui", () => {
     expect(committed[1]?.explorerOpen).toBe(false);
   });
 
+  it("keeps Home idempotent at minimum bounds and lets grow arrows open closed panes", () => {
+    const events: Array<{ readonly geometry: GlobalPaneGeometry; readonly keyAction?: string }> = [];
+    const closedTerminal: GlobalPaneGeometry = { ...DEFAULT_PANE_GEOMETRY, terminalOpen: false };
+    const host = mount(
+      <Splitter
+        splitter="terminal"
+        label="Resize terminal"
+        controls="terminal-pane"
+        geometry={closedTerminal}
+        valueNow={0}
+        measureSpace={() => ({ width: 1200, height: 800 })}
+        measurePaneSize={() => 0}
+        onPreviewGeometry={vi.fn()}
+        onCommitGeometry={(geometry, meta) => events.push({ geometry, keyAction: meta.keyAction })}
+      />,
+    );
+
+    const handle = host.querySelector<HTMLDivElement>('[role="separator"]');
+    act(() => {
+      handle?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowUp", bubbles: true }));
+      handle?.dispatchEvent(new KeyboardEvent("keydown", { key: "ArrowDown", bubbles: true }));
+      handle?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    });
+    expect(events[0]).toMatchObject({
+      keyAction: "grow",
+      geometry: { terminalOpen: true, terminalHeightPx: 144 },
+    });
+    expect(events[1]).toMatchObject({
+      keyAction: "shrink",
+      geometry: { terminalOpen: false },
+    });
+    expect(events[2]).toMatchObject({
+      keyAction: "min",
+      geometry: { terminalOpen: true, terminalHeightPx: 120 },
+    });
+
+    // On a wide viewport (2560px), Home and shrink ArrowRight must agree on the preview minimum (15%).
+    const previewEvents: GlobalPaneGeometry[] = [];
+    const previewHost = mount(
+      <Splitter
+        splitter="preview"
+        label="Resize preview"
+        controls="preview-pane"
+        geometry={DEFAULT_PANE_GEOMETRY}
+        valueNow={36}
+        measureSpace={() => ({ width: 2560, height: 900 })}
+        measurePaneSize={() => 600}
+        onPreviewGeometry={vi.fn()}
+        onCommitGeometry={(geometry) => previewEvents.push(geometry)}
+      />,
+    );
+    const previewHandle = previewHost.querySelector<HTMLDivElement>('[role="separator"]');
+    act(() => {
+      previewHandle?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+      previewHandle?.dispatchEvent(new KeyboardEvent("keydown", { key: "Home", bubbles: true }));
+    });
+    expect(previewEvents[0]?.previewOpen).toBe(true);
+    expect(previewEvents[0]?.previewFraction).toBeCloseTo(0.15, 5);
+    expect(previewEvents[1]?.previewOpen).toBe(true);
+    expect(previewEvents[1]?.previewFraction).toBeCloseTo(0.15, 5);
+  });
+
+  it("ignores secondary pointer events until the initiating pointer ends the drag", () => {
+    const commits: Array<{ readonly geometry: GlobalPaneGeometry; readonly dragGrowthPx?: number }> = [];
+    const draggingStates: boolean[] = [];
+    const host = mount(
+      <Splitter
+        splitter="explorer"
+        label="Resize explorer"
+        controls="explorer-pane"
+        geometry={DEFAULT_PANE_GEOMETRY}
+        valueNow={20}
+        measureSpace={() => ({ width: 1200, height: 800 })}
+        measurePaneSize={() => 240}
+        onPreviewGeometry={vi.fn()}
+        onCommitGeometry={(geometry, meta) => commits.push({ geometry, dragGrowthPx: meta.dragGrowthPx })}
+        onDraggingChange={(dragging) => draggingStates.push(dragging)}
+      />,
+    );
+
+    const handle = host.querySelector<HTMLDivElement>('[role="separator"]');
+    expect(handle).not.toBeNull();
+    act(() => {
+      handle?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 1,
+          clientX: 240,
+          clientY: 100,
+        }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: 300, clientY: 100 }),
+      );
+      // Secondary finger touches, moves, and lifts/cancels over the separator while pointer 1 stays down.
+      handle?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 2,
+          clientX: 240,
+          clientY: 120,
+        }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 2, clientX: 10, clientY: 120 }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 2, clientX: 10, clientY: 120 }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("pointercancel", { bubbles: true, pointerId: 2, clientX: 10, clientY: 120 }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("lostpointercapture", { bubbles: true, pointerId: 2, clientX: 10, clientY: 120 }),
+      );
+    });
+
+    // Primary drag must still be active with nothing committed yet.
+    expect(commits).toHaveLength(0);
+    expect(draggingStates).toEqual([true]);
+    expect(handle?.getAttribute("data-dragging")).toBe("true");
+
+    // Now the initiating pointer finishes further right and commits cleanly.
+    act(() => {
+      handle?.dispatchEvent(
+        new PointerEvent("pointermove", { bubbles: true, pointerId: 1, clientX: 340, clientY: 100 }),
+      );
+      handle?.dispatchEvent(
+        new PointerEvent("pointerup", { bubbles: true, pointerId: 1, clientX: 340, clientY: 100 }),
+      );
+    });
+
+    expect(draggingStates).toEqual([true, false]);
+    expect(commits).toEqual([
+      {
+        geometry: { ...DEFAULT_PANE_GEOMETRY, explorerWidthPx: 340, explorerOpen: true },
+        dragGrowthPx: 100,
+      },
+    ]);
+  });
+
   it("hides MobilePaneShell switcher while keyboardOpen is true", () => {
     const onSelectPane = vi.fn();
     const host = mount(
