@@ -26,9 +26,10 @@ const EXTENSION_TO_LANGUAGE: Readonly<Record<string, EditorSyntaxLanguageId>> = 
   py: "python",
   rs: "rust",
   go: "go",
-  sh: "bash",
-  bash: "bash",
-  zsh: "bash",
+  sh: "shellscript",
+  bash: "shellscript",
+  zsh: "shellscript",
+  ksh: "shellscript",
   yml: "yaml",
   yaml: "yaml",
   toml: "toml",
@@ -50,6 +51,7 @@ export function languageIdForPath(filePath: string | undefined): EditorSyntaxLan
   const name = (slash >= 0 ? filePath.slice(slash + 1) : filePath).toLowerCase();
   if (name === "dockerfile") return "dockerfile";
   if (name === "makefile") return "makefile";
+  if (name === ".bashrc" || name === ".zshrc") return "shellscript";
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return null;
   const ext = name.slice(dot + 1);
@@ -85,6 +87,7 @@ const EXTENSION_TO_LABEL: Readonly<Record<string, string>> = {
   sh: "Shell",
   bash: "Shell",
   zsh: "Shell",
+  ksh: "Shell",
   toml: "TOML",
   yaml: "YAML",
   yml: "YAML",
@@ -106,6 +109,7 @@ export function languageLabelForPath(filePath: string | undefined): string {
   const name = (slash >= 0 ? filePath.slice(slash + 1) : filePath).toLowerCase();
   if (name === "dockerfile") return "Dockerfile";
   if (name === "makefile") return "Makefile";
+  if (name === ".bashrc" || name === ".zshrc") return "Shell";
   const dot = name.lastIndexOf(".");
   if (dot <= 0 || dot === name.length - 1) return "Plain Text";
   const ext = name.slice(dot + 1);
