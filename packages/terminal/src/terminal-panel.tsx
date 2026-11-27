@@ -1,4 +1,12 @@
-import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefCallback } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type KeyboardEvent,
+  type MouseEvent,
+  type ReactNode,
+  type RefCallback,
+} from "react";
 import type {
   HotkeyAdapter,
   Subscribable,
@@ -75,6 +83,18 @@ function resolveTabNavTarget(
   if (key === "Home") return sessions[0];
   if (key === "End") return sessions.at(-1);
   return undefined;
+}
+
+function resolveStageClickTarget(target: EventTarget | null, primarySessionId: string): string | null {
+  if (!(target instanceof HTMLElement)) return primarySessionId;
+  if (
+    target.closest(
+      "button, a, input, textarea, [role='menu'], [role='menuitem'], [data-wb-terminal-accessory-bar]",
+    )
+  ) {
+    return null;
+  }
+  return target.closest<HTMLElement>("[data-session-id]")?.dataset.sessionId ?? primarySessionId;
 }
 
 /**
@@ -218,6 +238,18 @@ export function TerminalPanel({
     pendingFocusRef.current = null;
     term.focus();
   }, [focusTick, collapsed, active, primarySession?.id, secondarySession?.id]);
+
+  function handleStageClick(event: MouseEvent<HTMLDivElement>): void {
+    if (!primarySession || collapsed || !active) return;
+    const targetSessionId = resolveStageClickTarget(event.target, primarySession.id);
+    if (!targetSessionId) return;
+    const terminal = terminalsByIdRef.current.get(targetSessionId);
+    if (terminal) {
+      terminal.focus();
+      return;
+    }
+    requestTerminalFocus(targetSessionId);
+  }
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, sessionId: string, index: number): void {
     if (event.key === "F2") {
@@ -427,6 +459,7 @@ export function TerminalPanel({
         <div
           className={cx("wb-terminal-stage", secondarySession && "wb-terminal-stage-split")}
           data-split={secondarySession ? "true" : "false"}
+          onClick={handleStageClick}
         >
           {keepAlive ? (
             [primarySession]

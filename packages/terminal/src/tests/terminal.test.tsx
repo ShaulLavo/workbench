@@ -1784,4 +1784,61 @@ describe("@shaulavo/workbench-terminal", () => {
       container.remove();
     }
   });
+
+  it("focuses the primary terminal when clicking .wb-terminal-stage and ignores accessory buttons", async () => {
+    const focusSpy = vi.fn();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () =>
+      Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      ),
+    );
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "s1", title: "Shell 1", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("s1");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "s1",
+      closeSession: async () => {},
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({
+        write: () => {},
+        resize: () => {},
+        detach: () => {},
+      }),
+    };
+
+    try {
+      const host = mount(
+        <TerminalPanel adapter={adapter} showAccessoryBar loadRuntime={async () => ({}) as GhosttyRuntime} />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      const stage = host.querySelector<HTMLElement>(".wb-terminal-stage");
+      expect(stage).not.toBeNull();
+      act(() => {
+        stage!.click();
+      });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+
+      const accessoryButton = host.querySelector<HTMLButtonElement>(
+        "[data-wb-terminal-accessory-bar] button",
+      );
+      expect(accessoryButton).not.toBeNull();
+      act(() => {
+        accessoryButton!.click();
+      });
+      expect(focusSpy).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
 });
