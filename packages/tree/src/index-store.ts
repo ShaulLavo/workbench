@@ -680,21 +680,17 @@ export class FileTreeIndex {
       return;
     }
     const layer = this.ensureConfirmedMutable();
-    const removed = event.removed.map(normalizeTreePath).filter(Boolean);
-    for (const target of removed) {
-      deleteSubtreeInLayer(layer, target);
-      deleteLazyStatesUnder(this.lazyStates, target);
-    }
     for (const move of event.moves) {
       const from = normalizeTreePath(move.from);
       const to = normalizeTreePath(move.to);
       if (!from || !to || from === to) continue;
-      if (removed.some((target) => isSameOrInside(to, target))) {
-        deleteSubtreeInLayer(layer, from);
-        deleteLazyStatesUnder(this.lazyStates, from);
-        continue;
-      }
       moveSubtreeInLayerPreservingLoaded(layer, this.lazyStates, from, to);
+    }
+    for (const rawRemoved of event.removed) {
+      const target = normalizeTreePath(rawRemoved);
+      if (!target) continue;
+      deleteSubtreeInLayer(layer, target);
+      deleteLazyStatesUnder(this.lazyStates, target);
     }
     for (const dir of event.directories) {
       const normalized = normalizeTreePath(dir);

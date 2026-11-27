@@ -843,4 +843,37 @@ describe("@shaulavo/workbench-tree engine", () => {
 
     bound.dispose();
   });
+
+  it("applies moves before removals for loaded directory renames and chained moves through deleted paths", () => {
+    const index = FileTreeIndex.fromPaths(["closed/keep.txt", "closed/needle.txt", "a.txt", "d.txt"], {
+      loadedDirectoryPaths: new Set(["", "closed"]),
+    });
+
+    // Moving a loaded directory and removing a child at its new path must not resurrect the deleted child.
+    index.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["renamed/needle.txt"],
+    });
+    expect(index.hasPath("renamed/keep.txt")).toBe(true);
+    expect(index.hasPath("renamed/needle.txt")).toBe(false);
+    expect(index.hasPath("closed/needle.txt")).toBe(false);
+
+    // Chained moves through a path that is later reused and deleted preserve the earlier destination.
+    index.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [
+        { from: "a.txt", to: "b.txt", operation: 2 },
+        { from: "b.txt", to: "c.txt", operation: 3 },
+        { from: "d.txt", to: "b.txt", operation: 4 },
+      ],
+      removed: ["b.txt"],
+    });
+    expect(index.hasPath("c.txt")).toBe(true);
+    expect(index.hasPath("b.txt")).toBe(false);
+    expect(index.hasPath("a.txt")).toBe(false);
+    expect(index.hasPath("d.txt")).toBe(false);
+  });
 });

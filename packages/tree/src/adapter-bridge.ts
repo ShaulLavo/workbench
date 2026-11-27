@@ -27,7 +27,6 @@ function applyInvalidationToFilterPaths(paths: readonly string[], event: LazyInv
     const isExplicitDir = rawPath.endsWith("/");
     const normalized = normalizeTreePath(rawPath);
     if (!normalized) continue;
-    if (removed.some((target) => isSameOrInside(normalized, target))) continue;
     const rebased = moves.length > 0 ? rebaseFilterPath(normalized, moves) : normalized;
     if (removed.some((target) => isSameOrInside(rebased, target))) continue;
     if (seen.has(rebased)) continue;
