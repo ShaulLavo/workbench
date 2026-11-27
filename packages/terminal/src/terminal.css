@@ -39,6 +39,7 @@
     background: var(--wb-fg-subtle);
   }
 
+  .wb-terminal-status-dot[data-status="ready"],
   .wb-terminal-status-dot[data-status="running"] {
     background: var(--wb-ok);
   }
@@ -116,6 +117,18 @@
     min-width: 0;
     min-height: 0;
     background: var(--wb-term-bg, var(--wb-bg-well));
+  }
+
+  .wb-terminal-view[data-position="hidden"] {
+    display: none;
+  }
+
+  .wb-terminal-view[data-position="right"] {
+    border-left: 1px solid var(--wb-border-subtle);
+  }
+
+  .wb-terminal-panel[data-collapsed="true"] .wb-terminal-stage {
+    display: none;
   }
 
   .wb-terminal-view.wb-terminal-transparent {

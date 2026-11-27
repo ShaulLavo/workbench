@@ -467,4 +467,84 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(renameSession).toHaveBeenCalledWith("bash-1", "server");
     expect(document.activeElement).toBe(newBtn);
   });
+
+  it("supports keepAlive multi-session positions, collapse toggle, splitCreatesSession, and stream metadata events", () => {
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "t1", title: "bash", status: "ready" },
+      { id: "t2", title: "bash 2", status: "running" },
+      { id: "t3", title: "bash 3", status: "starting" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("t1");
+    const splitId = createSubscribable<string | undefined>("t2");
+    const onToggleCollapsed = vi.fn();
+    const toggleSplit = vi.fn();
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "t4",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit,
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    const host = mount(
+      <TerminalPanel
+        adapter={adapter}
+        keepAlive
+        collapsed
+        splitCreatesSession
+        onToggleCollapsed={onToggleCollapsed}
+        headerTrailing={<span data-testid="term-state-badge">ready</span>}
+        onError={() => {}}
+      />,
+    );
+
+    const panel = host.querySelector<HTMLElement>("[data-wb-terminal-panel]");
+    expect(panel?.getAttribute("data-collapsed")).toBe("true");
+    expect(host.querySelector('[data-testid="term-state-badge"]')?.textContent).toBe("ready");
+
+    // All three sessions remain mounted with single/left/right/hidden positions.
+    expect(host.querySelector('[data-session-id="t1"]')?.getAttribute("data-position")).toBe("left");
+    expect(host.querySelector('[data-session-id="t2"]')?.getAttribute("data-position")).toBe("right");
+    expect(host.querySelector('[data-session-id="t3"]')?.getAttribute("data-position")).toBe("hidden");
+
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-term-collapse"]')?.click();
+    });
+    expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+
+    // Stream metadata events dispatch onProcessChange, onTitleChange, and onExit.
+    const onProcessChange = vi.fn();
+    const onTitleChange = vi.fn();
+    const onExit = vi.fn();
+    const gate = createReplayGate({
+      terminal: { scrollBy: () => {}, refresh: () => {}, getRowCount: () => 24 },
+      getSavedScroll: () => null,
+      onReadyChange: () => {},
+    });
+    const fakeTerm = {
+      write: vi.fn(),
+      writeln: vi.fn(),
+      reset: vi.fn(),
+      appearance: { grid: { columns: 80, rows: 24 } },
+    };
+    const target = {
+      gate,
+      terminal: fakeTerm,
+      onResize: vi.fn(),
+      onProcessChange,
+      onTitleChange,
+      onExit,
+    };
+    applyTerminalStreamEvent({ type: "process", name: "vite" }, target);
+    applyTerminalStreamEvent({ type: "title", title: "dev server" }, target);
+    applyTerminalStreamEvent({ type: "exit", exitCode: 0 }, target);
+    expect(onProcessChange).toHaveBeenCalledWith("vite");
+    expect(onTitleChange).toHaveBeenCalledWith("dev server");
+    expect(onExit).toHaveBeenCalledWith(0);
+  });
 });

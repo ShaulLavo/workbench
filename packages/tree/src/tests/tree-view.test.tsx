@@ -1491,4 +1491,96 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(nestedScroller.scrollTop).toBe(0);
   });
+
+  it("loads unopened lazy ancestors before starting rename on a filtered result", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const loadedDirs: string[] = [];
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-lazy-rename",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["closed/sub/needle.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          loadedDirs.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loaded", entries: [{ name: "closed", kind: "directory" }] };
+          } else if (dirPath === "closed") {
+            slot.state = { status: "loaded", entries: [{ name: "sub", kind: "directory" }] };
+          } else if (dirPath === "closed/sub") {
+            slot.state = { status: "loaded", entries: [{ name: "needle.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+
+    const model = new FileTreeModel();
+    const handleRef = { current: null as FileTreeViewHandle | null };
+    const host = mount(<FileTreeView model={model} adapter={adapter} handleRef={handleRef} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    // Filter finds closed/sub/needle.txt without opening closed or closed/sub.
+    await act(async () => {
+      model.setFilter("needle");
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(model.index.hasPath("closed/sub/needle.txt")).toBe(false);
+    const needleRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-closed/sub/needle.txt"]');
+    expect(needleRow).not.toBeNull();
+
+    // Pressing F2 loads unopened ancestors, clears filter, expands ancestors, and opens inline rename.
+    act(() => {
+      model.select("closed/sub/needle.txt", "replace", "keyboard");
+    });
+    await act(async () => {
+      needleRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(loadedDirs).toContain("closed");
+    expect(loadedDirs).toContain("closed/sub");
+    expect(model.getSnapshot().filter).toBe("");
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/sub/needle.txt" });
+    expect(host.querySelector('[data-testid="wb-tree-inline-input"]')).not.toBeNull();
+
+    // Also verify handleRef.startRename on the loaded path.
+    act(() => {
+      model.setDraft(undefined);
+    });
+    act(() => {
+      handleRef.current?.startRename("closed/sub/needle.txt");
+    });
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "closed/sub/needle.txt" });
+  });
 });

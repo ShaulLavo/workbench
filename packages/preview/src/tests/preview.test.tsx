@@ -396,4 +396,111 @@ describe("@shaulavo/workbench-preview", () => {
     });
     expect(host.querySelector('[data-testid="wb-preview-empty"]')).not.toBeNull();
   });
+
+  it("supports sandbox={null}, accurate Back/Forward disabled states, toggleable error lists, and custom slots", async () => {
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 3000 }]);
+    let emitFrameEvent: ((event: PreviewFrameEvent) => void) | undefined;
+    const navigated: string[] = [];
+    const openedUrls: string[] = [];
+    const reportedPorts: (number | undefined)[] = [];
+
+    const adapter: PreviewAdapter = {
+      kind: "mounted",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      tabUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      locate: () => undefined,
+      attachFrame(_frame, _port, onEvent) {
+        emitFrameEvent = onEvent;
+        return {
+          onFrameLoad: () => {},
+          navigate: (path) => navigated.push(path),
+          reload: () => {},
+          back: () => {},
+          forward: () => {},
+          dispose: () => {},
+        };
+      },
+    };
+
+    const host = mount(
+      <PreviewPane
+        adapter={adapter}
+        sandbox={null}
+        allow="cross-origin-isolated"
+        errorDisplay="toggle"
+        historyMode="pane"
+        alwaysShowPortSelect
+        banner={<div data-testid="custom-banner">Restart held</div>}
+        toolbarTrailing={
+          <button type="button" data-testid="custom-task">
+            Start
+          </button>
+        }
+        onOpenInTab={(url) => openedUrls.push(url)}
+        onActivePortChange={(port) => reportedPorts.push(port)}
+        renderEmpty={() => <div data-testid="custom-empty">Custom empty</div>}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const iframe = host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]');
+    expect(iframe?.hasAttribute("sandbox")).toBe(false);
+    expect(iframe?.getAttribute("allow")).toBe("cross-origin-isolated");
+    expect(host.querySelector('[data-testid="wb-preview-port-select"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="custom-banner"]')).not.toBeNull();
+    expect(host.querySelector('[data-testid="custom-task"]')).not.toBeNull();
+    expect(reportedPorts.at(-1)).toBe(3000);
+
+    const backBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-back"]')!;
+    const forwardBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-forward"]')!;
+    expect(backBtn.disabled).toBe(true);
+    expect(forwardBtn.disabled).toBe(true);
+
+    // Frame reports navigation to /about -> Back enables, Forward stays disabled.
+    act(() => {
+      emitFrameEvent?.({ type: "navigate", location: { port: 3000, path: "/about" } });
+    });
+    expect(backBtn.disabled).toBe(false);
+    expect(forwardBtn.disabled).toBe(true);
+
+    // Back navigates to "/" in pane history mode and enables Forward.
+    act(() => {
+      backBtn.click();
+    });
+    expect(navigated.at(-1)).toBe("/");
+    expect(backBtn.disabled).toBe(true);
+    expect(forwardBtn.disabled).toBe(false);
+
+    // Frame errors accumulate in toggleable list and clear on started.
+    act(() => {
+      emitFrameEvent?.({ type: "error", message: "kaboom" });
+    });
+    const errorToggle = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-errors"]');
+    expect(errorToggle?.textContent).toBe("1");
+    act(() => {
+      errorToggle?.click();
+    });
+    expect(host.querySelector('[data-testid="wb-preview-error-list"]')?.textContent).toContain("kaboom");
+
+    act(() => {
+      emitFrameEvent?.({ type: "started", location: { port: 3000, path: "/" } });
+    });
+    expect(host.querySelector('[data-testid="wb-preview-errors"]')).toBeNull();
+
+    // Open in tab button calls callback.
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-open-tab"]')?.click();
+    });
+    expect(openedUrls).toEqual(["http://127.0.0.1:3000/"]);
+
+    // Clearing servers renders custom empty state.
+    act(() => {
+      servers.set([]);
+    });
+    expect(host.querySelector('[data-testid="custom-empty"]')).not.toBeNull();
+  });
 });
