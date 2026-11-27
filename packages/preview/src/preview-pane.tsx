@@ -324,7 +324,9 @@ export function PreviewPane({
     };
 
     const initialFramePath = committedPathRef.current;
-    setHistoryState(createInitialHistory(sessionKey, initialFramePath));
+    if (historyMode === "pane") {
+      setHistoryState(createInitialHistory(sessionKey, initialFramePath));
+    }
     setShowErrors(false);
     const controller = adapter.attachFrame(frame, activePort, handleEvent, {
       initialPath: initialFramePath,

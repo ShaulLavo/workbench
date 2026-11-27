@@ -436,11 +436,14 @@ export function TerminalView({
       if (cancelled || signal.aborted) return;
 
       const current = propsRef.current;
-      const accessibility = current.screenReader
-        ? current.accessibilityLabel !== undefined
+      // Preserve accessibilityLabel in Ghostty's stored options so toggling screenReader on later retains it;
+      // setAccessibilityEnabled(screenReader) immediately below enforces the current enabled state.
+      const accessibility =
+        current.accessibilityLabel !== undefined
           ? { label: current.accessibilityLabel }
-          : {}
-        : undefined;
+          : current.screenReader
+            ? {}
+            : undefined;
       const nextTerminal = await Terminal.create({
         runtime: { kind: "borrowed", runtime },
         renderWhenOffscreen: true,
@@ -483,6 +486,9 @@ export function TerminalView({
       syncAppearanceNow();
       applyInactiveCursorStyle(terminal);
       terminal.setAccessibilityEnabled(propsRef.current.screenReader);
+      if (propsRef.current.accessibilityLabel !== undefined) {
+        terminal.textarea?.setAttribute("aria-label", propsRef.current.accessibilityLabel);
+      }
 
       if (propsRef.current.hotkeys) {
         const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
@@ -685,8 +691,13 @@ export function TerminalView({
   }, [active]);
 
   useEffect(() => {
-    terminalRef.current?.setAccessibilityEnabled(screenReader);
-  }, [screenReader]);
+    const terminal = terminalRef.current;
+    if (!terminal) return;
+    terminal.setAccessibilityEnabled(screenReader);
+    if (accessibilityLabel !== undefined) {
+      terminal.textarea?.setAttribute("aria-label", accessibilityLabel);
+    }
+  }, [screenReader, accessibilityLabel]);
 
   function handleFocus(): void {
     focusedRef.current = true;

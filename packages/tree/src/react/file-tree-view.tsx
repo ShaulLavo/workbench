@@ -389,7 +389,14 @@ export function FileTreeView({
             model.index.getDirectoryLoadState(dir).status !== "loaded" || bound.isDirectoryStale(dir);
           if (needsLoad) await bound.ensureDirectoryLoaded(dir, { force: true });
         }
-        if (cancelled || readOnlyRef.current || !adapter.writable.getSnapshot()) return;
+        if (
+          cancelled ||
+          readOnlyRef.current ||
+          !adapter.writable.getSnapshot() ||
+          model.getSnapshot().draft !== undefined
+        ) {
+          return;
+        }
         if (model.index.hasPath(path)) startModelRename(model, path);
       } catch (error) {
         if (!cancelled) onError?.(`Unable to rename ${baseName(path)}`, error);
@@ -461,10 +468,22 @@ export function FileTreeView({
       model.setFilter("");
     },
     startCreate(parent, kind) {
-      beginCreate(parent, kind);
+      if (!isCurrentlyWritable()) return;
+      setPendingRename(null);
+      startModelCreate(model, parent, kind);
     },
     startRename(path) {
-      beginRename(path);
+      if (!isCurrentlyWritable()) return;
+      const normalized = normalizeTreePath(path);
+      if (!normalized) return;
+      if (adapter?.lazy) {
+        setPendingRename((prev) => ({ path: normalized, seq: (prev?.seq ?? 0) + 1 }));
+        return;
+      }
+      if (model.index.hasPath(normalized)) {
+        setPendingRename(null);
+        startModelRename(model, normalized);
+      }
     },
     collapseAll() {
       model.collapseAll();
