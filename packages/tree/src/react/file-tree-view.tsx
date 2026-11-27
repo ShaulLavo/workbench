@@ -621,7 +621,7 @@ export function FileTreeView({
         if (!target) continue;
         if (!isCurrentlyWritable()) {
           rollbackOptimisticFrom(optIds, i);
-          model.notifyIndexChange();
+          model.notifyIndexChange({ reconcile: completed > 0 });
           if (completed > 0) void adapter.indexed?.requestResync();
           setDeleteTarget(null);
           setDeleting(false);
@@ -632,12 +632,12 @@ export function FileTreeView({
         if (doneId) model.index.settleOptimistic(doneId);
         completed += 1;
       }
-      model.notifyIndexChange();
+      model.notifyIndexChange({ reconcile: true });
       setDeleteTarget(null);
       setDeleting(false);
     } catch (error) {
       rollbackOptimisticFrom(optIds, completed);
-      model.notifyIndexChange();
+      model.notifyIndexChange({ reconcile: completed > 0 });
       setDeleting(false);
       if (completed > 0) void adapter?.indexed?.requestResync();
       onError?.("Unable to delete selected items", error);

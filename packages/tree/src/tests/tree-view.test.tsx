@@ -943,7 +943,7 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(document.activeElement).toBe(inlineInput);
   });
 
-  it("falls back to focused row on keyboard Delete, honors externalCommands, and sets data-guide-level", () => {
+  it("falls back to focused row on keyboard Delete, honors externalCommands, and sets data-guide-level", async () => {
     const onRequestDelete = vi.fn();
     const model = new FileTreeModel({
       paths: ["src/a.ts", "a/b/c.ts", "README.md"],
@@ -1000,5 +1000,26 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(extModel.getSnapshot().draft).toBeUndefined();
     expect(extModel.getSelectedPaths()).toEqual([]);
     expect(onRequestDelete).not.toHaveBeenCalled();
+
+    // Adapterless delete reconciles selection/focus on completion so a subsequent Delete targets the surviving row.
+    const delModel = new FileTreeModel({ paths: ["gone.ts", "keep.ts"] });
+    const delHost = mount(<FileTreeView model={delModel} />);
+    const goneRow = delHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-gone.ts"]');
+    act(() => {
+      goneRow?.click();
+    });
+    expect(delModel.getSelectedPaths()).toEqual(["gone.ts"]);
+    act(() => {
+      goneRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const confirmBtn = delHost.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    expect(confirmBtn).not.toBeNull();
+    await act(async () => {
+      confirmBtn?.click();
+      await Promise.resolve();
+    });
+    expect(delModel.index.hasPath("gone.ts")).toBe(false);
+    expect(delModel.getSelectedPaths()).toEqual([]);
+    expect(delModel.getSnapshot().focusedPath).toBeUndefined();
   });
 });

@@ -716,7 +716,8 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
     return result;
   }
 
-  notifyIndexChange(): void {
+  notifyIndexChange(options?: { readonly reconcile?: boolean }): void {
+    if (options?.reconcile) this.reconcileSelectionAndFocus();
     this.emit();
   }
 }
