@@ -86,7 +86,7 @@ function resolveTabNavTarget(
 }
 
 function resolveStageClickTarget(target: EventTarget | null, primarySessionId: string): string | null {
-  if (!(target instanceof HTMLElement)) return primarySessionId;
+  if (!(target instanceof Element)) return primarySessionId;
   if (
     target.closest(
       "button, a, input, textarea, [role='menu'], [role='menuitem'], [data-wb-terminal-accessory-bar]",
@@ -245,6 +245,7 @@ export function TerminalPanel({
     if (!targetSessionId) return;
     const terminal = terminalsByIdRef.current.get(targetSessionId);
     if (terminal) {
+      clearPendingTerminalFocus();
       terminal.focus();
       return;
     }
