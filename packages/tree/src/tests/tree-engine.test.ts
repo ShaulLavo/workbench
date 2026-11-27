@@ -459,4 +459,93 @@ describe("@shaulavo/workbench-tree engine", () => {
     model.setExpanded("a", false);
     expect(model.getSnapshot().focusedPath).toBe("a");
   });
+
+  it("lazily subscribes and loads confirmed directories expanded programmatically without refetching pre-seeded dirs", async () => {
+    const rootState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [
+        { name: "guide", kind: "directory" },
+        { name: "seeded", kind: "directory" },
+      ],
+    });
+    const guideState = createSubscribable<DirectoryLoadState>({ status: "idle" });
+    const lateState = createSubscribable<DirectoryLoadState>({ status: "idle" });
+    const seededState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [{ name: "auto.ts", kind: "file" }],
+    });
+    const loaded: string[] = [];
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
+    let includeLateInRoot = false;
+
+    const adapter: FileSystemAdapter = {
+      workspaceId: "test-lazy-auto-expand",
+      writable: createSubscribable(true),
+      lazy: {
+        getDirectoryState: (dir) =>
+          dir === "" ? rootState : dir === "seeded" ? seededState : dir === "late" ? lateState : guideState,
+        async loadDirectory(dir) {
+          loaded.push(dir);
+          if (dir === "") {
+            const entries: { readonly name: string; readonly kind: "directory" }[] = [
+              { name: "guide", kind: "directory" },
+              { name: "seeded", kind: "directory" },
+            ];
+            if (includeLateInRoot) entries.push({ name: "late", kind: "directory" });
+            rootState.set({ status: "loaded", entries });
+          } else if (dir === "guide") {
+            guideState.set({ status: "loaded", entries: [{ name: "readme.md", kind: "file" }] });
+          } else if (dir === "late") {
+            lateState.set({ status: "loaded", entries: [{ name: "arrived.ts", kind: "file" }] });
+          }
+        },
+        subscribeInvalidation(listener) {
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
+        },
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+    };
+
+    const model = new FileTreeModel();
+    const bound = bindFileSystemAdapter(model, adapter);
+
+    // Expanding a confirmed directory programmatically (e.g., rebased after rename) loads it.
+    model.setExpanded("guide", true);
+    await Promise.resolve();
+    expect(loaded).toEqual(["guide"]);
+    expect(model.index.hasPath("guide/readme.md")).toBe(true);
+
+    // Expanding a pre-seeded loaded directory adopts its entries without calling loadDirectory.
+    model.setExpanded("seeded", true);
+    await Promise.resolve();
+    expect(loaded).toEqual(["guide"]);
+    expect(model.index.hasPath("seeded/auto.ts")).toBe(true);
+
+    // Lazy reset with synchronous root publication force-loads each expanded directory only once.
+    loaded.length = 0;
+    for (const listener of invListeners) {
+      listener({ directories: [], reset: true, moves: [], removed: [] });
+    }
+    await Promise.resolve();
+    expect(loaded).toEqual(["", "guide", "seeded"]);
+
+    // Root-only invalidation publishing a previously absent expanded directory subscribes and loads it once.
+    model.setExpanded("late", true);
+    loaded.length = 0;
+    includeLateInRoot = true;
+    for (const listener of invListeners) {
+      listener({ directories: [""], reset: false, moves: [], removed: [] });
+    }
+    await Promise.resolve();
+    expect(loaded).toEqual(["", "late"]);
+    expect(model.index.hasPath("late/arrived.ts")).toBe(true);
+
+    bound.dispose();
+  });
 });

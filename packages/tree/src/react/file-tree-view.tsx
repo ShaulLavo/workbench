@@ -133,6 +133,29 @@ function isFilterSeedKey(event: KeyboardEvent): boolean {
  * type-to-filter, sticky ancestors, IME-safe create/rename, multi-select pills, keyboard nav,
  * drag-and-drop with edge auto-scroll, touch long-press drag, and per-activation touch focus.
  */
+function findModelRowIndex(model: FileTreeModel, targetPath: string): number {
+  const rows = model.getSnapshot().rows;
+  return rows.findIndex(
+    (row) =>
+      row.type === "entry" &&
+      (row.path === targetPath || (row.segments?.some((seg) => seg.path === targetPath) ?? false)),
+  );
+}
+
+function startModelCreate(model: FileTreeModel, parent: string, kind: "file" | "directory"): void {
+  if (parent !== "" && model.index.getKind(parent) !== "directory") return;
+  if (model.getSnapshot().filter) model.setFilter("");
+  model.setDraft({ mode: "create", kind, parent });
+}
+
+function startModelRename(model: FileTreeModel, path: string): void {
+  if (!model.index.hasPath(path)) return;
+  if (model.getSnapshot().filter) model.setFilter("");
+  model.expandAllAncestors(path);
+  if (findModelRowIndex(model, path) < 0) return;
+  model.setDraft({ mode: "rename", path });
+}
+
 export function FileTreeView({
   model: externalModel,
   adapter,
@@ -238,12 +261,7 @@ export function FileTreeView({
   }
 
   function findRowIndexByPath(targetPath: string): number {
-    const rows = model.getSnapshot().rows;
-    return rows.findIndex(
-      (row) =>
-        row.type === "entry" &&
-        (row.path === targetPath || (row.segments?.some((seg) => seg.path === targetPath) ?? false)),
-    );
+    return findModelRowIndex(model, targetPath);
   }
 
   function requestRowFocus(
@@ -323,18 +341,11 @@ export function FileTreeView({
     },
     startCreate(parent, kind) {
       if (!isCurrentlyWritable()) return;
-      if (parent !== "" && model.index.getKind(parent) !== "directory") return;
-      if (model.getSnapshot().filter) model.setFilter("");
-      model.setDraft({ mode: "create", kind, parent });
+      startModelCreate(model, parent, kind);
     },
     startRename(path) {
-      if (!isCurrentlyWritable() || !model.index.hasPath(path)) return;
-      model.expandAllAncestors(path);
-      if (findRowIndexByPath(path) < 0 && model.getSnapshot().filter) {
-        model.setFilter("");
-      }
-      if (findRowIndexByPath(path) < 0) return;
-      model.setDraft({ mode: "rename", path });
+      if (!isCurrentlyWritable()) return;
+      startModelRename(model, path);
     },
     collapseAll() {
       model.collapseAll();
@@ -436,8 +447,15 @@ export function FileTreeView({
     onOpenFile?.(row.path, decision);
   }
 
-  function handleSegmentClick(segmentPath: string, _event: MouseEvent<HTMLButtonElement>): void {
+  function handleSegmentClick(
+    row: TreeEntryRow,
+    segmentPath: string,
+    _event: MouseEvent<HTMLButtonElement>,
+  ): void {
     model.select(segmentPath, "replace", "pointer");
+    if (segmentPath === row.path) {
+      toggleDirectory(row.path);
+    }
   }
 
   async function commitCreate(parent: string, kind: "file" | "directory", name: string): Promise<void> {
@@ -712,7 +730,7 @@ export function FileTreeView({
     }
     if (event.key === "F2" && writable && focusedRow) {
       event.preventDefault();
-      model.setDraft({ mode: "rename", path: state.focusedPath ?? focusedRow.path });
+      startModelRename(model, state.focusedPath ?? focusedRow.path);
       return;
     }
     if ((event.key === "Delete" || event.key === "Backspace") && writable && state.selected.size > 0) {
@@ -964,23 +982,13 @@ export function FileTreeView({
             id: "new-file",
             label: "New file",
             testId: "wb-tree-ctx-new-file",
-            onSelect: () =>
-              model.setDraft({
-                mode: "create",
-                kind: "file",
-                parent: targetDirectory(menuRow.path, menuRow.kind),
-              }),
+            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "file"),
           },
           {
             id: "new-folder",
             label: "New folder",
             testId: "wb-tree-ctx-new-folder",
-            onSelect: () =>
-              model.setDraft({
-                mode: "create",
-                kind: "directory",
-                parent: targetDirectory(menuRow.path, menuRow.kind),
-              }),
+            onSelect: () => startModelCreate(model, targetDirectory(menuRow.path, menuRow.kind), "directory"),
           },
           {
             id: "rename",
@@ -988,7 +996,7 @@ export function FileTreeView({
             hint: "F2",
             separatorBefore: true,
             testId: "wb-tree-ctx-rename",
-            onSelect: () => model.setDraft({ mode: "rename", path: menuRow.path }),
+            onSelect: () => startModelRename(model, menuRow.path),
           },
           {
             id: "delete",
@@ -1155,8 +1163,7 @@ export function FileTreeView({
               onActivate={handleActivateRow}
               onDoubleClickRename={
                 writable
-                  ? (targetRow, targetPath) =>
-                      model.setDraft({ mode: "rename", path: targetPath ?? targetRow.path })
+                  ? (targetRow, targetPath) => startModelRename(model, targetPath ?? targetRow.path)
                   : undefined
               }
               onToggleDirectory={toggleDirectory}

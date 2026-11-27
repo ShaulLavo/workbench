@@ -1,4 +1,4 @@
-import { Fragment, type ReactNode } from "react";
+import { Fragment, useEffect, useRef, type ReactNode } from "react";
 import { ContextMenu as BaseContextMenu } from "@base-ui/react/context-menu";
 import { Menu as BaseMenu } from "@base-ui/react/menu";
 import { cx } from "../utils/cx";
@@ -34,15 +34,25 @@ export function ContextMenu({
   className,
 }: ContextMenuProps) {
   const container = useWorkbenchPortalContainer(portalContainer);
+  const closeReasonRef = useRef<string | undefined>(undefined);
 
   return (
-    <BaseContextMenu.Root>
+    <BaseContextMenu.Root
+      onOpenChange={(nextOpen, details) => {
+        closeReasonRef.current = nextOpen ? undefined : details.reason;
+      }}
+    >
       <BaseContextMenu.Trigger data-wb-native-long-press="true" className={className}>
         {children}
       </BaseContextMenu.Trigger>
       <BaseContextMenu.Portal container={container}>
         <BaseContextMenu.Positioner className="wb-menu-positioner" sideOffset={2}>
-          <BaseContextMenu.Popup className="wb-menu-popup" aria-label={label} data-wb-context-menu="">
+          <BaseContextMenu.Popup
+            className="wb-menu-popup"
+            aria-label={label}
+            data-wb-context-menu=""
+            finalFocus={() => closeReasonRef.current !== "item-press"}
+          >
             {items.map((item) => (
               <Fragment key={item.id}>
                 {item.separatorBefore ? <BaseContextMenu.Separator className="wb-menu-separator" /> : null}
@@ -50,7 +60,10 @@ export function ContextMenu({
                   className={cx("wb-menu-item", item.danger && "wb-menu-item-danger")}
                   disabled={item.disabled}
                   data-testid={item.testId}
-                  onClick={item.onSelect}
+                  onClick={() => {
+                    closeReasonRef.current = "item-press";
+                    queueMicrotask(() => item.onSelect());
+                  }}
                 >
                   {item.icon ? (
                     <span className="wb-menu-item-icon" aria-hidden="true">
@@ -112,12 +125,23 @@ export function PointContextMenu({
   onOpenChange,
 }: PointContextMenuProps) {
   const container = useWorkbenchPortalContainer(portalContainer);
+  const closeReasonRef = useRef<string | undefined>(undefined);
   const anchor = {
     getBoundingClientRect: () => createPointRect(x, y),
   };
 
+  useEffect(() => {
+    if (open) closeReasonRef.current = undefined;
+  }, [open]);
+
   return (
-    <BaseMenu.Root open={open} onOpenChange={(nextOpen, details) => onOpenChange(nextOpen, details.reason)}>
+    <BaseMenu.Root
+      open={open}
+      onOpenChange={(nextOpen, details) => {
+        closeReasonRef.current = nextOpen ? undefined : details.reason;
+        onOpenChange(nextOpen, details.reason);
+      }}
+    >
       <BaseMenu.Portal container={container}>
         <BaseMenu.Positioner
           anchor={anchor}
@@ -127,7 +151,12 @@ export function PointContextMenu({
           collisionPadding={6}
           className="wb-menu-positioner"
         >
-          <BaseMenu.Popup className="wb-menu-popup" aria-label={label} data-wb-point-context-menu="">
+          <BaseMenu.Popup
+            className="wb-menu-popup"
+            aria-label={label}
+            data-wb-point-context-menu=""
+            finalFocus={() => closeReasonRef.current !== "item-press"}
+          >
             {items.map((item) => (
               <Fragment key={item.id}>
                 {item.separatorBefore ? <BaseMenu.Separator className="wb-menu-separator" /> : null}
@@ -135,7 +164,10 @@ export function PointContextMenu({
                   className={cx("wb-menu-item", item.danger && "wb-menu-item-danger")}
                   disabled={item.disabled}
                   data-testid={item.testId}
-                  onClick={item.onSelect}
+                  onClick={() => {
+                    closeReasonRef.current = "item-press";
+                    queueMicrotask(() => item.onSelect());
+                  }}
                 >
                   {item.icon ? (
                     <span className="wb-menu-item-icon" aria-hidden="true">
