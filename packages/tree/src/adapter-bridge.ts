@@ -139,12 +139,21 @@ export function bindFileSystemAdapter(
 
   function syncExpandedLazyDirectories(): void {
     if (disposed || handlingInvalidation) return;
+    const lazy = adapter.lazy;
     syncLazyFilterSubscription();
+    if (!lazy) return;
     for (const dir of model.getSnapshot().expanded) {
       const normalized = normalizeTreePath(dir);
       if (!normalized || model.index.getConfirmedKind(normalized) !== "directory") continue;
       if (!lazyUnsubs.has(normalized) || staleLazyDirs.has(normalized)) {
         void ensureDirectoryLoaded(normalized);
+        continue;
+      }
+      const adapterState = lazy.getDirectoryState(normalized).getSnapshot();
+      const indexState = model.index.getDirectoryLoadState(normalized);
+      if (adapterState.status !== indexState.status) {
+        model.index.setLazyDirectoryState(normalized, adapterState);
+        model.notifyIndexChange();
       }
     }
   }
@@ -152,11 +161,12 @@ export function bindFileSystemAdapter(
   function reloadInvalidatedLazyDirs(event: LazyInvalidationEvent): void {
     if (event.reset) {
       for (const dir of lazyUnsubs.keys()) staleLazyDirs.add(dir);
+      for (const dir of model.getSnapshot().expanded) {
+        const normalized = normalizeTreePath(dir);
+        if (normalized) staleLazyDirs.add(normalized);
+      }
       staleLazyDirs.add("");
       void ensureDirectoryLoaded("", { force: true });
-      for (const dir of model.getSnapshot().expanded) {
-        void ensureDirectoryLoaded(dir, { force: true });
-      }
       return;
     }
     const expanded = model.getSnapshot().expanded;
@@ -194,17 +204,11 @@ export function bindFileSystemAdapter(
 
   if (adapter.lazy) {
     const lazy = adapter.lazy;
-    subscribeLazyDir("");
-    void ensureDirectoryLoaded("");
-    for (const dir of model.getSnapshot().expanded) {
-      subscribeLazyDir(dir);
-      const current = lazy.getDirectoryState(normalizeTreePath(dir)).getSnapshot();
-      if (current.status === "idle") void ensureDirectoryLoaded(dir);
-    }
-
-    syncLazyFilterSubscription();
     cleanups.push(model.subscribe(syncExpandedLazyDirectories));
     cleanups.push(lazy.subscribeInvalidation(handleLazyInvalidation));
+    subscribeLazyDir("");
+    void ensureDirectoryLoaded("");
+    syncExpandedLazyDirectories();
   }
 
   return {

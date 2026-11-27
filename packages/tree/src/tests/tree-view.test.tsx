@@ -1711,4 +1711,72 @@ describe("@shaulavo/workbench-tree React view", () => {
     });
     expect(model.getSnapshot().draft).toEqual({ mode: "create", kind: "file", parent: "closed" });
   });
+
+  it("loads nested initialExpanded lazy directories top-down after root resolves without dropping children as stale", async () => {
+    const slots = new Map<string, { state: DirectoryLoadState; listeners: Set<() => void> }>();
+    const getSlot = (dir: string) => {
+      let slot = slots.get(dir);
+      if (!slot) {
+        slot = { state: { status: "idle" }, listeners: new Set() };
+        slots.set(dir, slot);
+      }
+      return slot;
+    };
+    const rootDeferred = Promise.withResolvers<void>();
+    const loadOrder: string[] = [];
+    const adapter: FileSystemAdapter = {
+      workspaceId: "ws-reload-race",
+      writable: { getSnapshot: () => true, subscribe: () => () => {} },
+      listFiles: async () => ["area/inner/new.txt"],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      remove: async () => {},
+      lazy: {
+        getDirectoryState(dirPath) {
+          const slot = getSlot(dirPath);
+          return {
+            getSnapshot: () => slot.state,
+            subscribe(listener) {
+              slot.listeners.add(listener);
+              return () => slot.listeners.delete(listener);
+            },
+          };
+        },
+        async loadDirectory(dirPath) {
+          loadOrder.push(dirPath);
+          const slot = getSlot(dirPath);
+          if (dirPath === "") {
+            slot.state = { status: "loading" };
+            for (const listener of slot.listeners) listener();
+            await rootDeferred.promise;
+            slot.state = { status: "loaded", entries: [{ name: "area", kind: "directory" }] };
+          } else if (dirPath === "area") {
+            slot.state = { status: "loaded", entries: [{ name: "inner", kind: "directory" }] };
+          } else if (dirPath === "area/inner") {
+            slot.state = { status: "loaded", entries: [{ name: "new.txt", kind: "file" }] };
+          }
+          for (const listener of slot.listeners) listener();
+        },
+        subscribeInvalidation: () => () => {},
+      },
+    };
+
+    const model = new FileTreeModel({ compactFolders: true, initialExpanded: ["area", "area/inner"] });
+    const host = mount(<FileTreeView model={model} adapter={adapter} />);
+
+    // Before root finishes, nested directories must not be loaded prematurely against an empty root.
+    expect(loadOrder).toEqual([""]);
+
+    await act(async () => {
+      rootDeferred.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(loadOrder).toEqual(["", "area", "area/inner"]);
+    expect(host.querySelector('[data-testid="wb-tree-row-area/inner/new.txt"]')).not.toBeNull();
+  });
 });

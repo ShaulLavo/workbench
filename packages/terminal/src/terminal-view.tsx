@@ -486,9 +486,7 @@ export function TerminalView({
       syncAppearanceNow();
       applyInactiveCursorStyle(terminal);
       terminal.setAccessibilityEnabled(propsRef.current.screenReader);
-      if (propsRef.current.accessibilityLabel !== undefined) {
-        terminal.textarea?.setAttribute("aria-label", propsRef.current.accessibilityLabel);
-      }
+      terminal.textarea?.setAttribute("aria-label", propsRef.current.accessibilityLabel ?? "Terminal input");
 
       if (propsRef.current.hotkeys) {
         const parentScope = propsRef.current.hotkeys.getTerminalParentScope?.();
@@ -694,9 +692,7 @@ export function TerminalView({
     const terminal = terminalRef.current;
     if (!terminal) return;
     terminal.setAccessibilityEnabled(screenReader);
-    if (accessibilityLabel !== undefined) {
-      terminal.textarea?.setAttribute("aria-label", accessibilityLabel);
-    }
+    terminal.textarea?.setAttribute("aria-label", accessibilityLabel ?? "Terminal input");
   }, [screenReader, accessibilityLabel]);
 
   function handleFocus(): void {
