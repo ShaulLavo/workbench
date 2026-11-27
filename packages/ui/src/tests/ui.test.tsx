@@ -377,10 +377,25 @@ describe("@shaulavo/workbench-ui", () => {
   });
 
   it("supports VirtualList flow layout (Plan 181: never directDomUpdates) and measured absolute directDomUpdates", () => {
-    const items = Array.from({ length: 40 }, (_, i) => ({ id: `item-${i}`, label: `Row ${i}` }));
+    const items = Array.from({ length: 100 }, (_, i) => ({ id: `item-${i}`, label: `Row ${i}` }));
     const origRect = HTMLElement.prototype.getBoundingClientRect;
+    const origScrollTo = HTMLElement.prototype.scrollTo;
     const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
     const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const origScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    HTMLElement.prototype.scrollTo = function mockScrollTo(arg?: ScrollToOptions | number, y?: number) {
+      if (typeof arg === "number") {
+        this.scrollTop = y ?? 0;
+        return;
+      }
+      if (arg?.top !== undefined) this.scrollTop = arg.top;
+    };
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-wb-virtual-list") ? 2600 : 30;
+      },
+    });
     Object.defineProperty(HTMLElement.prototype, "clientHeight", {
       configurable: true,
       get(this: HTMLElement) {
@@ -451,7 +466,10 @@ describe("@shaulavo/workbench-ui", () => {
       expect(absDirectRows.length).toBeGreaterThan(5);
       expect(absDirectRows[1]?.style.transform).toContain("translate3d");
 
-      // Switch back to flow: inline height and row transforms must be cleared cleanly.
+      // Switch back to flow from a scrolled absolute list: preserve scrollTop and clear inline height/transforms.
+      const scroller = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(scroller).not.toBeNull();
+      if (scroller) scroller.scrollTop = 1000;
       act(() => {
         activeRoot?.render(
           <VirtualList
@@ -463,6 +481,7 @@ describe("@shaulavo/workbench-ui", () => {
           />,
         );
       });
+      expect(scroller?.scrollTop).toBe(1000);
       const flowAgainInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
       expect(flowAgainInner?.style.height).toBe("");
       const flowAgainRow = flowHost.querySelector<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
@@ -503,10 +522,28 @@ describe("@shaulavo/workbench-ui", () => {
         '.wb-virtual-list-row[data-layout="absolute"]',
       );
       expect(absBackOnRows[1]?.style.transform).toContain("translate3d(0, 26px, 0)");
+
+      // Fresh mount with an offscreen activeIndex scrolls the scroller immediately during initial mount.
+      act(() => {
+        activeRoot?.unmount();
+      });
+      const activeHost = mount(
+        <VirtualList
+          items={items}
+          getKey={(item) => item.id}
+          activeIndex={80}
+          initialRect={{ width: 320, height: 260 }}
+          renderRow={(item) => <div>{item.label}</div>}
+        />,
+      );
+      const activeScroller = activeHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(activeScroller?.scrollTop).toBe(1846);
     } finally {
       HTMLElement.prototype.getBoundingClientRect = origRect;
+      HTMLElement.prototype.scrollTo = origScrollTo;
       if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
       if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
+      if (origScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", origScrollHeight);
     }
   });
 });

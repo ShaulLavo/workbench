@@ -1,5 +1,6 @@
 import { defaultRangeExtractor, useVirtualizer } from "@tanstack/react-virtual";
 import {
+  useCallback,
   useEffect,
   useLayoutEffect,
   useMemo,
@@ -8,7 +9,6 @@ import {
   type DragEvent,
   type KeyboardEvent,
   type ReactNode,
-  type RefObject,
 } from "react";
 import { observeWorkbenchTheme } from "@shaulavo/workbench-tokens";
 import { computeStickyAncestors, type StickyAncestorsState, type TreeRow } from "../model";
@@ -65,112 +65,6 @@ export interface FileTreeViewportProps {
   readonly onRootDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
 
-interface TreeVirtualCanvasProps {
-  readonly scrollerRef: RefObject<HTMLDivElement | null>;
-  readonly scrollToIndexRef: RefObject<((index: number, align: "auto" | "start") => void) | null>;
-  readonly rows: readonly TreeRow[];
-  readonly parkedIndices: readonly number[];
-  readonly activeIndex: number;
-  readonly scrollSeq: number;
-  readonly rowHeight: number;
-  readonly directDomUpdates: boolean;
-  readonly renderRow: (row: TreeRow, index: number) => ReactNode;
-}
-
-/**
- * Keyed per `directDomUpdates` mode so runtime mode toggles mount a fresh virtualizer and clean
- * canvas/row elements without leaving stale inline heights or transforms behind.
- */
-function TreeVirtualCanvas({
-  scrollerRef,
-  scrollToIndexRef,
-  rows,
-  parkedIndices,
-  activeIndex,
-  scrollSeq,
-  rowHeight,
-  directDomUpdates,
-  renderRow,
-}: TreeVirtualCanvasProps) {
-  // TanStack useVirtualizer returns a mutable instance read on every render.
-  "use no memo";
-
-  const lastScrolledSeqRef = useRef(0);
-  const getItemKey = useMemo(() => makeKeyReader(rows), [rows]);
-
-  // oxlint-disable-next-line react/incompatible-library
-  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
-    count: rows.length,
-    getScrollElement: () => scrollerRef.current,
-    estimateSize: () => rowHeight,
-    // Fixed-height rows: register in elementsCache without triggering getBoundingClientRect reads.
-    measureElement: directDomUpdates ? () => rowHeight : undefined,
-    getItemKey,
-    overscan: 12,
-    directDomUpdates,
-    directDomUpdatesMode: "transform",
-    rangeExtractor: (range) => {
-      const base = defaultRangeExtractor(range);
-      if (parkedIndices.length === 0) return base;
-      const merged = new Set(base);
-      for (const idx of parkedIndices) {
-        if (idx >= 0 && idx < rows.length) merged.add(idx);
-      }
-      return Array.from(merged).sort((a, b) => a - b);
-    },
-  });
-
-  useLayoutEffect(() => {
-    scrollToIndexRef.current = (index, align) => {
-      virtualizer.scrollToIndex(index, { align });
-    };
-    return () => {
-      scrollToIndexRef.current = null;
-    };
-  }, [scrollToIndexRef, virtualizer]);
-
-  useLayoutEffect(() => {
-    virtualizer.measure();
-  }, [rowHeight, virtualizer]);
-
-  useLayoutEffect(() => {
-    if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
-    if (activeIndex < 0 || activeIndex >= rows.length) return;
-    lastScrolledSeqRef.current = scrollSeq;
-    virtualizer.scrollToIndex(activeIndex, { align: "auto" });
-  }, [activeIndex, scrollSeq, rows.length, virtualizer]);
-
-  const virtualRows = virtualizer.getVirtualItems();
-
-  return (
-    <div
-      ref={directDomUpdates ? virtualizer.containerRef : undefined}
-      className="wb-tree-canvas"
-      style={directDomUpdates ? undefined : { height: `${virtualizer.getTotalSize()}px` }}
-    >
-      {virtualRows.map((vRow) => {
-        const row = rows[vRow.index];
-        if (!row) return null;
-        return (
-          <div
-            key={vRow.key}
-            data-index={vRow.index}
-            ref={directDomUpdates ? virtualizer.measureElement : undefined}
-            className="wb-tree-slot"
-            style={
-              directDomUpdates
-                ? { height: `${rowHeight}px` }
-                : { transform: `translateY(${vRow.start}px)`, height: `${rowHeight}px` }
-            }
-          >
-            {renderRow(row, vRow.index)}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
-
 /**
  * Windowed tree scroller wrapping `@tanstack/react-virtual` with parked focused/editing/dragged
  * rows, synchronous `data-is-scrolling` hover suppression, DOM-driven sticky ancestor push-up
@@ -195,15 +89,52 @@ export function FileTreeViewport({
   onRootDragOver,
   onRootDrop,
 }: FileTreeViewportProps) {
+  // TanStack useVirtualizer returns a mutable instance read on every render.
+  "use no memo";
+
   const scrollerRef = useRef<HTMLDivElement | null>(null);
-  const scrollToIndexRef = useRef<((index: number, align: "auto" | "start") => void) | null>(null);
+  const canvasRef = useRef<HTMLDivElement | null>(null);
   const stickyOverlayRef = useRef<HTMLDivElement | null>(null);
   const stickyKeyRef = useRef("");
   const stickyPushUpRef = useRef(0);
+  const lastScrolledSeqRef = useRef(0);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const dragPointerYRef = useRef<number | null>(null);
   const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_HEIGHT);
   const [stickyRows, setStickyRows] = useState<StickyAncestorsState["rows"]>([]);
+
+  const getItemKey = useMemo(() => makeKeyReader(rows), [rows]);
+  const modeKey = directDomUpdates ? "direct" : "react";
+
+  // oxlint-disable-next-line react/incompatible-library
+  const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: rows.length,
+    getScrollElement: () => scrollerRef.current,
+    estimateSize: () => rowHeight,
+    // Fixed-height rows: register in elementsCache without triggering getBoundingClientRect reads.
+    measureElement: directDomUpdates ? () => rowHeight : undefined,
+    getItemKey,
+    overscan: 12,
+    directDomUpdates,
+    directDomUpdatesMode: "transform",
+    rangeExtractor: (range) => {
+      const base = defaultRangeExtractor(range);
+      if (parkedIndices.length === 0) return base;
+      const merged = new Set(base);
+      for (const idx of parkedIndices) {
+        if (idx >= 0 && idx < rows.length) merged.add(idx);
+      }
+      return Array.from(merged).sort((a, b) => a - b);
+    },
+  });
+
+  const attachCanvas = useCallback(
+    (node: HTMLDivElement | null) => {
+      canvasRef.current = node;
+      virtualizer.containerRef(directDomUpdates ? node : null);
+    },
+    [directDomUpdates, virtualizer],
+  );
 
   useEffect(() => {
     const node = scrollerRef.current;
@@ -217,6 +148,21 @@ export function FileTreeViewport({
       if (scrollTimerRef.current !== undefined) window.clearTimeout(scrollTimerRef.current);
     };
   }, []);
+
+  useLayoutEffect(() => {
+    virtualizer.containerRef(directDomUpdates ? canvasRef.current : null);
+  }, [directDomUpdates, virtualizer]);
+
+  useLayoutEffect(() => {
+    virtualizer.measure();
+  }, [rowHeight, virtualizer]);
+
+  useLayoutEffect(() => {
+    if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
+    if (activeIndex < 0 || activeIndex >= rows.length) return;
+    lastScrolledSeqRef.current = scrollSeq;
+    virtualizer.scrollToIndex(activeIndex, { align: "auto" });
+  }, [activeIndex, scrollSeq, rows.length, virtualizer]);
 
   useEffect(() => {
     if (touchDragY !== null) {
@@ -280,6 +226,8 @@ export function FileTreeViewport({
     syncStickyFromScrollTop(node.scrollTop);
   }
 
+  const virtualRows = virtualizer.getVirtualItems();
+
   return (
     <div className="wb-tree-viewport-wrap">
       <StickyAncestorsOverlay
@@ -289,7 +237,7 @@ export function FileTreeViewport({
         iconPreset={iconPreset}
         onSelectAncestor={(dirPath) => {
           const idx = rows.findIndex((r) => r.type === "entry" && r.path === dirPath);
-          if (idx >= 0) scrollToIndexRef.current?.(idx, "start");
+          if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "start" });
           onSelectStickyAncestor(dirPath);
         }}
       />
@@ -317,18 +265,31 @@ export function FileTreeViewport({
           onRootDrop?.(event);
         }}
       >
-        <TreeVirtualCanvas
-          key={directDomUpdates ? "direct" : "react"}
-          scrollerRef={scrollerRef}
-          scrollToIndexRef={scrollToIndexRef}
-          rows={rows}
-          parkedIndices={parkedIndices}
-          activeIndex={activeIndex}
-          scrollSeq={scrollSeq}
-          rowHeight={rowHeight}
-          directDomUpdates={directDomUpdates}
-          renderRow={renderRow}
-        />
+        <div
+          ref={attachCanvas}
+          className="wb-tree-canvas"
+          style={directDomUpdates ? undefined : { height: `${virtualizer.getTotalSize()}px` }}
+        >
+          {virtualRows.map((vRow) => {
+            const row = rows[vRow.index];
+            if (!row) return null;
+            return (
+              <div
+                key={`${modeKey}:${vRow.key}`}
+                data-index={vRow.index}
+                ref={directDomUpdates ? virtualizer.measureElement : undefined}
+                className="wb-tree-slot"
+                style={
+                  directDomUpdates
+                    ? { height: `${rowHeight}px` }
+                    : { transform: `translateY(${vRow.start}px)`, height: `${rowHeight}px` }
+                }
+              >
+                {renderRow(row, vRow.index)}
+              </div>
+            );
+          })}
+        </div>
       </div>
     </div>
   );
