@@ -1,12 +1,16 @@
 import {
   useEffect,
+  useImperativeHandle,
   useLayoutEffect,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
   type MouseEvent,
   type PointerEvent,
+  type ReactNode,
+  type RefObject,
 } from "react";
 import {
   dismissSoftKeyboardOnTouchActivation,
@@ -46,20 +50,64 @@ const ALWAYS_WRITABLE: Subscribable<boolean> = {
   subscribe: () => () => {},
 };
 
+export interface FileTreeViewHandle {
+  focus(): void;
+  focusPath(path: string, options?: { readonly behavior?: "auto" | "smooth" }): boolean;
+  scrollToPath(
+    path: string,
+    options?: {
+      readonly behavior?: "auto" | "smooth";
+      readonly align?: "auto" | "start" | "center" | "end";
+    },
+  ): boolean;
+  openFilter(seed?: string): void;
+  closeFilter(): void;
+  clearFilter(): void;
+  startCreate(parent: string, kind: "file" | "directory"): void;
+  startRename(path: string): void;
+  collapseAll(): void;
+  getScrollElement(): HTMLDivElement | null;
+}
+
 export interface FileTreeViewProps {
   /** Optional external `FileTreeModel` (e.g. from a cached `PreparedFileTreeInput`). */
   readonly model?: FileTreeModel;
   /** Optional `FileSystemAdapter` (lazy or indexed) to bind automatically. */
   readonly adapter?: FileSystemAdapter;
+  readonly handleRef?: RefObject<FileTreeViewHandle | null>;
   readonly label?: string;
   readonly iconPreset?: "rich" | "stroke";
   readonly showFilter?: boolean;
+  readonly filterPlaceholder?: string;
   readonly readOnly?: boolean;
   readonly directDomUpdates?: boolean;
+  readonly rowHeight?: number;
+  readonly initialScrollTop?: number;
+  readonly onScrollTopChange?: (scrollTop: number) => void;
+  readonly activePath?: string | null;
+  readonly loadingPaths?: ReadonlySet<string>;
+  readonly renderRowDecoration?: (row: TreeEntryRow) => ReactNode;
+  readonly onRowElementChange?: (path: string, element: HTMLElement | null) => void;
   readonly onOpenFile?: (path: string, focus: ActivationFocusDecision) => void;
+  readonly onSelectionChange?: (selectedPaths: readonly string[]) => void;
+  readonly onExpandChange?: (dirPath: string, expanded: boolean) => void;
+  readonly onRequestContextMenu?: (
+    row: TreeEntryRow | null,
+    anchor: { readonly x: number; readonly y: number } | HTMLElement,
+  ) => void;
+  readonly onRequestDelete?: (paths: readonly string[]) => void;
+  readonly onCreate?: (parent: string, kind: "file" | "directory", name: string) => void | Promise<void>;
+  readonly onRename?: (fromPath: string, toPath: string) => void | Promise<void>;
+  readonly onMove?: (
+    moves: readonly { readonly from: string; readonly to: string }[],
+  ) => void | Promise<void>;
+  readonly onExternalDrop?: (dirPath: string, dataTransfer: DataTransfer) => void;
+  readonly canDrag?: (paths: readonly string[]) => boolean;
+  readonly canDrop?: (sources: readonly string[], destinationDir: string) => boolean;
   readonly onError?: (message: string, error: unknown) => void;
   readonly extraContextMenuItems?: (row: TreeEntryRow) => readonly ContextMenuItem[];
   readonly className?: string;
+  readonly style?: CSSProperties;
 }
 
 function isNavKey(key: string): key is TreeNavigationKey {
@@ -88,21 +136,42 @@ function isFilterSeedKey(event: KeyboardEvent): boolean {
 export function FileTreeView({
   model: externalModel,
   adapter,
+  handleRef,
   label = "File explorer",
   iconPreset = "rich",
   showFilter = true,
+  filterPlaceholder = "Filter files…",
   readOnly = false,
   directDomUpdates,
+  rowHeight,
+  initialScrollTop,
+  onScrollTopChange,
+  activePath,
+  loadingPaths,
+  renderRowDecoration,
+  onRowElementChange,
   onOpenFile,
+  onSelectionChange,
+  onExpandChange,
+  onRequestContextMenu,
+  onRequestDelete,
+  onCreate,
+  onRename,
+  onMove,
+  onExternalDrop,
+  canDrag,
+  canDrop,
   onError,
   extraContextMenuItems,
   className,
+  style,
 }: FileTreeViewProps) {
   const [internalModel] = useState(() => new FileTreeModel());
   const model = externalModel ?? internalModel;
   const state = useSubscribable(model);
 
   const boundRef = useRef<BoundFileTreeAdapter | null>(null);
+  const scrollerRef = useRef<HTMLDivElement | null>(null);
   const filterRef = useRef<FilterFieldHandle | null>(null);
   const hoverOpenTimerRef = useRef<number | undefined>(undefined);
   const hoverOpenDirRef = useRef<string | undefined>(undefined);
@@ -140,13 +209,26 @@ export function FileTreeView({
   const [focusRequest, setFocusRequest] = useState<{ readonly path: string; readonly seq: number } | null>(
     null,
   );
-  const [scrollSeq, setScrollSeq] = useState(0);
+  const [scrollRequest, setScrollRequest] = useState<{
+    readonly seq: number;
+    readonly index: number;
+    readonly behavior: "auto" | "smooth";
+    readonly align: "auto" | "start" | "center" | "end";
+  }>({ seq: 0, index: -1, behavior: "auto", align: "auto" });
   const focusSeqRef = useRef(0);
   const readOnlyRef = useRef(readOnly);
+  const lastSelectedRef = useRef<ReadonlySet<string>>(state.selected);
 
   useLayoutEffect(() => {
     readOnlyRef.current = readOnly;
   }, [readOnly]);
+
+  useEffect(() => {
+    if (!onSelectionChange) return;
+    if (lastSelectedRef.current === state.selected) return;
+    lastSelectedRef.current = state.selected;
+    onSelectionChange(Array.from(state.selected));
+  }, [onSelectionChange, state.selected]);
 
   const adapterWritable = useSubscribable(adapter?.writable ?? ALWAYS_WRITABLE);
   const writable = !readOnly && adapterWritable;
@@ -155,12 +237,112 @@ export function FileTreeView({
     return !readOnlyRef.current && (adapter ? adapter.writable.getSnapshot() : true);
   }
 
-  function requestRowFocus(path: string): void {
+  function findRowIndexByPath(targetPath: string): number {
+    const rows = model.getSnapshot().rows;
+    return rows.findIndex(
+      (row) =>
+        row.type === "entry" &&
+        (row.path === targetPath || (row.segments?.some((seg) => seg.path === targetPath) ?? false)),
+    );
+  }
+
+  function requestRowFocus(
+    path: string,
+    options?: {
+      readonly behavior?: "auto" | "smooth";
+      readonly align?: "auto" | "start" | "center" | "end";
+    },
+  ): void {
     focusSeqRef.current += 1;
     const seq = focusSeqRef.current;
-    setScrollSeq(seq);
+    const idx = findRowIndexByPath(path);
+    setScrollRequest({
+      seq,
+      index: idx,
+      behavior: options?.behavior ?? "auto",
+      align: options?.align ?? "auto",
+    });
     setFocusRequest({ path, seq });
   }
+
+  function requestRowScroll(
+    path: string,
+    options?: {
+      readonly behavior?: "auto" | "smooth";
+      readonly align?: "auto" | "start" | "center" | "end";
+    },
+  ): boolean {
+    const idx = findRowIndexByPath(path);
+    if (idx < 0) return false;
+    focusSeqRef.current += 1;
+    setScrollRequest({
+      seq: focusSeqRef.current,
+      index: idx,
+      behavior: options?.behavior ?? "auto",
+      align: options?.align ?? "auto",
+    });
+    return true;
+  }
+
+  useImperativeHandle(handleRef, () => ({
+    focus() {
+      const snap = model.getSnapshot();
+      const target =
+        snap.focusedPath ?? snap.rows.find((row): row is TreeEntryRow => row.type === "entry")?.path;
+      if (target) {
+        model.setFocusedPath(target, "keyboard");
+        requestRowFocus(target);
+        return;
+      }
+      scrollerRef.current?.focus();
+    },
+    focusPath(path, options) {
+      if (!model.index.hasPath(path)) return false;
+      model.expandAllAncestors(path);
+      if (findRowIndexByPath(path) < 0) return false;
+      model.setFocusedPath(path, "keyboard");
+      requestRowFocus(path, options);
+      return true;
+    },
+    scrollToPath(path, options) {
+      if (!model.index.hasPath(path)) return false;
+      model.expandAllAncestors(path);
+      return requestRowScroll(path, options);
+    },
+    openFilter(seed) {
+      setFilterVisible(true);
+      if (seed !== undefined) model.setFilter(seed);
+      queueMicrotask(() => filterRef.current?.focus());
+    },
+    closeFilter() {
+      model.setFilter("");
+      if (!showFilter) setFilterVisible(false);
+    },
+    clearFilter() {
+      model.setFilter("");
+    },
+    startCreate(parent, kind) {
+      if (!isCurrentlyWritable()) return;
+      if (parent !== "" && model.index.getKind(parent) !== "directory") return;
+      if (model.getSnapshot().filter) model.setFilter("");
+      model.setDraft({ mode: "create", kind, parent });
+    },
+    startRename(path) {
+      if (!isCurrentlyWritable() || !model.index.hasPath(path)) return;
+      model.expandAllAncestors(path);
+      if (findRowIndexByPath(path) < 0 && model.getSnapshot().filter) {
+        model.setFilter("");
+      }
+      if (findRowIndexByPath(path) < 0) return;
+      model.setDraft({ mode: "rename", path });
+    },
+    collapseAll() {
+      model.collapseAll();
+    },
+    getScrollElement() {
+      return scrollerRef.current;
+    },
+  }));
 
   function handleFocusHandled(seq: number): void {
     setFocusRequest((current) => (current && current.seq === seq ? null : current));
@@ -225,6 +407,7 @@ export function FileTreeView({
 
   function toggleDirectory(dirPath: string): void {
     const opened = model.toggleExpanded(dirPath);
+    onExpandChange?.(dirPath, opened);
     if (opened) void boundRef.current?.ensureDirectoryLoaded(dirPath);
   }
 
@@ -253,16 +436,21 @@ export function FileTreeView({
     onOpenFile?.(row.path, decision);
   }
 
-  function handleSegmentClick(segmentPath: string, event: MouseEvent<HTMLButtonElement>): void {
+  function handleSegmentClick(segmentPath: string, _event: MouseEvent<HTMLButtonElement>): void {
     model.select(segmentPath, "replace", "pointer");
-    if (event.detail >= 2) {
-      toggleDirectory(segmentPath);
-    }
   }
 
   async function commitCreate(parent: string, kind: "file" | "directory", name: string): Promise<void> {
     model.setDraft(undefined);
     if (!isCurrentlyWritable()) return;
+    if (onCreate) {
+      try {
+        await onCreate(parent, kind, name);
+      } catch (error) {
+        onError?.(`Unable to create ${name}`, error);
+      }
+      return;
+    }
     const fullPath = joinPath(parent, name);
     const optId = nextOptimisticId();
     model.index.applyOptimistic(
@@ -291,6 +479,16 @@ export function FileTreeView({
     model.setDraft(undefined);
     if (!isCurrentlyWritable() || toPath === fromPath) {
       requestRowFocus(fromPath);
+      return;
+    }
+    if (onRename) {
+      try {
+        await onRename(fromPath, toPath);
+        requestRowFocus(toPath);
+      } catch (error) {
+        requestRowFocus(fromPath);
+        onError?.(`Unable to rename ${baseName(fromPath)}`, error);
+      }
       return;
     }
     const entryKind = model.index.getKind(fromPath) ?? "file";
@@ -329,11 +527,21 @@ export function FileTreeView({
     if (!isCurrentlyWritable()) return;
     const top = topLevelPaths(sources);
     if (!canMoveInto(top, destinationDir)) return;
+    if (canDrop && !canDrop(top, destinationDir)) return;
     const moves = top.map((from) => ({
       from,
       to: joinPath(destinationDir, baseName(from)),
       entryKind: model.index.getKind(from) ?? ("file" as const),
     }));
+    if (onMove) {
+      if (destinationDir) model.setExpanded(destinationDir, true);
+      try {
+        await onMove(moves.map(({ from, to }) => ({ from, to })));
+      } catch (error) {
+        onError?.("Unable to move selected items", error);
+      }
+      return;
+    }
     const optIds: string[] = [];
     for (const move of moves) {
       const id = nextOptimisticId();
@@ -413,20 +621,67 @@ export function FileTreeView({
     }
   }
 
+  function requestDeletePaths(paths: readonly string[]): void {
+    if (paths.length === 0) return;
+    if (onRequestDelete) {
+      onRequestDelete(paths);
+      return;
+    }
+    setDeleteTarget(paths);
+  }
+
+  function openMenuFor(
+    row: TreeEntryRow | null,
+    anchor: { readonly x: number; readonly y: number } | HTMLElement,
+  ): void {
+    if (onRequestContextMenu) {
+      onRequestContextMenu(row, anchor);
+      return;
+    }
+    if (!row) return;
+    const point =
+      anchor instanceof HTMLElement
+        ? (() => {
+            const rect = anchor.getBoundingClientRect();
+            return { x: rect.left + 24, y: rect.bottom };
+          })()
+        : anchor;
+    setContextMenu({ open: true, x: point.x, y: point.y, row });
+  }
+
   function handleTreeKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
-    if (state.draft) return;
+    if (state.draft) {
+      const hasVisibleDraft = state.rows.some(
+        (row) => row.type === "draft" || (row.type === "entry" && row.editing),
+      );
+      if (hasVisibleDraft) return;
+      model.setDraft(undefined);
+    }
     const targetEl = event.target as HTMLElement | null;
     if (targetEl?.closest("input, textarea, [data-wb-tree-status]")) return;
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      model.selectAll();
+      return;
+    }
+    if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "f") {
+      event.preventDefault();
+      setFilterVisible(true);
+      queueMicrotask(() => filterRef.current?.focus());
+      return;
+    }
     if (isNavKey(event.key)) {
       event.preventDefault();
       const action = navigateTree(state.rows, state.focusedPath, event.key);
       if (action.expand) {
         model.setExpanded(action.expand, true);
+        onExpandChange?.(action.expand, true);
         void boundRef.current?.ensureDirectoryLoaded(action.expand);
         return;
       }
       if (action.collapse) {
         model.setExpanded(action.collapse, false);
+        onExpandChange?.(action.collapse, false);
         if (action.focus) {
           model.select(action.focus, "replace", "keyboard");
           requestRowFocus(action.focus);
@@ -441,6 +696,11 @@ export function FileTreeView({
     }
 
     const focusedRow = state.rows.find((row): row is TreeEntryRow => row.type === "entry" && row.focused);
+    if (event.key === " " && focusedRow && !event.metaKey && !event.ctrlKey) {
+      event.preventDefault();
+      model.select(focusedRow.path, "toggle", "keyboard");
+      return;
+    }
     if (event.key === "Enter" && focusedRow) {
       event.preventDefault();
       if (focusedRow.kind === "directory") {
@@ -457,7 +717,13 @@ export function FileTreeView({
     }
     if ((event.key === "Delete" || event.key === "Backspace") && writable && state.selected.size > 0) {
       event.preventDefault();
-      setDeleteTarget(Array.from(state.selected));
+      requestDeletePaths(Array.from(state.selected));
+      return;
+    }
+    if ((event.key === "ContextMenu" || (event.key === "F10" && event.shiftKey)) && focusedRow) {
+      event.preventDefault();
+      const anchor = targetEl?.closest<HTMLElement>("[data-wb-tree-row]");
+      if (anchor) openMenuFor(focusedRow, anchor);
       return;
     }
     if (isFilterSeedKey(event)) {
@@ -479,16 +745,21 @@ export function FileTreeView({
     const segEl = hit.closest<HTMLElement>("[data-wb-drop-segment]");
     if (segEl?.dataset.wbDropSegment) {
       const segPath = segEl.dataset.wbDropSegment;
-      return canMoveInto(sources, segPath) ? { directory: segPath, segmentPath: segPath } : null;
+      const top = topLevelPaths(sources);
+      if (!canMoveInto(top, segPath) || (canDrop && !canDrop(top, segPath))) return null;
+      return { directory: segPath, segmentPath: segPath };
     }
     const rowEl = hit.closest<HTMLElement>("[data-wb-tree-row]");
     if (rowEl?.dataset.path) {
       const kind = rowEl.dataset.kind === "directory" ? "directory" : "file";
       const destDir = targetDirectory(rowEl.dataset.path, kind);
-      return canMoveInto(sources, destDir) ? { directory: destDir } : null;
+      const top = topLevelPaths(sources);
+      if (!canMoveInto(top, destDir) || (canDrop && !canDrop(top, destDir))) return null;
+      return { directory: destDir };
     }
     const scrollerEl = hit.closest<HTMLElement>("[data-wb-tree-scroller]");
-    if (scrollerEl && canMoveInto(sources, "")) {
+    const top = topLevelPaths(sources);
+    if (scrollerEl && canMoveInto(top, "") && (!canDrop || canDrop(top, ""))) {
       return { directory: "" };
     }
     return null;
@@ -506,6 +777,10 @@ export function FileTreeView({
   function handleRowDragStart(row: TreeEntryRow, event: DragEvent<HTMLElement>): void {
     if (!isCurrentlyWritable()) return;
     const paths = state.selected.has(row.path) ? Array.from(state.selected) : [row.path];
+    if (canDrag && !canDrag(paths)) {
+      event.preventDefault();
+      return;
+    }
     draggingPathsRef.current = paths;
     setDraggingPaths(paths);
     event.dataTransfer.effectAllowed = "move";
@@ -517,10 +792,20 @@ export function FileTreeView({
     segmentPath: string | undefined,
     event: DragEvent<HTMLElement>,
   ): void {
+    if (!isCurrentlyWritable()) return;
     const sources = draggingPathsRef.current;
-    if (!isCurrentlyWritable() || sources.length === 0) return;
     const destDir = segmentPath ?? targetDirectory(row.path, row.kind);
+    if (sources.length === 0) {
+      if (!onExternalDrop || !event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      event.dataTransfer.dropEffect = "copy";
+      setDropTarget({ directory: destDir, segmentPath });
+      if (destDir) scheduleHoverOpen(destDir);
+      return;
+    }
     if (!canMoveInto(sources, destDir)) return;
+    if (canDrop && !canDrop(topLevelPaths(sources), destDir)) return;
     event.preventDefault();
     event.stopPropagation();
     event.dataTransfer.dropEffect = "move";
@@ -533,11 +818,19 @@ export function FileTreeView({
     segmentPath: string | undefined,
     event: DragEvent<HTMLElement>,
   ): void {
+    if (!isCurrentlyWritable()) return;
     const sources = draggingPathsRef.current;
-    if (!isCurrentlyWritable() || sources.length === 0) return;
+    const destDir = segmentPath ?? targetDirectory(row.path, row.kind);
+    if (sources.length === 0) {
+      if (!onExternalDrop || !event.dataTransfer?.types.includes("Files")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      clearDragState();
+      onExternalDrop(destDir, event.dataTransfer);
+      return;
+    }
     event.preventDefault();
     event.stopPropagation();
-    const destDir = segmentPath ?? targetDirectory(row.path, row.kind);
     clearDragState();
     void executeMove(sources, destDir);
   }
@@ -556,6 +849,10 @@ export function FileTreeView({
       if (!current || current.pointerId !== pointerId) return;
       const currentSelected = model.getSnapshot().selected;
       const sources = currentSelected.has(row.path) ? Array.from(currentSelected) : [row.path];
+      if (canDrag && !canDrag(sources)) {
+        current.timer = undefined;
+        return;
+      }
       current.timer = undefined;
       current.active = true;
       current.sources = sources;
@@ -701,7 +998,9 @@ export function FileTreeView({
             separatorBefore: true,
             testId: "wb-tree-ctx-delete",
             onSelect: () =>
-              setDeleteTarget(state.selected.has(menuRow.path) ? Array.from(state.selected) : [menuRow.path]),
+              requestDeletePaths(
+                state.selected.has(menuRow.path) ? Array.from(state.selected) : [menuRow.path],
+              ),
           },
         ]
       : [];
@@ -710,7 +1009,7 @@ export function FileTreeView({
   const menuItems: readonly ContextMenuItem[] = baseMenuItems.concat(extraItems);
 
   return (
-    <div data-wb-tree="" className={className ? `wb-tree ${className}` : "wb-tree"}>
+    <div data-wb-tree="" className={className ? `wb-tree ${className}` : "wb-tree"} style={style}>
       {filterVisible ? (
         <div
           className="wb-tree-filter-bar"
@@ -724,7 +1023,7 @@ export function FileTreeView({
           <FilterField
             handleRef={filterRef}
             aria-label="Filter files"
-            placeholder="Filter files…"
+            placeholder={filterPlaceholder}
             value={state.filter}
             onValueChange={(next) => model.setFilter(next)}
             onArrowDown={() => {
@@ -741,8 +1040,14 @@ export function FileTreeView({
       <FileTreeViewport
         rows={state.rows}
         parkedIndices={parkedIndices}
-        activeIndex={activeIndex}
-        scrollSeq={scrollSeq}
+        activeIndex={scrollRequest.index >= 0 ? scrollRequest.index : activeIndex}
+        scrollSeq={scrollRequest.seq}
+        scrollBehavior={scrollRequest.behavior}
+        scrollAlign={scrollRequest.align}
+        rowHeight={rowHeight}
+        initialScrollTop={initialScrollTop}
+        onScrollTopChange={onScrollTopChange}
+        scrollerRef={scrollerRef}
         hasEntryTabStop={tabStopIndex >= 0}
         label={label}
         focusModality={state.focusModality}
@@ -753,16 +1058,40 @@ export function FileTreeView({
         directDomUpdates={directDomUpdates}
         onKeyDown={handleTreeKeyDown}
         onSelectStickyAncestor={(dirPath) => model.select(dirPath, "replace", "pointer")}
+        onRootContextMenu={
+          onRequestContextMenu
+            ? (event) => openMenuFor(null, { x: event.clientX, y: event.clientY })
+            : undefined
+        }
+        onRootDragLeave={() => {
+          clearHoverOpen();
+          setDropTarget(null);
+        }}
         onRootDragOver={(event) => {
+          if (!isCurrentlyWritable()) return;
           const sources = draggingPathsRef.current;
-          if (!isCurrentlyWritable() || sources.length === 0) return;
+          if (sources.length === 0) {
+            if (!onExternalDrop || !event.dataTransfer?.types.includes("Files")) return;
+            event.preventDefault();
+            event.dataTransfer.dropEffect = "copy";
+            setDropTarget({ directory: "" });
+            return;
+          }
           if (!canMoveInto(sources, "")) return;
+          if (canDrop && !canDrop(topLevelPaths(sources), "")) return;
           event.preventDefault();
           setDropTarget({ directory: "" });
         }}
         onRootDrop={(event) => {
+          if (!isCurrentlyWritable()) return;
           const sources = draggingPathsRef.current;
-          if (!isCurrentlyWritable() || sources.length === 0) return;
+          if (sources.length === 0) {
+            if (!onExternalDrop || !event.dataTransfer?.types.includes("Files")) return;
+            event.preventDefault();
+            clearDragState();
+            onExternalDrop("", event.dataTransfer);
+            return;
+          }
           event.preventDefault();
           clearDragState();
           void executeMove(sources, "");
@@ -799,6 +1128,9 @@ export function FileTreeView({
               canDrag={writable}
               siblingNames={siblings}
               isTabStop={index === tabStopIndex}
+              active={activePath === row.path}
+              loading={loadingPaths?.has(row.path) ?? false}
+              decoration={renderRowDecoration?.(row)}
               focusSeq={
                 focusRequest &&
                 (focusRequest.path === row.path ||
@@ -807,6 +1139,7 @@ export function FileTreeView({
                   : undefined
               }
               onFocusHandled={handleFocusHandled}
+              onRowElementChange={onRowElementChange}
               onRowFocus={(focusedEntry) => {
                 const current = model.getSnapshot();
                 const alreadyFocused =
@@ -820,13 +1153,19 @@ export function FileTreeView({
                 }
               }}
               onActivate={handleActivateRow}
+              onDoubleClickRename={
+                writable
+                  ? (targetRow, targetPath) =>
+                      model.setDraft({ mode: "rename", path: targetPath ?? targetRow.path })
+                  : undefined
+              }
               onToggleDirectory={toggleDirectory}
               onSegmentClick={handleSegmentClick}
               onContextMenu={(targetRow, event) => {
                 if (!state.selected.has(targetRow.path)) {
                   model.select(targetRow.path, "replace", "pointer");
                 }
-                setContextMenu({ open: true, x: event.clientX, y: event.clientY, row: targetRow });
+                openMenuFor(targetRow, { x: event.clientX, y: event.clientY });
               }}
               onCommitRename={(from, next) => void commitRename(from, next)}
               onCancelDraft={() => {
@@ -847,29 +1186,33 @@ export function FileTreeView({
         }}
       />
 
-      <PointContextMenu
-        open={contextMenu.open && menuItems.length > 0}
-        x={contextMenu.x}
-        y={contextMenu.y}
-        items={menuItems}
-        label="File tree actions"
-        onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
-      />
+      {!onRequestContextMenu ? (
+        <PointContextMenu
+          open={contextMenu.open && menuItems.length > 0}
+          x={contextMenu.x}
+          y={contextMenu.y}
+          items={menuItems}
+          label="File tree actions"
+          onOpenChange={(open) => setContextMenu((prev) => ({ ...prev, open }))}
+        />
+      ) : null}
 
-      <ConfirmDialog
-        open={deleteTarget !== null && deleteTarget.length > 0}
-        title={
-          deleteTarget && deleteTarget.length === 1
-            ? `Delete ${baseName(deleteTarget[0] ?? "")}?`
-            : `Delete ${deleteTarget?.length ?? 0} items?`
-        }
-        description="This removes the selected paths from the workspace."
-        confirmLabel="Delete"
-        danger
-        busy={deleting}
-        onConfirm={() => void confirmDelete()}
-        onCancel={() => setDeleteTarget(null)}
-      />
+      {!onRequestDelete ? (
+        <ConfirmDialog
+          open={deleteTarget !== null && deleteTarget.length > 0}
+          title={
+            deleteTarget && deleteTarget.length === 1
+              ? `Delete ${baseName(deleteTarget[0] ?? "")}?`
+              : `Delete ${deleteTarget?.length ?? 0} items?`
+          }
+          description="This removes the selected paths from the workspace."
+          confirmLabel="Delete"
+          danger
+          busy={deleting}
+          onConfirm={() => void confirmDelete()}
+          onCancel={() => setDeleteTarget(null)}
+        />
+      ) : null}
     </div>
   );
 }

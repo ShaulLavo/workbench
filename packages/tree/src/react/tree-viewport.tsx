@@ -6,9 +6,12 @@ import {
   useMemo,
   useRef,
   useState,
+  type CSSProperties,
   type DragEvent,
   type KeyboardEvent,
+  type MouseEvent,
   type ReactNode,
+  type RefObject,
 } from "react";
 import { observeWorkbenchTheme } from "@shaulavo/workbench-tokens";
 import { computeStickyAncestors, type StickyAncestorsState, type TreeRow } from "../model";
@@ -50,6 +53,12 @@ export interface FileTreeViewportProps {
   readonly parkedIndices: readonly number[];
   readonly activeIndex: number;
   readonly scrollSeq: number;
+  readonly scrollBehavior?: "auto" | "smooth";
+  readonly scrollAlign?: "auto" | "start" | "center" | "end";
+  readonly rowHeight?: number;
+  readonly initialScrollTop?: number;
+  readonly onScrollTopChange?: (scrollTop: number) => void;
+  readonly scrollerRef?: RefObject<HTMLDivElement | null>;
   readonly hasEntryTabStop: boolean;
   readonly label: string;
   readonly focusModality: "pointer" | "keyboard";
@@ -61,6 +70,8 @@ export interface FileTreeViewportProps {
   readonly renderRow: (row: TreeRow, index: number) => ReactNode;
   readonly onKeyDown: (event: KeyboardEvent<HTMLDivElement>) => void;
   readonly onSelectStickyAncestor: (dirPath: string) => void;
+  readonly onRootContextMenu?: (event: MouseEvent<HTMLDivElement>) => void;
+  readonly onRootDragLeave?: (event: DragEvent<HTMLDivElement>) => void;
   readonly onRootDragOver?: (event: DragEvent<HTMLDivElement>) => void;
   readonly onRootDrop?: (event: DragEvent<HTMLDivElement>) => void;
 }
@@ -75,6 +86,12 @@ export function FileTreeViewport({
   parkedIndices,
   activeIndex,
   scrollSeq,
+  scrollBehavior = "auto",
+  scrollAlign = "auto",
+  rowHeight: explicitRowHeight,
+  initialScrollTop,
+  onScrollTopChange,
+  scrollerRef: externalScrollerRef,
   hasEntryTabStop,
   label,
   focusModality,
@@ -86,22 +103,35 @@ export function FileTreeViewport({
   renderRow,
   onKeyDown,
   onSelectStickyAncestor,
+  onRootContextMenu,
+  onRootDragLeave,
   onRootDragOver,
   onRootDrop,
 }: FileTreeViewportProps) {
   // TanStack useVirtualizer returns a mutable instance read on every render.
   "use no memo";
 
-  const scrollerRef = useRef<HTMLDivElement | null>(null);
+  const internalScrollerRef = useRef<HTMLDivElement | null>(null);
   const canvasRef = useRef<HTMLDivElement | null>(null);
   const stickyOverlayRef = useRef<HTMLDivElement | null>(null);
   const stickyKeyRef = useRef("");
   const stickyPushUpRef = useRef(0);
   const lastScrolledSeqRef = useRef(0);
+  const appliedInitialScrollRef = useRef(false);
   const scrollTimerRef = useRef<number | undefined>(undefined);
   const dragPointerYRef = useRef<number | null>(null);
-  const [rowHeight, setRowHeight] = useState(DEFAULT_ROW_HEIGHT);
+  const [measuredRowHeight, setMeasuredRowHeight] = useState(DEFAULT_ROW_HEIGHT);
+  const rowHeight =
+    explicitRowHeight !== undefined && explicitRowHeight > 0 ? explicitRowHeight : measuredRowHeight;
   const [stickyRows, setStickyRows] = useState<StickyAncestorsState["rows"]>([]);
+
+  const attachScroller = useCallback(
+    (node: HTMLDivElement | null) => {
+      internalScrollerRef.current = node;
+      if (externalScrollerRef) externalScrollerRef.current = node;
+    },
+    [externalScrollerRef],
+  );
 
   const getItemKey = useMemo(() => makeKeyReader(rows), [rows]);
   const modeKey = directDomUpdates ? "direct" : "react";
@@ -109,7 +139,7 @@ export function FileTreeViewport({
   // oxlint-disable-next-line react/incompatible-library
   const virtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
     count: rows.length,
-    getScrollElement: () => scrollerRef.current,
+    getScrollElement: () => internalScrollerRef.current,
     estimateSize: () => rowHeight,
     // Fixed-height rows: register in elementsCache without triggering getBoundingClientRect reads.
     measureElement: directDomUpdates ? () => rowHeight : undefined,
@@ -137,8 +167,8 @@ export function FileTreeViewport({
   );
 
   useEffect(() => {
-    const node = scrollerRef.current;
-    const sync = (): void => setRowHeight(readTreeRowHeight(scrollerRef.current));
+    const node = internalScrollerRef.current;
+    const sync = (): void => setMeasuredRowHeight(readTreeRowHeight(internalScrollerRef.current));
     sync();
     window.addEventListener("resize", sync);
     const stopTheme = node ? observeWorkbenchTheme(node, sync) : undefined;
@@ -160,11 +190,23 @@ export function FileTreeViewport({
   }, [rowHeight, virtualizer]);
 
   useLayoutEffect(() => {
+    if (appliedInitialScrollRef.current) return;
+    const node = internalScrollerRef.current;
+    if (!node) return;
+    appliedInitialScrollRef.current = true;
+    if (initialScrollTop !== undefined && initialScrollTop > 0) {
+      node.scrollTop = initialScrollTop;
+      syncStickyFromScrollTop(initialScrollTop);
+    }
+    // oxlint-disable-next-line react/exhaustive-deps
+  }, [initialScrollTop]);
+
+  useLayoutEffect(() => {
     if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
     if (activeIndex < 0 || activeIndex >= rows.length) return;
     lastScrolledSeqRef.current = scrollSeq;
-    virtualizer.scrollToIndex(activeIndex, { align: "auto" });
-  }, [activeIndex, scrollSeq, rows.length, virtualizer]);
+    virtualizer.scrollToIndex(activeIndex, { align: scrollAlign, behavior: scrollBehavior });
+  }, [activeIndex, scrollAlign, scrollBehavior, scrollSeq, rows.length, virtualizer]);
 
   useEffect(() => {
     if (touchDragY !== null) {
@@ -180,7 +222,7 @@ export function FileTreeViewport({
     }
     let frameId = 0;
     const step = (): void => {
-      const node = scrollerRef.current;
+      const node = internalScrollerRef.current;
       const y = dragPointerYRef.current;
       if (node && y !== null) {
         const rect = node.getBoundingClientRect();
@@ -212,12 +254,12 @@ export function FileTreeViewport({
   }
 
   useLayoutEffect(() => {
-    syncStickyFromScrollTop(scrollerRef.current?.scrollTop ?? 0);
+    syncStickyFromScrollTop(internalScrollerRef.current?.scrollTop ?? 0);
     // oxlint-disable-next-line react/exhaustive-deps
   }, [rows, rowHeight]);
 
   function handleScroll(): void {
-    const node = scrollerRef.current;
+    const node = internalScrollerRef.current;
     if (!node) return;
     node.dataset.isScrolling = "true";
     if (scrollTimerRef.current !== undefined) window.clearTimeout(scrollTimerRef.current);
@@ -226,12 +268,18 @@ export function FileTreeViewport({
       delete node.dataset.isScrolling;
     }, SCROLL_IDLE_MS);
     syncStickyFromScrollTop(node.scrollTop);
+    onScrollTopChange?.(node.scrollTop);
   }
 
   const virtualRows = virtualizer.getVirtualItems();
 
+  const wrapStyle =
+    explicitRowHeight !== undefined && explicitRowHeight > 0
+      ? ({ "--wb-tree-row-height": `${explicitRowHeight}px` } as CSSProperties)
+      : undefined;
+
   return (
-    <div className="wb-tree-viewport-wrap">
+    <div className="wb-tree-viewport-wrap" style={wrapStyle}>
       <StickyAncestorsOverlay
         rows={stickyRows}
         initialPushUpPx={stickyPushUpRef.current}
@@ -244,7 +292,7 @@ export function FileTreeViewport({
         }}
       />
       <div
-        ref={scrollerRef}
+        ref={attachScroller}
         role="tree"
         aria-label={label}
         aria-multiselectable="true"
@@ -255,6 +303,17 @@ export function FileTreeViewport({
         className="wb-tree-scroller"
         onScroll={handleScroll}
         onKeyDown={onKeyDown}
+        onContextMenu={(event) => {
+          if (!onRootContextMenu) return;
+          if ((event.target as HTMLElement | null)?.closest("[data-wb-tree-row]")) return;
+          event.preventDefault();
+          onRootContextMenu(event);
+        }}
+        onDragLeave={(event) => {
+          if (event.currentTarget.contains(event.relatedTarget as Node | null)) return;
+          dragPointerYRef.current = null;
+          onRootDragLeave?.(event);
+        }}
         onDragOverCapture={(event) => {
           dragPointerYRef.current = event.clientY;
         }}
