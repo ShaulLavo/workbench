@@ -13,10 +13,41 @@ export interface TerminalSnapshotFileLink {
   readonly text: string;
 }
 
-const TOKEN_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "(", ")", "[", "]", "{", "}"]);
+const NON_PAREN_BOUNDARY_CHARS: readonly string[] = [
+  " ",
+  "\t",
+  '"',
+  "'",
+  "`",
+  "<",
+  ">",
+  "|",
+  "[",
+  "]",
+  "{",
+  "}",
+];
+const NON_PAREN_BOUNDARY = new Set(NON_PAREN_BOUNDARY_CHARS);
+const HARD_BOUNDARY = new Set(NON_PAREN_BOUNDARY_CHARS.concat([")"]));
 const TRAILING_PUNCTUATION = new Set([".", ",", ":", ";", "!", "?"]);
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z\d+.-]*:\/\//;
 const HOSTNAME_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|app|ai|edu|gov|local|localhost)$/i;
+const PAREN_LOCATION_RE = /^\(\d+(?:,\d+)?\)/;
+const PAREN_SUFFIX_RE = /^(.*)\((\d+)(?:,(\d+))?\)$/;
+const KNOWN_BARE_NAMES = new Set([
+  "Makefile",
+  "Dockerfile",
+  "LICENSE",
+  "README",
+  "Jenkinsfile",
+  "Procfile",
+  "Gemfile",
+  "Rakefile",
+  "Justfile",
+  "Brewfile",
+  "Caddyfile",
+  "Vagrantfile",
+]);
 const MAX_CANDIDATE_LENGTH = 1024;
 
 function stripTrailingPunctuation(token: string): string {
@@ -35,11 +66,19 @@ function peelDiagnosticLabel(token: string): { readonly shift: number; readonly 
   const rest = token.slice(colon + 1);
   const bare = stripLineCol(rest).path;
   const leaf = bare.slice(bare.lastIndexOf("/") + 1);
-  if (!hasValidFileExtension(leaf)) return { shift: 0, text: token };
+  if (!isRecognizedFileLeaf(leaf)) return { shift: 0, text: token };
   return { shift: colon + 1, text: rest };
 }
 
 function stripLineCol(candidate: string): TerminalFileReference {
+  const parens = PAREN_SUFFIX_RE.exec(candidate);
+  if (parens?.[1] && parens[2]) {
+    return {
+      path: parens[1],
+      line: Number(parens[2]),
+      column: parens[3] ? Number(parens[3]) : undefined,
+    };
+  }
   const parts = candidate.split(":");
   if (parts.length >= 3) {
     const colStr = parts.at(-1) ?? "";
@@ -70,7 +109,11 @@ function hasValidFileExtension(leaf: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,11}$/.test(ext);
 }
 
-/** Parses one terminal token into a file reference (`path[:line[:col]]`) or `null` if not file-shaped. */
+function isRecognizedFileLeaf(leaf: string): boolean {
+  return KNOWN_BARE_NAMES.has(leaf) || hasValidFileExtension(leaf);
+}
+
+/** Parses one terminal token into a file reference (`path[:line[:col]]` or `path(line[,col])`) or `null`. */
 export function parseTerminalFileReference(rawToken: string): TerminalFileReference | null {
   if (!rawToken || rawToken.length > MAX_CANDIDATE_LENGTH) return null;
   if (URL_SCHEME_RE.test(rawToken)) return null;
@@ -81,12 +124,73 @@ export function parseTerminalFileReference(rawToken: string): TerminalFileRefere
   const bare = ref.path;
   if (!bare || HOSTNAME_RE.test(bare)) return null;
   const leaf = bare.slice(bare.lastIndexOf("/") + 1);
-  if (!hasValidFileExtension(leaf)) return null;
+  if (!isRecognizedFileLeaf(leaf)) return null;
   if (!bare.includes("/") && ref.line === undefined) {
-    // Bare filenames without a directory require a recognized extension and no leading punctuation.
+    // Bare filenames without a directory require a recognized name/extension and no leading punctuation.
     if (!/^[A-Za-z0-9._-]+$/.test(bare)) return null;
   }
   return ref;
+}
+
+function isLocationSuffixDelimiter(ch: string | undefined): boolean {
+  return ch === undefined || HARD_BOUNDARY.has(ch) || TRAILING_PUNCTUATION.has(ch);
+}
+
+function scanMalformedSuffixEnd(text: string, openIndex: number): number {
+  let end = openIndex + 1;
+  while (end < text.length && !NON_PAREN_BOUNDARY.has(text[end] ?? "") && text[end] !== "(") {
+    const ch = text[end];
+    end += 1;
+    if (ch === ")") break;
+  }
+  while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "") && text[end] !== "(") {
+    end += 1;
+  }
+  return end;
+}
+
+function scanRouteGroupSegmentEnd(text: string, openIndex: number): number | null {
+  let close = openIndex + 1;
+  while (close < text.length && !NON_PAREN_BOUNDARY.has(text[close] ?? "")) {
+    if (text[close] === "(") return null;
+    if (text[close] === ")") {
+      return text[close + 1] === "/" ? close + 1 : null;
+    }
+    close += 1;
+  }
+  return null;
+}
+
+function prefixEndsWithRecognizedFile(prefix: string): boolean {
+  if (!prefix) return false;
+  const { text } = peelDiagnosticLabel(prefix);
+  const leaf = text.slice(text.lastIndexOf("/") + 1);
+  return isRecognizedFileLeaf(leaf);
+}
+
+function scanToken(text: string, start: number): { readonly end: number; readonly reject: boolean } {
+  let end = start;
+  while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "")) {
+    if (text[end] !== "(") {
+      end += 1;
+      continue;
+    }
+    const routeGroupEnd = end > start && text[end - 1] === "/" ? scanRouteGroupSegmentEnd(text, end) : null;
+    if (routeGroupEnd !== null) {
+      end = routeGroupEnd;
+      continue;
+    }
+    if (!prefixEndsWithRecognizedFile(text.slice(start, end))) {
+      return { end, reject: false };
+    }
+    const validLoc = PAREN_LOCATION_RE.exec(text.slice(end));
+    const afterSuffix = validLoc ? text[end + validLoc[0].length] : undefined;
+    if (validLoc && isLocationSuffixDelimiter(afterSuffix)) {
+      return { end: end + validLoc[0].length, reject: false };
+    }
+    return { end: scanMalformedSuffixEnd(text, end), reject: true };
+  }
+  return { end, reject: false };
 }
 
 function matchSnapshotToken(
@@ -122,16 +226,16 @@ export function findTerminalSnapshotFileLinks(
   let cursor = 0;
 
   while (cursor < text.length) {
-    if (TOKEN_BOUNDARY.has(text[cursor] ?? "")) {
+    const ch = text[cursor] ?? "";
+    if (HARD_BOUNDARY.has(ch) || ch === "(") {
       cursor += 1;
       continue;
     }
-    let end = cursor;
-    while (end < text.length && !TOKEN_BOUNDARY.has(text[end] ?? "")) {
-      end += 1;
+    const { end, reject } = scanToken(text, cursor);
+    if (!reject) {
+      const matched = matchSnapshotToken(line, cursor, end);
+      if (matched) results.push(matched);
     }
-    const matched = matchSnapshotToken(line, cursor, end);
-    if (matched) results.push(matched);
     cursor = end;
   }
 

@@ -14,7 +14,7 @@ export interface PreviewLocation {
 export type PreviewFrameEvent =
   | { readonly type: "bridge-ready"; readonly supported: boolean }
   | { readonly type: "started"; readonly location: PreviewLocation }
-  | { readonly type: "navigate"; readonly location: PreviewLocation }
+  | { readonly type: "navigate"; readonly location: PreviewLocation; readonly replace?: boolean }
   | { readonly type: "title"; readonly title: string }
   | { readonly type: "console"; readonly level: "log" | "warn" | "error"; readonly text: string }
   | { readonly type: "error"; readonly message: string };

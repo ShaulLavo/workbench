@@ -45,6 +45,13 @@ function recordHistoryVisit(prev: PreviewHistoryState, key: string, path: string
   return { key, entries: nextEntries, index: nextEntries.length - 1 };
 }
 
+function replaceHistoryVisit(prev: PreviewHistoryState, key: string, path: string): PreviewHistoryState {
+  if (prev.key !== key) return createInitialHistory(key, path);
+  if (prev.entries[prev.index] === path) return prev;
+  const nextEntries = prev.entries.slice(0, prev.index).concat([path], prev.entries.slice(prev.index + 1));
+  return { key, entries: nextEntries, index: prev.index };
+}
+
 export interface PreviewPaneProps {
   readonly adapter: PreviewAdapter;
   readonly initialPath?: string;
@@ -184,6 +191,8 @@ export function PreviewPane({
   const controllerRef = useRef<PreviewFrameController | null>(null);
   const editingPathRef = useRef(false);
   const committedPathRef = useRef(normalizedInitial);
+  const lastAttachedPortRef = useRef<number | undefined>(undefined);
+  const hasAttachedOnceRef = useRef(false);
 
   const emitConsole = useEffectEvent(
     (entry: { readonly level: "log" | "warn" | "error"; readonly text: string }) => {
@@ -199,6 +208,20 @@ export function PreviewPane({
 
   const activeServer = servers.find((srv) => srv.port === selectedPort) ?? servers[0];
   const activePort = activeServer?.port;
+  const [trackedPort, setTrackedPort] = useState<number | undefined>(activePort);
+  const [hasHadPort, setHasHadPort] = useState(activePort !== undefined);
+  if (trackedPort !== activePort) {
+    const hadPreviousPort = trackedPort !== undefined || hasHadPort;
+    setTrackedPort(activePort);
+    if (activePort !== undefined) {
+      if (!hasHadPort) setHasHadPort(true);
+      if (selectedPort !== activePort) setSelectedPort(activePort);
+    }
+    if (hadPreviousPort) {
+      setCommittedPath("/");
+      setPathDraft("/");
+    }
+  }
   const viewportPreset = controlledViewport ?? internalViewport;
   const adapterReady =
     bootState.adapter === adapter ? bootState.ready : adapter.kind === "none" || servers.length > 0;
@@ -251,6 +274,10 @@ export function PreviewPane({
     if (!frame || !adapterReady || bootError || activePort === undefined) {
       controllerRef.current?.dispose();
       controllerRef.current = null;
+      if (activePort === undefined) {
+        lastAttachedPortRef.current = undefined;
+        committedPathRef.current = hasAttachedOnceRef.current ? "/" : normalizedInitial;
+      }
       return;
     }
 
@@ -281,7 +308,12 @@ export function PreviewPane({
         setCommittedPath(nextPath);
         if (!editingPathRef.current) setPathDraft(nextPath);
         if (historyMode === "pane") {
-          setHistoryState((prev) => recordHistoryVisit(prev, sessionKey, nextPath));
+          const replace = event.type === "navigate" && event.replace === true;
+          setHistoryState((prev) =>
+            replace
+              ? replaceHistoryVisit(prev, sessionKey, nextPath)
+              : recordHistoryVisit(prev, sessionKey, nextPath),
+          );
         } else {
           syncControllerNav(controllerRef.current);
         }
@@ -323,7 +355,17 @@ export function PreviewPane({
       }
     };
 
-    const initialFramePath = committedPathRef.current;
+    const switchedPort =
+      lastAttachedPortRef.current !== undefined
+        ? lastAttachedPortRef.current !== activePort
+        : hasAttachedOnceRef.current;
+    lastAttachedPortRef.current = activePort;
+    hasAttachedOnceRef.current = true;
+    const initialFramePath = switchedPort ? "/" : committedPathRef.current;
+    if (switchedPort) {
+      committedPathRef.current = "/";
+      editingPathRef.current = false;
+    }
     if (historyMode === "pane") {
       setHistoryState(createInitialHistory(sessionKey, initialFramePath));
     }
@@ -348,7 +390,7 @@ export function PreviewPane({
         controllerRef.current = null;
       }
     };
-  }, [adapter, adapterReady, bootError, activePort, sessionKey, historyMode]);
+  }, [adapter, adapterReady, bootError, activePort, sessionKey, historyMode, normalizedInitial]);
 
   function setViewport(next: PreviewViewportPreset): void {
     if (onViewportPresetChange) onViewportPresetChange(next);
@@ -468,9 +510,6 @@ export function PreviewPane({
               onChange={(event) => {
                 const nextPort = Number(event.target.value);
                 if (!Number.isFinite(nextPort)) return;
-                committedPathRef.current = "/";
-                setCommittedPath("/");
-                setPathDraft("/");
                 setSelectedPort(nextPort);
               }}
             >

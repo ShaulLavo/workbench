@@ -557,4 +557,131 @@ describe("@shaulavo/workbench-preview", () => {
     expect(backSpy).toHaveBeenCalledTimes(1);
     expect(navigateSpy).not.toHaveBeenCalled();
   });
+
+  it("replaces current pane history entry when navigate has replace:true and resets path to / on automatic port fallback", async () => {
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 3000 }, { port: 3001 }]);
+    const attachCalls: { readonly port: number; readonly initialPath: string | undefined }[] = [];
+    const navigated: string[] = [];
+    let emitFrameEvent: ((event: PreviewFrameEvent) => void) | undefined;
+
+    const adapter: PreviewAdapter = {
+      kind: "isolated",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      tabUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      locate: () => undefined,
+      attachFrame(_frame, port, onEvent, options) {
+        attachCalls.push({ port, initialPath: options?.initialPath });
+        emitFrameEvent = onEvent;
+        return {
+          onFrameLoad: () => {},
+          navigate: (path) => navigated.push(path),
+          reload: () => {
+            onEvent({ type: "navigate", location: { port, path: "/about" }, replace: true });
+          },
+          back: () => {},
+          forward: () => {},
+          dispose: () => {},
+        };
+      },
+    };
+
+    const host = mount(<PreviewPane adapter={adapter} historyMode="pane" alwaysShowPortSelect />);
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    // Switch to port 3001 and navigate to /about#team.
+    const portSelect = host.querySelector<HTMLSelectElement>('[data-testid="wb-preview-port-select"]')!;
+    act(() => {
+      portSelect.value = "3001";
+      portSelect.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3001, initialPath: "/" });
+
+    act(() => {
+      emitFrameEvent?.({ type: "navigate", location: { port: 3001, path: "/about#team" } });
+    });
+    const urlInput = host.querySelector<HTMLInputElement>('[data-testid="wb-preview-url-input"]')!;
+    expect(urlInput.value).toBe("/about#team");
+
+    // Reload strips fragment with replace:true -> URL becomes /about and one Back returns directly to /.
+    act(() => {
+      host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-reload"]')?.click();
+    });
+    expect(urlInput.value).toBe("/about");
+
+    const backBtn = host.querySelector<HTMLButtonElement>('[data-testid="wb-preview-back"]')!;
+    act(() => {
+      backBtn.click();
+    });
+    expect(navigated.at(-1)).toBe("/");
+    expect(backBtn.disabled).toBe(true);
+
+    // Navigate back to /about on 3001, then stop port 3001 -> automatic fallback to 3000 resets path to /.
+    act(() => {
+      emitFrameEvent?.({ type: "navigate", location: { port: 3001, path: "/about" } });
+    });
+    expect(urlInput.value).toBe("/about");
+
+    act(() => {
+      servers.set([{ port: 3000 }]);
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3000, initialPath: "/" });
+    expect(urlInput.value).toBe("/");
+    const iframe = host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]');
+    expect(iframe?.getAttribute("src")).toBe("http://127.0.0.1:3000/");
+  });
+
+  it("preserves initialPath on first attach under StrictMode but resets to / after all servers stop and restart", async () => {
+    const { StrictMode } = await import("react");
+    const servers = createSubscribable<readonly PreviewServerInfo[]>([{ port: 3000 }]);
+    const attachCalls: { readonly port: number; readonly initialPath: string | undefined }[] = [];
+    const adapter: PreviewAdapter = {
+      kind: "remote",
+      servers,
+      whenReady: async () => {},
+      frameUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      tabUrl: (port, path) => `http://127.0.0.1:${port}${path}`,
+      locate: () => undefined,
+      attachFrame(_frame, port, _onEvent, options) {
+        attachCalls.push({ port, initialPath: options?.initialPath });
+        return {
+          onFrameLoad: () => {},
+          navigate: () => {},
+          reload: () => {},
+          back: () => {},
+          forward: () => {},
+          dispose: () => {},
+        };
+      },
+    };
+
+    const host = mount(
+      <StrictMode>
+        <PreviewPane adapter={adapter} initialPath="/welcome" historyMode="pane" />
+      </StrictMode>,
+    );
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3000, initialPath: "/welcome" });
+    expect(
+      host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]')?.getAttribute("src"),
+    ).toBe("http://127.0.0.1:3000/welcome");
+
+    // Stop all servers, then restart -> must open at "/" instead of "/welcome".
+    act(() => {
+      servers.set([]);
+    });
+    act(() => {
+      servers.set([{ port: 3000 }]);
+    });
+    expect(attachCalls.at(-1)).toEqual({ port: 3000, initialPath: "/" });
+    expect(host.querySelector<HTMLInputElement>('[data-testid="wb-preview-url-input"]')?.value).toBe("/");
+    expect(
+      host.querySelector<HTMLIFrameElement>('[data-testid="wb-preview-iframe"]')?.getAttribute("src"),
+    ).toBe("http://127.0.0.1:3000/");
+  });
 });

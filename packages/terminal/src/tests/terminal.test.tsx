@@ -90,6 +90,7 @@ function createMockPanelTerminal(frameListeners: Set<() => void>, pasteSpy: () =
     reset: () => {},
     getSelection: () => "",
     selectAll: () => {},
+    focus: () => {},
     paste: pasteSpy,
     onFrame: (cb: () => void) => {
       frameListeners.add(cb);
@@ -1086,6 +1087,468 @@ describe("@shaulavo/workbench-terminal", () => {
     } finally {
       createSpy.mockRestore();
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it("parses parenthesized file(line,col) diagnostics and bare Makefile/Dockerfile names", () => {
+    expect(parseTerminalFileReference("src/App.tsx(12,4)")).toEqual({
+      path: "src/App.tsx",
+      line: 12,
+      column: 4,
+    });
+    expect(parseTerminalFileReference("src/App.tsx(12)")).toEqual({
+      path: "src/App.tsx",
+      line: 12,
+    });
+    expect(parseTerminalFileReference("Makefile")).toEqual({ path: "Makefile" });
+    expect(parseTerminalFileReference("Makefile:10")).toEqual({ path: "Makefile", line: 10 });
+    expect(parseTerminalFileReference("Dockerfile")).toEqual({ path: "Dockerfile" });
+
+    const text =
+      "error:src/App.tsx(12,4): see Makefile, src/app/(dashboard)/page.tsx:12:4, error:(src/err.ts:9:1), include(src/inc.ts) and (src/other.ts:7:2)";
+    const boundaries = Array.from({ length: text.length + 1 }, (_, i) => i);
+    const links = findTerminalSnapshotFileLinks({
+      text,
+      startCellByTextBoundary: boundaries,
+      endCellByTextBoundary: boundaries,
+    });
+    expect(links.map((l) => l.reference)).toEqual([
+      { path: "src/App.tsx", line: 12, column: 4 },
+      { path: "Makefile" },
+      { path: "src/app/(dashboard)/page.tsx", line: 12, column: 4 },
+      { path: "src/err.ts", line: 9, column: 1 },
+      { path: "src/inc.ts" },
+      { path: "src/other.ts", line: 7, column: 2 },
+    ]);
+
+    // Malformed parenthesized suffixes must not emit partial paths or bogus line links,
+    // while valid references immediately following a malformed suffix still parse.
+    const malformed = "src/App.tsx(12,) src/App.tsx(12,x) src/App.tsx(12,4)junk src/App.tsx(12,x)junk.ts:9:1";
+    const malformedBounds = Array.from({ length: malformed.length + 1 }, (_, i) => i);
+    expect(
+      findTerminalSnapshotFileLinks({
+        text: malformed,
+        startCellByTextBoundary: malformedBounds,
+        endCellByTextBoundary: malformedBounds,
+      }),
+    ).toEqual([]);
+
+    const adjacent = "src/App.tsx(12,x):(src/err.ts:9:1)";
+    const adjacentBounds = Array.from({ length: adjacent.length + 1 }, (_, i) => i);
+    expect(
+      findTerminalSnapshotFileLinks({
+        text: adjacent,
+        startCellByTextBoundary: adjacentBounds,
+        endCellByTextBoundary: adjacentBounds,
+      }).map((l) => l.reference),
+    ).toEqual([{ path: "src/err.ts", line: 9, column: 1 }]);
+  });
+
+  it("moves focus to the terminal on New terminal, tab click, and Split while keeping arrow-key navigation on tabs", async () => {
+    const focusSpies = new Map<string, ReturnType<typeof vi.fn>>();
+    let nextId = 2;
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      const focusSpy = vi.fn();
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "t1", title: "bash 1", status: "ready" },
+      { id: "t2", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("t2");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const closed: string[] = [];
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      async createSession() {
+        nextId += 1;
+        const id = `t${nextId}`;
+        sessions.set(sessions.getSnapshot().concat([{ id, title: `bash ${nextId}`, status: "ready" }]));
+        activeId.set(id);
+        return id;
+      },
+      async closeSession(id) {
+        closed.push(id);
+      },
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {
+        splitId.set(splitId.getSnapshot() ? undefined : "t1");
+      },
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            focusSpies.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // ArrowRight from tab 2 wraps to tab 1, selects t1, and keeps keyboard focus on tab 1's button.
+      const tab2Btn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-t2"] button[role="tab"]',
+      )!;
+      const tab1Btn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-t1"] button[role="tab"]',
+      )!;
+      act(() => {
+        tab2Btn.focus();
+        tab2Btn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(activeId.getSnapshot()).toBe("t1");
+      expect(document.activeElement).toBe(tab1Btn);
+      expect(focusSpies.get("t1")).not.toHaveBeenCalled();
+
+      // Clicking tab 2 selects t2 and moves focus to t2's terminal.
+      act(() => {
+        tab2Btn.click();
+      });
+      expect(activeId.getSnapshot()).toBe("t2");
+      expect(focusSpies.get("t2")).toHaveBeenCalledTimes(1);
+
+      // Clicking New terminal creates t3 and focuses t3 once attached.
+      const newBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
+      act(() => {
+        newBtn.focus();
+        newBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(activeId.getSnapshot()).toBe("t3");
+      expect(focusSpies.get("t3")).toHaveBeenCalledTimes(1);
+
+      // Clicking Split focuses the split terminal (t1).
+      const splitBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-split"]')!;
+      act(() => {
+        splitBtn.click();
+      });
+      expect(splitId.getSnapshot()).toBe("t1");
+      expect(focusSpies.get("t1")).toHaveBeenCalledTimes(1);
+
+      // Delete on a focused tab closes that session.
+      act(() => {
+        tab1Btn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(closed).toEqual(["t1"]);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("restores focus on async Delete, expands collapsed empty New, and ignores stale createSession focus", async () => {
+    const focusSpies = new Map<string, ReturnType<typeof vi.fn>>();
+    let createCalls = 0;
+    let resolveCreateB: (() => void) | undefined;
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      createCalls += 1;
+      // Delay the second terminal creation (session "b" when switching from "a") until after New resolves.
+      if (createCalls === 2) {
+        await new Promise<void>((resolve) => {
+          resolveCreateB = resolve;
+        });
+      }
+      const focusSpy = vi.fn();
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "a", title: "bash 1", status: "ready" },
+      { id: "b", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("a");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    let resolveCreate: ((id: string) => void) | undefined;
+    let resolveCloseLast: (() => void) | undefined;
+    const onToggleCollapsed = vi.fn();
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession() {
+        return new Promise<string>((resolve) => {
+          resolveCreate = resolve;
+        });
+      },
+      async closeSession(id) {
+        if (sessions.getSnapshot().length === 1) {
+          // Simulate an async close with an interim status update before the closing tab disappears.
+          sessions.set([{ id, title: "bash 2", status: "exited" }]);
+          await new Promise<void>((resolve) => {
+            resolveCloseLast = resolve;
+          });
+        }
+        const next = sessions.getSnapshot().filter((s) => s.id !== id);
+        sessions.set(next);
+        if (activeId.getSnapshot() === id) activeId.set(next[0]?.id);
+      },
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive={false}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            focusSpies.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // Click New, then click B while B is still opening -> late New resolution must not overwrite B's pending focus.
+      const newBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
+      const tabBBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      act(() => {
+        newBtn.click();
+        tabBBtn.click();
+      });
+      await act(async () => {
+        resolveCreate?.("c");
+        await flushMicrotasks();
+      });
+      expect(focusSpies.get("b")).toBeUndefined();
+      await act(async () => {
+        resolveCreateB?.();
+        await flushMicrotasks();
+      });
+      expect(focusSpies.get("b")).toHaveBeenCalledTimes(1);
+
+      // Delete on focused tab A moves focus to surviving tab B.
+      const tabABtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-a"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabABtn.focus();
+        tabABtn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      const survivingB = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      expect(document.activeElement).toBe(survivingB);
+
+      // Async Delete on last tab B with an interim status update keeps restore pending until B disappears.
+      act(() => {
+        survivingB.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      await act(async () => {
+        resolveCloseLast?.();
+        await flushMicrotasks();
+      });
+      expect(document.activeElement).toBe(newBtn);
+
+      // Empty New while collapsed calls onToggleCollapsed.
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            <TerminalPanel
+              adapter={adapter}
+              collapsed
+              onToggleCollapsed={onToggleCollapsed}
+              loadRuntime={async () => ({}) as GhosttyRuntime}
+            />
+          </WorkbenchPortalProvider>,
+        );
+      });
+      act(() => {
+        root.querySelector<HTMLButtonElement>('[data-testid="wb-term-empty-new"]')?.click();
+      });
+      expect(onToggleCollapsed).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
+    }
+  });
+
+  it("does not steal focus when user moves focus elsewhere during async Delete", async () => {
+    const createSpy = vi
+      .spyOn(Terminal, "create")
+      .mockImplementation(async () => createMockPanelTerminal(new Set(), () => {}));
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "only", title: "bash 1", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("only");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    let resolveClose: (() => void) | undefined;
+
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "next",
+      async closeSession(id) {
+        sessions.set([{ id, title: "bash 1", status: "exited" }]);
+        await new Promise<void>((resolve) => {
+          resolveClose = resolve;
+        });
+        sessions.set([]);
+        activeId.set(undefined);
+      },
+      selectSession: (id) => activeId.set(id),
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    const externalInput = document.createElement("input");
+    document.body.appendChild(externalInput);
+    try {
+      const root = mount(
+        <TerminalPanel adapter={adapter} loadRuntime={async () => ({}) as GhosttyRuntime} />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const tabBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-only"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabBtn.focus();
+        tabBtn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      // User moves focus to an unrelated input before the async close completes.
+      act(() => {
+        externalInput.focus();
+      });
+      await act(async () => {
+        resolveClose?.();
+        await flushMicrotasks();
+      });
+      expect(document.activeElement).toBe(externalInput);
+    } finally {
+      externalInput.remove();
+      createSpy.mockRestore();
+    }
+  });
+
+  it("removes disposed terminals from the focus map when keepAlive is false so switching and splitting never focus a disposed terminal", async () => {
+    const liveFocusBySession = new Map<string, ReturnType<typeof vi.fn>>();
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      let disposed = false;
+      const focusSpy = vi.fn(() => {
+        if (disposed) throw new Error("Terminal is not open; lifecycle is disposed");
+      });
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        {
+          focus: focusSpy,
+          dispose: vi.fn(() => {
+            disposed = true;
+          }),
+        },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "a", title: "bash 1", status: "ready" },
+      { id: "b", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("a");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      createSession: async () => "c",
+      closeSession: async () => {},
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {
+        splitId.set(splitId.getSnapshot() ? undefined : "a");
+      },
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive={false}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            liveFocusBySession.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // Switch A -> B (unmounts and disposes A).
+      const tabBBtn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-b"] button[role="tab"]',
+      )!;
+      act(() => {
+        tabBBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(liveFocusBySession.get("b")).toHaveBeenCalledTimes(1);
+
+      // Click Split to show A beside B: must not call focus() on disposed A, and must focus the fresh A once attached.
+      const firstAFocus = liveFocusBySession.get("a")!;
+      const splitBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-split"]')!;
+      act(() => {
+        splitBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const freshAFocus = liveFocusBySession.get("a")!;
+      expect(freshAFocus).not.toBe(firstAFocus);
+      expect(freshAFocus).toHaveBeenCalledTimes(1);
+    } finally {
+      createSpy.mockRestore();
     }
   });
 
