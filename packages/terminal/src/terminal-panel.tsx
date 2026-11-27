@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode, type RefCallback } from "react";
+import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode, type RefCallback } from "react";
 import type {
   HotkeyAdapter,
   Subscribable,
@@ -64,6 +64,19 @@ function SessionStatusDot({ status }: { readonly status: TerminalSessionInfo["st
   return <span className="wb-terminal-status-dot" data-status={status} aria-label={`Terminal ${status}`} />;
 }
 
+function resolveTabNavTarget(
+  sessions: readonly TerminalSessionInfo[],
+  index: number,
+  key: string,
+): TerminalSessionInfo | undefined {
+  if (sessions.length < 2) return undefined;
+  if (key === "ArrowRight") return sessions[(index + 1) % sessions.length];
+  if (key === "ArrowLeft") return sessions[(index - 1 + sessions.length) % sessions.length];
+  if (key === "Home") return sessions[0];
+  if (key === "End") return sessions.at(-1);
+  return undefined;
+}
+
 /**
  * Multi-session terminal panel with session tabs, IME-safe inline tab rename, live status dot,
  * split pair support, and distinct view detach vs explicit session closure.
@@ -111,14 +124,13 @@ export function TerminalPanel({
   const activeId = useSubscribable(adapter.activeId);
   const splitId = useSubscribable(adapter.splitId);
   const [renamingId, setRenamingId] = useState<string | null>(null);
+  const [focusTick, setFocusTick] = useState(0);
   const headerRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusSessionRef = useRef<string | null>(null);
+  const pendingFocusRef = useRef<string | null>(null);
+  const terminalsByIdRef = useRef(new Map<string, Terminal>());
 
-  useEffect(() => {
-    if (renamingId !== null) return;
-    const targetSessionId = restoreFocusSessionRef.current;
-    if (!targetSessionId) return;
-    restoreFocusSessionRef.current = null;
+  function focusTabButton(targetSessionId: string): void {
     const header = headerRef.current;
     if (!header) return;
     for (const tab of header.querySelectorAll<HTMLElement>("[data-wb-term-session]")) {
@@ -126,13 +138,70 @@ export function TerminalPanel({
       tab.querySelector<HTMLButtonElement>('button[role="tab"]')?.focus();
       return;
     }
+  }
+
+  function requestTerminalFocus(sessionId: string | undefined): void {
+    if (!sessionId) return;
+    pendingFocusRef.current = sessionId;
+    if (terminalsByIdRef.current.has(sessionId)) {
+      setFocusTick((tick) => tick + 1);
+    }
+  }
+
+  function clearPendingTerminalFocus(): void {
+    pendingFocusRef.current = null;
+  }
+
+  useEffect(() => {
+    if (renamingId !== null) return;
+    const targetSessionId = restoreFocusSessionRef.current;
+    if (!targetSessionId) return;
+    restoreFocusSessionRef.current = null;
+    focusTabButton(targetSessionId);
   }, [renamingId]);
+
+  useEffect(() => {
+    const activeIds = new Set(sessions.map((session) => session.id));
+    for (const id of terminalsByIdRef.current.keys()) {
+      if (!activeIds.has(id)) terminalsByIdRef.current.delete(id);
+    }
+  }, [sessions]);
 
   const primarySession = sessions.find((s) => s.id === activeId) ?? sessions[0];
   const secondarySession =
     splitId && primarySession && splitId !== primarySession.id
       ? sessions.find((s) => s.id === splitId)
       : undefined;
+
+  useEffect(() => {
+    const targetId = pendingFocusRef.current;
+    if (!targetId || collapsed || !active) return;
+    const visible = targetId === primarySession?.id || targetId === secondarySession?.id;
+    if (!visible) return;
+    const term = terminalsByIdRef.current.get(targetId);
+    if (!term) return;
+    pendingFocusRef.current = null;
+    term.focus();
+  }, [focusTick, collapsed, active, primarySession?.id, secondarySession?.id]);
+
+  function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, sessionId: string, index: number): void {
+    if (event.key === "F2") {
+      event.preventDefault();
+      setRenamingId(sessionId);
+      return;
+    }
+    if (event.key === "Delete") {
+      event.preventDefault();
+      void adapter.closeSession(sessionId);
+      return;
+    }
+    const next = resolveTabNavTarget(sessions, index, event.key);
+    if (!next) return;
+    event.preventDefault();
+    clearPendingTerminalFocus();
+    adapter.selectSession(next.id);
+    focusTabButton(next.id);
+  }
 
   function renderSessionView(
     session: TerminalSessionInfo,
@@ -166,8 +235,18 @@ export function TerminalPanel({
         showAccessoryBar={showBar}
         extraContextMenuItems={extraContextMenuItemsForSession?.(session.id)}
         onPointerDown={() => adapter.selectSession(session.id)}
-        onTerminalReady={onTerminalReady ? (term) => onTerminalReady(session.id, term) : undefined}
-        onAttached={onAttached ? (term, att) => onAttached(session.id, term, att) : undefined}
+        onTerminalReady={(term) => {
+          terminalsByIdRef.current.set(session.id, term);
+          onTerminalReady?.(session.id, term);
+        }}
+        onAttached={(term, att) => {
+          terminalsByIdRef.current.set(session.id, term);
+          onAttached?.(session.id, term, att);
+          if (pendingFocusRef.current === session.id && !collapsed && active && position !== "hidden") {
+            pendingFocusRef.current = null;
+            term.focus();
+          }
+        }}
         onFramePainted={onFramePainted ? (term) => onFramePainted(session.id, term) : undefined}
         onTitleChange={onTitleChange ? (title) => onTitleChange(session.id, title) : undefined}
         onProcessChange={onProcessChange ? (proc) => onProcessChange(session.id, proc) : undefined}
@@ -189,7 +268,7 @@ export function TerminalPanel({
       <div ref={headerRef} className="wb-terminal-header">
         <div ref={tabStripRef} className="wb-terminal-strip-wrap">
           <BarTabStrip label="Terminal sessions">
-            {sessions.map((session) => {
+            {sessions.map((session, index) => {
               const isActive = session.id === primarySession?.id;
               const isRenaming = renamingId === session.id;
               if (isRenaming) {
@@ -226,13 +305,10 @@ export function TerminalPanel({
                   onActivate={() => {
                     adapter.selectSession(session.id);
                     if (collapsed) onToggleCollapsed?.();
+                    requestTerminalFocus(session.id);
                   }}
                   onDoubleClickLabel={() => setRenamingId(session.id)}
-                  onTabKeyDown={(event) => {
-                    if (event.key !== "F2") return;
-                    event.preventDefault();
-                    setRenamingId(session.id);
-                  }}
+                  onTabKeyDown={(event) => handleTabKeyDown(event, session.id, index)}
                   onClose={() => {
                     void adapter.closeSession(session.id);
                   }}
@@ -266,7 +342,9 @@ export function TerminalPanel({
             title="New terminal"
             data-testid="wb-term-new"
             onClick={() => {
-              void adapter.createSession();
+              void Promise.resolve(adapter.createSession()).then((id) => {
+                if (id) requestTerminalFocus(id);
+              });
               if (collapsed) onToggleCollapsed?.();
             }}
           >
@@ -284,6 +362,7 @@ export function TerminalPanel({
             onClick={() => {
               adapter.toggleSplit(primarySession?.id);
               if (collapsed) onToggleCollapsed?.();
+              requestTerminalFocus(adapter.splitId.getSnapshot() ?? adapter.activeId.getSnapshot());
             }}
           >
             <StrokeIcon name="split" />
@@ -353,7 +432,9 @@ export function TerminalPanel({
             className="wb-button wb-button-primary"
             data-testid="wb-term-empty-new"
             onClick={() => {
-              void adapter.createSession();
+              void Promise.resolve(adapter.createSession()).then((id) => {
+                if (id) requestTerminalFocus(id);
+              });
             }}
           >
             New terminal

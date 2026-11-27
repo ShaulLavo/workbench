@@ -90,6 +90,7 @@ function createMockPanelTerminal(frameListeners: Set<() => void>, pasteSpy: () =
     reset: () => {},
     getSelection: () => "",
     selectAll: () => {},
+    focus: () => {},
     paste: pasteSpy,
     onFrame: (cb: () => void) => {
       frameListeners.add(cb);
@@ -1086,6 +1087,147 @@ describe("@shaulavo/workbench-terminal", () => {
     } finally {
       createSpy.mockRestore();
       Object.defineProperty(navigator, "clipboard", { configurable: true, value: originalClipboard });
+    }
+  });
+
+  it("parses parenthesized file(line,col) diagnostics and bare Makefile/Dockerfile names", () => {
+    expect(parseTerminalFileReference("src/App.tsx(12,4)")).toEqual({
+      path: "src/App.tsx",
+      line: 12,
+      column: 4,
+    });
+    expect(parseTerminalFileReference("src/App.tsx(12)")).toEqual({
+      path: "src/App.tsx",
+      line: 12,
+    });
+    expect(parseTerminalFileReference("Makefile")).toEqual({ path: "Makefile" });
+    expect(parseTerminalFileReference("Makefile:10")).toEqual({ path: "Makefile", line: 10 });
+    expect(parseTerminalFileReference("Dockerfile")).toEqual({ path: "Dockerfile" });
+
+    const text = "error:src/App.tsx(12,4): see Makefile and (src/other.ts:7:2)";
+    const boundaries = Array.from({ length: text.length + 1 }, (_, i) => i);
+    const links = findTerminalSnapshotFileLinks({
+      text,
+      startCellByTextBoundary: boundaries,
+      endCellByTextBoundary: boundaries,
+    });
+    expect(links.map((l) => l.reference)).toEqual([
+      { path: "src/App.tsx", line: 12, column: 4 },
+      { path: "Makefile" },
+      { path: "src/other.ts", line: 7, column: 2 },
+    ]);
+  });
+
+  it("moves focus to the terminal on New terminal, tab click, and Split while keeping arrow-key navigation on tabs", async () => {
+    const focusSpies = new Map<string, ReturnType<typeof vi.fn>>();
+    let nextId = 2;
+    const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      const focusSpy = vi.fn();
+      return Object.assign(
+        createMockPanelTerminal(new Set(), () => {}),
+        { focus: focusSpy },
+      );
+    });
+
+    const sessions = createSubscribable<readonly TerminalSessionInfo[]>([
+      { id: "t1", title: "bash 1", status: "ready" },
+      { id: "t2", title: "bash 2", status: "ready" },
+    ]);
+    const activeId = createSubscribable<string | undefined>("t2");
+    const splitId = createSubscribable<string | undefined>(undefined);
+    const closed: string[] = [];
+    const adapter: TerminalAdapter = {
+      sessions,
+      activeId,
+      splitId,
+      async createSession() {
+        nextId += 1;
+        const id = `t${nextId}`;
+        sessions.set(sessions.getSnapshot().concat([{ id, title: `bash ${nextId}`, status: "ready" }]));
+        activeId.set(id);
+        return id;
+      },
+      async closeSession(id) {
+        closed.push(id);
+      },
+      selectSession(id) {
+        activeId.set(id);
+      },
+      renameSession() {},
+      toggleSplit() {
+        splitId.set(splitId.getSnapshot() ? undefined : "t1");
+      },
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    try {
+      const root = mount(
+        <TerminalPanel
+          adapter={adapter}
+          keepAlive
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+          onTerminalReady={(id, term) => {
+            focusSpies.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
+          }}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+
+      // ArrowRight from tab 2 wraps to tab 1, selects t1, and keeps keyboard focus on tab 1's button.
+      const tab2Btn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-t2"] button[role="tab"]',
+      )!;
+      const tab1Btn = root.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-t1"] button[role="tab"]',
+      )!;
+      act(() => {
+        tab2Btn.focus();
+        tab2Btn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(activeId.getSnapshot()).toBe("t1");
+      expect(document.activeElement).toBe(tab1Btn);
+      expect(focusSpies.get("t1")).not.toHaveBeenCalled();
+
+      // Clicking tab 2 selects t2 and moves focus to t2's terminal.
+      act(() => {
+        tab2Btn.click();
+      });
+      expect(activeId.getSnapshot()).toBe("t2");
+      expect(focusSpies.get("t2")).toHaveBeenCalledTimes(1);
+
+      // Clicking New terminal creates t3 and focuses t3 once attached.
+      const newBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
+      act(() => {
+        newBtn.focus();
+        newBtn.click();
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      expect(activeId.getSnapshot()).toBe("t3");
+      expect(focusSpies.get("t3")).toHaveBeenCalledTimes(1);
+
+      // Clicking Split focuses the split terminal (t1).
+      const splitBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-split"]')!;
+      act(() => {
+        splitBtn.click();
+      });
+      expect(splitId.getSnapshot()).toBe("t1");
+      expect(focusSpies.get("t1")).toHaveBeenCalledTimes(1);
+
+      // Delete on a focused tab closes that session.
+      act(() => {
+        tab1Btn.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
+        );
+      });
+      expect(closed).toEqual(["t1"]);
+    } finally {
+      createSpy.mockRestore();
     }
   });
 });

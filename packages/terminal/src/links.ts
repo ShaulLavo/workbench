@@ -13,10 +13,26 @@ export interface TerminalSnapshotFileLink {
   readonly text: string;
 }
 
-const TOKEN_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "(", ")", "[", "]", "{", "}"]);
+const HARD_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "[", "]", "{", "}", ")"]);
 const TRAILING_PUNCTUATION = new Set([".", ",", ":", ";", "!", "?"]);
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z\d+.-]*:\/\//;
 const HOSTNAME_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|app|ai|edu|gov|local|localhost)$/i;
+const PAREN_LOCATION_RE = /^\(\d+(?:,\d+)?\)/;
+const PAREN_SUFFIX_RE = /^(.*)\((\d+)(?:,(\d+))?\)$/;
+const KNOWN_BARE_NAMES = new Set([
+  "Makefile",
+  "Dockerfile",
+  "LICENSE",
+  "README",
+  "Jenkinsfile",
+  "Procfile",
+  "Gemfile",
+  "Rakefile",
+  "Justfile",
+  "Brewfile",
+  "Caddyfile",
+  "Vagrantfile",
+]);
 const MAX_CANDIDATE_LENGTH = 1024;
 
 function stripTrailingPunctuation(token: string): string {
@@ -35,11 +51,19 @@ function peelDiagnosticLabel(token: string): { readonly shift: number; readonly 
   const rest = token.slice(colon + 1);
   const bare = stripLineCol(rest).path;
   const leaf = bare.slice(bare.lastIndexOf("/") + 1);
-  if (!hasValidFileExtension(leaf)) return { shift: 0, text: token };
+  if (!isRecognizedFileLeaf(leaf)) return { shift: 0, text: token };
   return { shift: colon + 1, text: rest };
 }
 
 function stripLineCol(candidate: string): TerminalFileReference {
+  const parens = PAREN_SUFFIX_RE.exec(candidate);
+  if (parens?.[1] && parens[2]) {
+    return {
+      path: parens[1],
+      line: Number(parens[2]),
+      column: parens[3] ? Number(parens[3]) : undefined,
+    };
+  }
   const parts = candidate.split(":");
   if (parts.length >= 3) {
     const colStr = parts.at(-1) ?? "";
@@ -70,7 +94,11 @@ function hasValidFileExtension(leaf: string): boolean {
   return /^[A-Za-z][A-Za-z0-9_-]{0,11}$/.test(ext);
 }
 
-/** Parses one terminal token into a file reference (`path[:line[:col]]`) or `null` if not file-shaped. */
+function isRecognizedFileLeaf(leaf: string): boolean {
+  return KNOWN_BARE_NAMES.has(leaf) || hasValidFileExtension(leaf);
+}
+
+/** Parses one terminal token into a file reference (`path[:line[:col]]` or `path(line[,col])`) or `null`. */
 export function parseTerminalFileReference(rawToken: string): TerminalFileReference | null {
   if (!rawToken || rawToken.length > MAX_CANDIDATE_LENGTH) return null;
   if (URL_SCHEME_RE.test(rawToken)) return null;
@@ -81,9 +109,9 @@ export function parseTerminalFileReference(rawToken: string): TerminalFileRefere
   const bare = ref.path;
   if (!bare || HOSTNAME_RE.test(bare)) return null;
   const leaf = bare.slice(bare.lastIndexOf("/") + 1);
-  if (!hasValidFileExtension(leaf)) return null;
+  if (!isRecognizedFileLeaf(leaf)) return null;
   if (!bare.includes("/") && ref.line === undefined) {
-    // Bare filenames without a directory require a recognized extension and no leading punctuation.
+    // Bare filenames without a directory require a recognized name/extension and no leading punctuation.
     if (!/^[A-Za-z0-9._-]+$/.test(bare)) return null;
   }
   return ref;
@@ -122,12 +150,20 @@ export function findTerminalSnapshotFileLinks(
   let cursor = 0;
 
   while (cursor < text.length) {
-    if (TOKEN_BOUNDARY.has(text[cursor] ?? "")) {
+    const ch = text[cursor] ?? "";
+    if (HARD_BOUNDARY.has(ch) || ch === "(") {
       cursor += 1;
       continue;
     }
     let end = cursor;
-    while (end < text.length && !TOKEN_BOUNDARY.has(text[end] ?? "")) {
+    while (end < text.length) {
+      const next = text[end] ?? "";
+      if (HARD_BOUNDARY.has(next)) break;
+      if (next === "(") {
+        const parenMatch = PAREN_LOCATION_RE.exec(text.slice(end));
+        if (parenMatch) end += parenMatch[0].length;
+        break;
+      }
       end += 1;
     }
     const matched = matchSnapshotToken(line, cursor, end);
