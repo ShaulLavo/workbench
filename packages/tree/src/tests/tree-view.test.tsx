@@ -500,4 +500,52 @@ describe("@shaulavo/workbench-tree React view", () => {
     expect(removed).toEqual(["alpha.ts"]);
     expect(model.index.hasPath("beta.ts")).toBe(true);
   });
+
+  it("resets canvas and row transforms cleanly when toggling directDomUpdates at runtime", () => {
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-wb-tree-scroller") ? 260 : 26;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return 260;
+      },
+    });
+
+    try {
+      const model = new FileTreeModel({ paths: ["a.ts", "b.ts", "c.ts"] });
+      const host = mount(<FileTreeView model={model} directDomUpdates={true} showFilter={false} />);
+      const directSlots = host.querySelectorAll<HTMLDivElement>(".wb-tree-slot");
+      expect(directSlots.length).toBe(3);
+      expect(directSlots[1]?.style.transform).toContain("translate3d(0, 26px, 0)");
+
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            <FileTreeView model={model} directDomUpdates={false} showFilter={false} />
+          </WorkbenchPortalProvider>,
+        );
+      });
+      const reactSlots = host.querySelectorAll<HTMLDivElement>(".wb-tree-slot");
+      expect(reactSlots[1]?.style.transform).toBe("translateY(26px)");
+
+      act(() => {
+        activeRoot?.render(
+          <WorkbenchPortalProvider>
+            <FileTreeView model={model} directDomUpdates={true} showFilter={false} />
+          </WorkbenchPortalProvider>,
+        );
+      });
+      const backOnSlots = host.querySelectorAll<HTMLDivElement>(".wb-tree-slot");
+      expect(backOnSlots[1]?.style.transform).toContain("translate3d(0, 26px, 0)");
+    } finally {
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
+      if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
+    }
+  });
 });

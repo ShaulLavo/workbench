@@ -409,7 +409,7 @@ describe("@shaulavo/workbench-ui", () => {
     };
 
     try {
-      // Flow layout keeps normal flow (paddingTop/paddingBottom + marginTop) even if directDomUpdates={true} is passed.
+      // Flow layout keeps normal flow (paddingTop/paddingBottom + marginTop + estimated height) even if directDomUpdates={true} is passed.
       const flowHost = mount(
         <VirtualList
           items={items}
@@ -417,7 +417,7 @@ describe("@shaulavo/workbench-ui", () => {
           layout="flow"
           directDomUpdates={true}
           initialRect={{ width: 320, height: 260 }}
-          renderRow={(item) => <div>{item.label}</div>}
+          renderRow={(item) => <div style={{ height: "12px" }}>{item.label}</div>}
         />,
       );
       const flowList = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
@@ -428,30 +428,81 @@ describe("@shaulavo/workbench-ui", () => {
       const flowRows = flowHost.querySelectorAll<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
       expect(flowRows.length).toBeGreaterThan(5);
       expect(flowRows[0]?.style.transform).toBe("");
+      expect(flowRows[0]?.style.height).toBe("26px");
 
+      // Switching runtime modes (absolute direct -> flow -> absolute non-direct -> absolute direct) leaves zero stale inline styles.
       act(() => {
-        activeRoot?.unmount();
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            measureItems={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
       });
-      activeHost?.remove();
-
-      // Measured absolute layout defaults directDomUpdates to true (virtualizer owns container height and row transforms).
-      const measuredHost = mount(
-        <VirtualList
-          items={items}
-          getKey={(item) => item.id}
-          layout="absolute"
-          measureItems={true}
-          initialRect={{ width: 320, height: 260 }}
-          renderRow={(item) => <div>{item.label}</div>}
-        />,
-      );
-      const measuredInner = measuredHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
-      expect(measuredInner?.style.height).toMatch(/^\d+px$/);
-      const measuredRows = measuredHost.querySelectorAll<HTMLDivElement>(
+      const absDirectInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(absDirectInner?.style.height).toMatch(/^\d+px$/);
+      const absDirectRows = flowHost.querySelectorAll<HTMLDivElement>(
         '.wb-virtual-list-row[data-layout="absolute"]',
       );
-      expect(measuredRows.length).toBeGreaterThan(5);
-      expect(measuredRows[1]?.style.transform).toContain("translate3d");
+      expect(absDirectRows.length).toBeGreaterThan(5);
+      expect(absDirectRows[1]?.style.transform).toContain("translate3d");
+
+      // Switch back to flow: inline height and row transforms must be cleared cleanly.
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="flow"
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const flowAgainInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(flowAgainInner?.style.height).toBe("");
+      const flowAgainRow = flowHost.querySelector<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
+      expect(flowAgainRow?.style.transform).toBe("");
+      expect(flowAgainRow?.style.height).toBe("26px");
+
+      // Toggle directDomUpdates off then back on for absolute list: transforms must be restored cleanly.
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={false}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const absOffRows = flowHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(absOffRows[1]?.style.transform).toBe("translateY(26px)");
+
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const absBackOnRows = flowHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(absBackOnRows[1]?.style.transform).toContain("translate3d(0, 26px, 0)");
     } finally {
       HTMLElement.prototype.getBoundingClientRect = origRect;
       if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);

@@ -72,26 +72,27 @@ const tabFor = (path: string): EditorTabDescriptor => ({
   title: path,
 });
 
-/** Complete in-memory Consumer 3 workbench adapter set (< 260 lines of glue). */
+/** Complete in-memory Consumer 3 workbench adapter set (< 295 lines of glue). */
 export function createVibeBuilderBackend(): VibeBuilderBackend {
   const files = new Map(Object.entries(STARTER_FILES).map(([p, text]) => [p, { text, rev: 1 }]));
+  const dirs = new Set<string>(["src", "src/routes"]);
   let treeRev = 1;
+  const addParents = (p: string): void => {
+    for (let i = p.indexOf("/"); i !== -1; i = p.indexOf("/", i + 1)) dirs.add(p.slice(0, i));
+  };
   const buildSnap = (): IndexedTreeSnapshot => {
-    const dirs = new Set<string>([""]);
-    for (const p of files.keys()) {
-      for (let i = p.indexOf("/"); i !== -1; i = p.indexOf("/", i + 1)) dirs.add(p.slice(0, i));
-    }
-    return {
-      revision: treeRev,
-      entries: Array.from(files.keys(), (path) => ({ path, kind: "file" as const })),
-      loadedDirectoryPaths: dirs,
-    };
+    const entries: { readonly path: string; readonly kind: "file" | "directory" }[] = [];
+    for (const d of dirs) entries.push({ path: d, kind: "directory" });
+    for (const p of files.keys()) entries.push({ path: p, kind: "file" });
+    return { revision: treeRev, entries, loadedDirectoryPaths: new Set(["", ...dirs]) };
   };
   const treeSnap = cell(buildSnap());
   const pushTree = (): void => {
     treeRev += 1;
     treeSnap.set(buildSnap());
   };
+  const rebasePrefix = (p: string, from: string, to: string): string =>
+    p === from ? to : `${to}${p.slice(from.length)}`;
 
   const fs: FileSystemAdapter = {
     workspaceId: "vibe-builder",
@@ -100,19 +101,31 @@ export function createVibeBuilderBackend(): VibeBuilderBackend {
     readText: async (p) => files.get(p)?.text,
     createFile: async (p, content = "") => {
       const text = typeof content === "string" ? content : new TextDecoder().decode(content);
+      addParents(p);
       files.set(p, { text, rev: 1 });
       pushTree();
     },
-    createDirectory: async () => undefined,
+    createDirectory: async (p) => {
+      addParents(p);
+      dirs.add(p);
+      pushTree();
+    },
     move: async (from, to) => {
-      const item = files.get(from);
-      if (!item) return;
-      files.delete(from);
-      files.set(to, item);
+      const prefix = `${from}/`;
+      const movedFiles = Array.from(files.entries()).filter(([p]) => p === from || p.startsWith(prefix));
+      const movedDirs = Array.from(dirs).filter((d) => d === from || d.startsWith(prefix));
+      if (movedFiles.length === 0 && movedDirs.length === 0) return;
+      addParents(to);
+      for (const [p] of movedFiles) files.delete(p);
+      for (const [p, entry] of movedFiles) files.set(rebasePrefix(p, from, to), entry);
+      for (const d of movedDirs) dirs.delete(d);
+      for (const d of movedDirs) dirs.add(rebasePrefix(d, from, to));
       pushTree();
     },
     remove: async (p) => {
-      files.delete(p);
+      const prefix = `${p}/`;
+      for (const k of Array.from(files.keys())) if (k === p || k.startsWith(prefix)) files.delete(k);
+      for (const d of Array.from(dirs)) if (d === p || d.startsWith(prefix)) dirs.delete(d);
       pushTree();
     },
     indexed: {
@@ -211,18 +224,9 @@ export function createVibeBuilderBackend(): VibeBuilderBackend {
     frameUrl,
     tabUrl: frameUrl,
     locate: () => undefined,
-    attachFrame: (frame, port, onEvent, options) =>
-      createBridgelessPreviewController({
-        frame,
-        port,
-        initialPath: options?.initialPath,
-        frameUrl,
-        onEvent,
-      }),
-    onReloadNeeded: (fn) => {
-      reloadListeners.add(fn);
-      return () => void reloadListeners.delete(fn);
-    },
+    attachFrame: (frame, port, onEvent, o) =>
+      createBridgelessPreviewController({ frame, port, initialPath: o?.initialPath, frameUrl, onEvent }),
+    onReloadNeeded: (fn) => (reloadListeners.add(fn), () => void reloadListeners.delete(fn)),
   };
 
   const geometry = cell<GlobalPaneGeometry>({
@@ -234,10 +238,10 @@ export function createVibeBuilderBackend(): VibeBuilderBackend {
   const mobilePane = cell<WorkbenchPaneId>("editor");
   const layout: LayoutAdapter = {
     geometry,
-    setGeometry: (next) => geometry.set(next),
+    setGeometry: geometry.set,
     commitGeometry: () => undefined,
     mobileActivePane: mobilePane,
-    setMobileActivePane: (pane) => mobilePane.set(pane),
+    setMobileActivePane: mobilePane.set,
   };
 
   const messages = cell<readonly AgentMessage[]>([

@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import { expect, test } from "@playwright/test";
+import { createVibeBuilderBackend } from "../../../examples/vibe-builder/src/adapters";
 
 const VIBE_URL = "http://127.0.0.1:4174/";
 
@@ -10,6 +11,18 @@ test("vibe-builder starter kit runs complete Consumer 3 workbench loop in under 
   const adaptersPath = path.resolve(import.meta.dirname, "../../../examples/vibe-builder/src/adapters.ts");
   const lineCount = readFileSync(adaptersPath, "utf8").split("\n").length;
   expect(lineCount).toBeLessThan(300);
+
+  // Verify folder create + recursive folder move work on the writable starter FileSystemAdapter.
+  const backendCheck = createVibeBuilderBackend();
+  await backendCheck.fs.createDirectory("src/empty-dir");
+  expect(
+    backendCheck.fs.indexed?.snapshot
+      .getSnapshot()
+      ?.entries.some((e) => e.path === "src/empty-dir" && e.kind === "directory"),
+  ).toBe(true);
+  await backendCheck.fs.move("src/routes", "src/pages");
+  expect(await backendCheck.fs.readText("src/pages/pricing.tsx")).toContain("Pro plan");
+  expect(await backendCheck.fs.readText("src/routes/pricing.tsx")).toBeUndefined();
 
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
