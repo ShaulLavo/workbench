@@ -78,6 +78,7 @@ export function createHarnessTerminalBundle(onOpenFileLink?: (path: string) => v
   ]);
   const activeId = createSubscribable<string | undefined>("bash-1");
   const splitId = createSubscribable<string | undefined>(undefined);
+  const splitPair = createSubscribable<readonly [string, string] | undefined>(undefined);
   const stats = createSubscribable({ lastInput: "", detachCount: 0, closeCount: 0 });
   const transparentOverride = createSubscribable<TerminalThemeInput>(FREGAT_TRANSPARENT_PALETTE);
   const savedScrolls = new Map<string, TerminalSavedScroll>();
@@ -87,11 +88,14 @@ export function createHarnessTerminalBundle(onOpenFileLink?: (path: string) => v
     sessions,
     activeId,
     splitId,
+    splitPair,
     async createSession(options) {
       const id = `term-${nextSeq}`;
       nextSeq += 1;
       const title = options?.title ?? `shell ${nextSeq - 1}`;
       sessions.set(sessions.getSnapshot().concat([{ id, title, status: "running" }]));
+      splitId.set(undefined);
+      splitPair.set(undefined);
       activeId.set(id);
       return id;
     },
@@ -100,12 +104,21 @@ export function createHarnessTerminalBundle(onOpenFileLink?: (path: string) => v
       stats.set({ ...current, closeCount: current.closeCount + 1 });
       const remaining = sessions.getSnapshot().filter((s) => s.id !== id);
       sessions.set(remaining);
-      if (splitId.getSnapshot() === id) splitId.set(undefined);
+      const currentPair = splitPair.getSnapshot();
+      if (splitId.getSnapshot() === id || currentPair?.[0] === id || currentPair?.[1] === id) {
+        splitId.set(undefined);
+        splitPair.set(undefined);
+      }
       if (activeId.getSnapshot() === id) activeId.set(remaining[0]?.id);
     },
     selectSession(id) {
-      if (id === activeId.getSnapshot() || id === splitId.getSnapshot()) return;
+      const currentPair = splitPair.getSnapshot();
+      if (currentPair && (currentPair[0] === id || currentPair[1] === id)) {
+        activeId.set(id);
+        return;
+      }
       splitId.set(undefined);
+      splitPair.set(undefined);
       activeId.set(id);
     },
     renameSession(id, title) {
@@ -115,11 +128,15 @@ export function createHarnessTerminalBundle(onOpenFileLink?: (path: string) => v
       const currentSplit = splitId.getSnapshot();
       if (currentSplit) {
         splitId.set(undefined);
+        splitPair.set(undefined);
         return;
       }
       const primary = activeId.getSnapshot();
       const other = sessions.getSnapshot().find((s) => s.id !== primary);
-      if (other) splitId.set(other.id);
+      if (primary && other) {
+        splitId.set(other.id);
+        splitPair.set([primary, other.id]);
+      }
     },
     async attach(id, { signal, onEvent }) {
       activeStreams.set(id, onEvent);

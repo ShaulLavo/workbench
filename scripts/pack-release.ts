@@ -51,7 +51,9 @@ const allowDirty = process.argv.includes("--allow-dirty");
 const outDir = path.resolve(ROOT, outDirArg);
 const distDir = path.join(PKG_DIR, "dist");
 const relToDist = path.relative(distDir, outDir);
-if (relToDist === "" || (!relToDist.startsWith("..") && !path.isAbsolute(relToDist))) {
+const isOutsideDist =
+  path.isAbsolute(relToDist) || relToDist === ".." || relToDist.startsWith(`..${path.sep}`);
+if (!isOutsideDist) {
   throw new Error(`--out-dir (${outDir}) must not be inside packages/workbench/dist (${distDir})`);
 }
 

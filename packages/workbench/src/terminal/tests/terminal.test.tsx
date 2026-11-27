@@ -2142,13 +2142,14 @@ describe("@shaulavo/workbench-terminal", () => {
       expect(splitGroup?.querySelector('[data-testid="wb-term-tab-s2"]')).not.toBeNull();
       expect(host.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
 
-      // Clicking the right half tab focuses s2 WITHOUT unsplitting, even though adapter sets activeId = "s2".
+      // Clicking the right half tab notifies adapter.selectSession("s2") AND keeps the split active while mounted.
       const rightTabBtn = splitGroup!.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-s2"] button[role="tab"]',
       )!;
       act(() => {
         rightTabBtn.click();
       });
+      expect(activeId.getSnapshot()).toBe("s2");
       expect(host.querySelector("[data-wb-term-split-group]")).not.toBeNull();
       expect(host.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
       expect(
@@ -2216,24 +2217,139 @@ describe("@shaulavo/workbench-terminal", () => {
           .splitFocused,
       ).toBe("true");
 
-      // ArrowRight from s2 (right half) with DEFERRED async selectSession keeps keyboard focus on s1 after regrouping!
-      const deferredRightTab = deferredHost.querySelector<HTMLButtonElement>(
-        '[data-testid="wb-term-tab-s2"] button[role="tab"]',
-      )!;
+      // ArrowRight from s2 (right half) with TWO-STEP deferred async selectSession (activeId first, then splitPair regroup,
+      // then unsplit) keeps keyboard focus on the live s1 button across every commit without dropping to <body>.
+      const twoStepActiveId = createSubscribable<string | undefined>("s2");
+      const twoStepSplitId = createSubscribable<string | undefined>("s2");
+      const twoStepSplitPair = createSubscribable<readonly [string, string] | undefined>(["s3", "s2"]);
+      let flushStep1: (() => void) | null = null;
+      let flushStep2: (() => void) | null = null;
+      let flushStep3: (() => void) | null = null;
+      const twoStepAdapter: TerminalAdapter = {
+        ...adapter,
+        activeId: twoStepActiveId,
+        splitId: twoStepSplitId,
+        splitPair: twoStepSplitPair,
+        selectSession: (id) => {
+          flushStep1 = () => {
+            twoStepActiveId.set(id);
+          };
+          flushStep2 = () => {
+            twoStepSplitPair.set([id, "s2"]);
+          };
+          flushStep3 = () => {
+            twoStepSplitId.set(undefined);
+            twoStepSplitPair.set(undefined);
+          };
+        },
+      };
       act(() => {
-        deferredRightTab.focus();
-        deferredRightTab.dispatchEvent(
-          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
-        );
+        activeRoot?.unmount();
+        activeRoot = null;
       });
+      const twoStepHost = mount(
+        <div>
+          <input data-testid="external-focus-target" />
+          <TerminalPanel
+            adapter={twoStepAdapter}
+            collapsed={false}
+            onToggleCollapsed={vi.fn()}
+            loadRuntime={async () => ({}) as GhosttyRuntime}
+          />
+        </div>,
+      );
       await act(async () => {
         await flushMicrotasks();
       });
-      const liveS1Tab = deferredHost.querySelector<HTMLButtonElement>(
+      const twoStepRightTab = twoStepHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s2"] button[role="tab"]',
+      )!;
+      const oldS1Tab = twoStepHost.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-s1"] button[role="tab"]',
       )!;
-      expect(liveS1Tab).not.toBeNull();
-      expect(document.activeElement).toBe(liveS1Tab);
+      act(() => {
+        twoStepRightTab.focus();
+        twoStepRightTab.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      // Commit 1: activeId moves to s1 while split pair is still s3+s2.
+      act(() => {
+        flushStep1?.();
+      });
+      expect(document.activeElement).toBe(oldS1Tab);
+      // Commit 2: split pair regroups to s1+s2, unmounting old standalone s1 button -> focus stays on new split-group s1 button.
+      act(() => {
+        flushStep2?.();
+      });
+      const groupedS1Tab = twoStepHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s1"] button[role="tab"]',
+      )!;
+      expect(groupedS1Tab).not.toBe(oldS1Tab);
+      expect(document.activeElement).toBe(groupedS1Tab);
+      // Commit 3: split clears, unmounting split-group s1 button -> focus stays on new standalone s1 button.
+      act(() => {
+        flushStep3?.();
+      });
+      const standaloneS1Tab = twoStepHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s1"] button[role="tab"]',
+      )!;
+      expect(standaloneS1Tab).not.toBe(groupedS1Tab);
+      expect(document.activeElement).toBe(standaloneS1Tab);
+
+      // Moving focus outside the panel BEFORE a deferred selectSession responds must NOT steal focus back.
+      act(() => {
+        twoStepActiveId.set("s3");
+        twoStepSplitId.set("s2");
+        twoStepSplitPair.set(["s3", "s2"]);
+      });
+      const externalInput = twoStepHost.querySelector<HTMLInputElement>(
+        '[data-testid="external-focus-target"]',
+      )!;
+      const rightTabBeforeBlur = twoStepHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s2"] button[role="tab"]',
+      )!;
+      act(() => {
+        rightTabBeforeBlur.focus();
+        rightTabBeforeBlur.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      act(() => {
+        externalInput.focus();
+      });
+      expect(document.activeElement).toBe(externalInput);
+      act(() => {
+        flushStep1?.();
+        flushStep2?.();
+      });
+      expect(document.activeElement).toBe(externalInput);
+
+      // Moving focus to another header button before a deferred selectSession responds also does NOT steal focus back.
+      act(() => {
+        twoStepActiveId.set("s3");
+        twoStepSplitId.set("s2");
+        twoStepSplitPair.set(["s3", "s2"]);
+      });
+      const newBtn = twoStepHost.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
+      const rightTabBeforeHeaderMove = twoStepHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s2"] button[role="tab"]',
+      )!;
+      act(() => {
+        rightTabBeforeHeaderMove.focus();
+        rightTabBeforeHeaderMove.dispatchEvent(
+          new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
+        );
+      });
+      act(() => {
+        newBtn.focus();
+      });
+      expect(document.activeElement).toBe(newBtn);
+      act(() => {
+        flushStep1?.();
+        flushStep2?.();
+      });
+      expect(document.activeElement).toBe(newBtn);
 
       // Select s2 again on standard adapter and verify Rename button targets the focused right half (s2).
       act(() => {

@@ -3,6 +3,7 @@ import {
   useLayoutEffect,
   useRef,
   useState,
+  type FocusEvent,
   type KeyboardEvent,
   type MouseEvent,
   type ReactNode,
@@ -123,25 +124,45 @@ function resolveStageClickTarget(target: EventTarget | null, fallbackSessionId: 
   return target.closest<HTMLElement>("[data-session-id]")?.dataset.sessionId ?? fallbackSessionId;
 }
 
+function findTabButton(header: HTMLDivElement | null, targetSessionId: string): HTMLButtonElement | null {
+  if (!header) return null;
+  for (const tab of header.querySelectorAll<HTMLElement>("[data-wb-term-session]")) {
+    if (tab.dataset.wbTermSession !== targetSessionId) continue;
+    return tab.querySelector<HTMLButtonElement>('button[role="tab"]');
+  }
+  return null;
+}
+
+function resolvePairSessions(
+  sessions: readonly TerminalSessionInfo[],
+  pair: readonly [string, string] | null | undefined,
+): { readonly primary: TerminalSessionInfo; readonly secondary: TerminalSessionInfo } | null {
+  if (!pair) return null;
+  const left = sessions.find((s) => s.id === pair[0]);
+  const right = sessions.find((s) => s.id === pair[1]);
+  if (!left || !right || left.id === right.id) return null;
+  return { primary: left, secondary: right };
+}
+
 function resolveSplitSessions(
   sessions: readonly TerminalSessionInfo[],
   activeId: string | undefined,
   splitId: string | undefined,
   splitPair: readonly [string, string] | undefined,
+  preservedSplitPair: readonly [string, string] | null,
 ): {
   readonly primary: TerminalSessionInfo | undefined;
   readonly secondary: TerminalSessionInfo | undefined;
 } {
-  if (splitPair) {
-    const left = sessions.find((s) => s.id === splitPair[0]);
-    const right = sessions.find((s) => s.id === splitPair[1]);
-    if (left && right && left.id !== right.id) {
-      return { primary: left, secondary: right };
-    }
-  }
+  const explicitPair = resolvePairSessions(sessions, splitPair);
+  if (explicitPair) return explicitPair;
   const activeSession = sessions.find((s) => s.id === activeId) ?? sessions[0];
   if (!splitId || !activeSession) {
     return { primary: activeSession, secondary: undefined };
+  }
+  if (splitId === activeSession.id && preservedSplitPair?.[1] === splitId) {
+    const preserved = resolvePairSessions(sessions, preservedSplitPair);
+    if (preserved) return preserved;
   }
   const splitSession = sessions.find((s) => s.id === splitId);
   if (!splitSession || splitSession.id === activeSession.id) {
@@ -200,10 +221,32 @@ export function TerminalPanel({
   const [focusTick, setFocusTick] = useState(0);
   const [tabFocusTick, setTabFocusTick] = useState(0);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
+  const [preservedSplitPair, setPreservedSplitPair] = useState<readonly [string, string] | null>(null);
+  const [prevAdapterSplit, setPrevAdapterSplit] = useState<{
+    readonly activeId: string | undefined;
+    readonly splitId: string | undefined;
+  }>({ activeId, splitId });
+
+  if (prevAdapterSplit.activeId !== activeId || prevAdapterSplit.splitId !== splitId) {
+    setPrevAdapterSplit({ activeId, splitId });
+    const splitStale =
+      preservedSplitPair !== null &&
+      (splitId !== preservedSplitPair[1] ||
+        (activeId !== preservedSplitPair[0] && activeId !== preservedSplitPair[1]));
+    if (splitStale) {
+      setPreservedSplitPair(null);
+    }
+    if (prevAdapterSplit.activeId !== activeId && focusedPaneId !== null && activeId !== focusedPaneId) {
+      setFocusedPaneId(null);
+    }
+  }
 
   const headerRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusSessionRef = useRef<string | null>(null);
-  const pendingTabFocusRef = useRef<string | null>(null);
+  const pendingTabFocusRef = useRef<{
+    readonly targetId: string;
+    readonly lastFocusedButton: HTMLButtonElement | null;
+  } | null>(null);
   const restoreFocusTargetRef = useRef<
     | { readonly closingId: string; readonly kind: "tab"; readonly id: string }
     | { readonly closingId: string; readonly kind: "new" }
@@ -218,6 +261,7 @@ export function TerminalPanel({
     activeId,
     splitId,
     splitPair,
+    preservedSplitPair,
   );
 
   let focusedSession = primarySession;
@@ -229,20 +273,35 @@ export function TerminalPanel({
 
   function selectSessionPreservingSplit(sessionId: string): void {
     setFocusedPaneId(sessionId);
-    const isSecondaryWithoutPair =
-      !adapter.splitPair && secondarySession !== undefined && sessionId === secondarySession.id;
-    if (!isSecondaryWithoutPair) {
-      adapter.selectSession(sessionId);
+    if (!adapter.splitPair && primarySession && secondarySession) {
+      if (sessionId === secondarySession.id) {
+        setPreservedSplitPair([primarySession.id, secondarySession.id]);
+      } else if (sessionId !== primarySession.id) {
+        setPreservedSplitPair(null);
+      }
     }
+    adapter.selectSession(sessionId);
   }
 
   function focusTabButton(targetSessionId: string): void {
-    const header = headerRef.current;
-    if (!header) return;
-    for (const tab of header.querySelectorAll<HTMLElement>("[data-wb-term-session]")) {
-      if (tab.dataset.wbTermSession !== targetSessionId) continue;
-      tab.querySelector<HTMLButtonElement>('button[role="tab"]')?.focus();
-      return;
+    findTabButton(headerRef.current, targetSessionId)?.focus();
+  }
+
+  function handleHeaderBlur(event: FocusEvent<HTMLDivElement>): void {
+    if (!pendingTabFocusRef.current) return;
+    const nextFocused = event.relatedTarget;
+    if (nextFocused instanceof Node && headerRef.current?.contains(nextFocused)) return;
+    pendingTabFocusRef.current = null;
+  }
+
+  function handleHeaderFocus(event: FocusEvent<HTMLDivElement>): void {
+    const pending = pendingTabFocusRef.current;
+    if (!pending) return;
+    const targetEl = event.target;
+    if (!(targetEl instanceof Element)) return;
+    const sessionId = targetEl.closest<HTMLElement>("[data-wb-term-session]")?.dataset.wbTermSession;
+    if (sessionId !== pending.targetId) {
+      pendingTabFocusRef.current = null;
     }
   }
 
@@ -271,6 +330,7 @@ export function TerminalPanel({
 
   function handleCreateSession(): void {
     pendingTabFocusRef.current = null;
+    setPreservedSplitPair(null);
     focusSeqRef.current += 1;
     const reqSeq = focusSeqRef.current;
     if (collapsed) onToggleCollapsed?.();
@@ -341,14 +401,29 @@ export function TerminalPanel({
   const orderedTabs = buildVisualTabOrder(sessions, primarySession, secondarySession);
 
   useLayoutEffect(() => {
-    const targetId = pendingTabFocusRef.current;
-    if (!targetId) return;
-    focusTabButton(targetId);
-    const settled = targetId === primarySession?.id || targetId === secondarySession?.id;
-    if (settled) {
+    const pending = pendingTabFocusRef.current;
+    if (!pending) return;
+    const targetButton = findTabButton(headerRef.current, pending.targetId);
+    if (!targetButton) {
       pendingTabFocusRef.current = null;
+      return;
     }
-  }, [tabFocusTick, primarySession?.id, secondarySession?.id, activeId, splitId]);
+    const activeEl = document.activeElement;
+    if (activeEl === targetButton) {
+      pendingTabFocusRef.current = { targetId: pending.targetId, lastFocusedButton: targetButton };
+      return;
+    }
+    const prevButton = pending.lastFocusedButton;
+    const stillOnPrevButton = prevButton !== null && prevButton.isConnected && activeEl === prevButton;
+    const droppedFromUnmount =
+      (prevButton === null || !prevButton.isConnected) && (activeEl === null || activeEl === document.body);
+    if (!stillOnPrevButton && !droppedFromUnmount) {
+      pendingTabFocusRef.current = null;
+      return;
+    }
+    targetButton.focus();
+    pendingTabFocusRef.current = { targetId: pending.targetId, lastFocusedButton: targetButton };
+  }, [tabFocusTick, primarySession?.id, secondarySession?.id, activeId, splitId, splitPair]);
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, sessionId: string): void {
     const index = orderedTabs.findIndex((session) => session.id === sessionId);
@@ -373,7 +448,7 @@ export function TerminalPanel({
     if (!next) return;
     event.preventDefault();
     clearPendingTerminalFocus();
-    pendingTabFocusRef.current = next.id;
+    pendingTabFocusRef.current = { targetId: next.id, lastFocusedButton: event.currentTarget };
     setTabFocusTick((tick) => tick + 1);
     selectSessionPreservingSplit(next.id);
   }
@@ -563,7 +638,12 @@ export function TerminalPanel({
       aria-label="Terminal"
       className={cx("wb-terminal-panel", className)}
     >
-      <div ref={headerRef} className="wb-terminal-header">
+      <div
+        ref={headerRef}
+        className="wb-terminal-header"
+        onBlur={handleHeaderBlur}
+        onFocus={handleHeaderFocus}
+      >
         <div ref={stripRef} className="wb-terminal-strip-wrap">
           <BarTabStrip label="Terminal sessions">
             {sessions.map((session) => {
@@ -626,6 +706,8 @@ export function TerminalPanel({
             data-testid="wb-term-split"
             disabled={splitCreatesSession ? false : sessions.length < 2}
             onClick={() => {
+              pendingTabFocusRef.current = null;
+              setPreservedSplitPair(null);
               adapter.toggleSplit(focusedSession?.id ?? primarySession?.id);
               if (collapsed) onToggleCollapsed?.();
               const target = adapter.splitId.getSnapshot() ?? adapter.activeId.getSnapshot();
