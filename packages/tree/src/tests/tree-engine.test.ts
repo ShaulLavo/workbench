@@ -844,24 +844,66 @@ describe("@shaulavo/workbench-tree engine", () => {
     bound.dispose();
   });
 
-  it("applies moves before removals for loaded directory renames and chained moves through deleted paths", () => {
-    const index = FileTreeIndex.fromPaths(["closed/keep.txt", "closed/needle.txt", "a.txt", "d.txt"], {
+  it("handles delete-then-rename, rename-then-delete, explicit operations, and chained moves through deleted paths", async () => {
+    // 1. Delete-then-rename in the same batch (without explicit operations) must not resurrect the deleted child.
+    const deleteBeforeRenameIndex = FileTreeIndex.fromPaths(["closed/keep.txt", "closed/needle.txt"], {
       loadedDirectoryPaths: new Set(["", "closed"]),
     });
+    deleteBeforeRenameIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["closed/needle.txt"],
+    });
+    expect(deleteBeforeRenameIndex.hasPath("renamed/keep.txt")).toBe(true);
+    expect(deleteBeforeRenameIndex.hasPath("renamed/needle.txt")).toBe(false);
+    expect(deleteBeforeRenameIndex.hasPath("closed/needle.txt")).toBe(false);
 
-    // Moving a loaded directory and removing a child at its new path must not resurrect the deleted child.
-    index.applyLazyInvalidation({
+    // Also verify delete-then-rename on the filtered lazy bridge while listFiles() is still pending.
+    const model = new FileTreeModel();
+    const fixture = createLazyFilterInvalidationFixture(["open.ts", "closed/keep.txt", "closed/needle.txt"]);
+    const bound = bindFileSystemAdapter(model, fixture.adapter);
+    model.setFilter("needle");
+    await Promise.resolve();
+    await Promise.resolve();
+    fixture.setDeferListFiles(true);
+    fixture.emitInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "closed", to: "renamed", operation: 1 }],
+      removed: ["closed/needle.txt"],
+    });
+    expect(
+      model
+        .getSnapshot()
+        .rows.filter((row) => row.type === "entry")
+        .map((row) => row.path),
+    ).toEqual([]);
+    expect(model.getEntryKind("renamed/needle.txt")).toBeUndefined();
+    fixture.resolvePendingList(["open.ts", "renamed/keep.txt"]);
+    await Promise.resolve();
+    await Promise.resolve();
+    bound.dispose();
+
+    // 2. Rename-then-delete in the same batch must not resurrect the deleted child either.
+    const renameBeforeDeleteIndex = FileTreeIndex.fromPaths(
+      ["closed/keep.txt", "closed/needle.txt", "a.txt", "d.txt"],
+      {
+        loadedDirectoryPaths: new Set(["", "closed"]),
+      },
+    );
+    renameBeforeDeleteIndex.applyLazyInvalidation({
       directories: [""],
       reset: false,
       moves: [{ from: "closed", to: "renamed", operation: 1 }],
       removed: ["renamed/needle.txt"],
     });
-    expect(index.hasPath("renamed/keep.txt")).toBe(true);
-    expect(index.hasPath("renamed/needle.txt")).toBe(false);
-    expect(index.hasPath("closed/needle.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("renamed/keep.txt")).toBe(true);
+    expect(renameBeforeDeleteIndex.hasPath("renamed/needle.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("closed/needle.txt")).toBe(false);
 
-    // Chained moves through a path that is later reused and deleted preserve the earlier destination.
-    index.applyLazyInvalidation({
+    // 3. Chained moves through a path that is later reused and deleted preserve the earlier destination.
+    renameBeforeDeleteIndex.applyLazyInvalidation({
       directories: [""],
       reset: false,
       moves: [
@@ -871,9 +913,26 @@ describe("@shaulavo/workbench-tree engine", () => {
       ],
       removed: ["b.txt"],
     });
-    expect(index.hasPath("c.txt")).toBe(true);
-    expect(index.hasPath("b.txt")).toBe(false);
-    expect(index.hasPath("a.txt")).toBe(false);
-    expect(index.hasPath("d.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("c.txt")).toBe(true);
+    expect(renameBeforeDeleteIndex.hasPath("b.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("a.txt")).toBe(false);
+    expect(renameBeforeDeleteIndex.hasPath("d.txt")).toBe(false);
+
+    // 4. Explicit ordered operations preserve exact cross-operation ordering (delete before move into same path).
+    const explicitOrderIndex = FileTreeIndex.fromPaths(["x.txt", "y.txt"], {
+      loadedDirectoryPaths: new Set([""]),
+    });
+    explicitOrderIndex.applyLazyInvalidation({
+      directories: [""],
+      reset: false,
+      moves: [{ from: "y.txt", to: "x.txt", operation: 2 }],
+      removed: ["x.txt"],
+      operations: [
+        { kind: "remove", path: "x.txt" },
+        { kind: "move", from: "y.txt", to: "x.txt" },
+      ],
+    });
+    expect(explicitOrderIndex.hasPath("x.txt")).toBe(true);
+    expect(explicitOrderIndex.hasPath("y.txt")).toBe(false);
   });
 });

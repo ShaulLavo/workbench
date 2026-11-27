@@ -6,6 +6,7 @@ import {
   type IndexedTreePatch,
   type IndexedTreeSnapshot,
   type LazyInvalidationEvent,
+  type LazyInvalidationOperation,
   type OptimisticTreeMutation,
 } from "@shaulavo/workbench-core";
 import {
@@ -331,6 +332,45 @@ function applyMutationToLayer(layer: MutableLayer, mutation: OptimisticTreeMutat
       createPathInLayer(layer, item.rel ? `${to}/${item.rel}` : to, item.kind);
     }
   }
+}
+
+function normalizeLazyOperations(
+  operations: readonly LazyInvalidationOperation[],
+): LazyInvalidationOperation[] {
+  const ops: LazyInvalidationOperation[] = [];
+  for (const op of operations) {
+    if (op.kind === "remove") {
+      const path = normalizeTreePath(op.path);
+      if (path) ops.push({ kind: "remove", path });
+      continue;
+    }
+    const from = normalizeTreePath(op.from);
+    const to = normalizeTreePath(op.to);
+    if (from && to && from !== to) ops.push({ kind: "move", from, to });
+  }
+  return ops;
+}
+
+export function resolveLazyOperations(event: LazyInvalidationEvent): LazyInvalidationOperation[] {
+  if (event.operations) return normalizeLazyOperations(event.operations);
+  const removed = event.removed.map(normalizeTreePath).filter(Boolean);
+  const moves = event.moves
+    .map((move) => ({ from: normalizeTreePath(move.from), to: normalizeTreePath(move.to) }))
+    .filter((move) => move.from.length > 0 && move.to.length > 0 && move.from !== move.to);
+  if (moves.length === 0) return removed.map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  if (removed.length === 0) {
+    return moves.map((move): LazyInvalidationOperation => ({ kind: "move", from: move.from, to: move.to }));
+  }
+  const preRemoves = removed
+    .filter((path) => !moves.some((move) => isSameOrInside(move.from, path)))
+    .map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  const moveOps = moves.map((move): LazyInvalidationOperation => ({
+    kind: "move",
+    from: move.from,
+    to: move.to,
+  }));
+  const postRemoves = removed.map((path): LazyInvalidationOperation => ({ kind: "remove", path }));
+  return preRemoves.concat(moveOps, postRemoves);
 }
 
 function deleteLazyStatesUnder(lazyStates: Map<string, DirectoryLoadState>, rootPath: string): void {
@@ -680,17 +720,13 @@ export class FileTreeIndex {
       return;
     }
     const layer = this.ensureConfirmedMutable();
-    for (const move of event.moves) {
-      const from = normalizeTreePath(move.from);
-      const to = normalizeTreePath(move.to);
-      if (!from || !to || from === to) continue;
-      moveSubtreeInLayerPreservingLoaded(layer, this.lazyStates, from, to);
-    }
-    for (const rawRemoved of event.removed) {
-      const target = normalizeTreePath(rawRemoved);
-      if (!target) continue;
-      deleteSubtreeInLayer(layer, target);
-      deleteLazyStatesUnder(this.lazyStates, target);
+    for (const op of resolveLazyOperations(event)) {
+      if (op.kind === "remove") {
+        deleteSubtreeInLayer(layer, op.path);
+        deleteLazyStatesUnder(this.lazyStates, op.path);
+        continue;
+      }
+      moveSubtreeInLayerPreservingLoaded(layer, this.lazyStates, op.from, op.to);
     }
     for (const dir of event.directories) {
       const normalized = normalizeTreePath(dir);
