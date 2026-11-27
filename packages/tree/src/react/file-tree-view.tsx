@@ -80,7 +80,6 @@ export interface FileTreeViewProps {
   readonly adapter?: FileSystemAdapter;
   readonly handleRef?: RefObject<FileTreeViewHandle | null>;
   readonly label?: string;
-  readonly iconPreset?: "rich" | "stroke";
   readonly showFilter?: boolean;
   readonly filterPlaceholder?: string;
   readonly readOnly?: boolean;
@@ -228,7 +227,6 @@ export function FileTreeView({
   adapter,
   handleRef,
   label = "File explorer",
-  iconPreset = "rich",
   showFilter = true,
   filterPlaceholder = "Filter files…",
   readOnly = false,
@@ -1293,7 +1291,6 @@ export function FileTreeView({
         hasEntryTabStop={tabStopIndex >= 0}
         label={label}
         focusModality={state.focusModality}
-        iconPreset={iconPreset}
         dragging={draggingPaths.length > 0}
         touchDragging={touchDragging}
         touchDragY={touchDragY}
@@ -1344,7 +1341,6 @@ export function FileTreeView({
             return (
               <FileTreeDraftRow
                 row={row}
-                iconPreset={iconPreset}
                 siblingNames={siblings}
                 onCommit={(parent, kind, name) => void commitCreate(parent, kind, name)}
                 onCancel={() => model.setDraft(undefined)}
@@ -1363,7 +1359,6 @@ export function FileTreeView({
           return (
             <FileTreeRow
               row={row}
-              iconPreset={iconPreset}
               activeParentPath={activeParentPath}
               dropTargetDirectory={dropTarget?.directory}
               dropTargetSegment={dropTarget?.segmentPath}

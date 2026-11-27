@@ -8,6 +8,7 @@ import {
   FILE_ICON_MANIFEST,
   resolveFileIcon,
   resolveFileIconName,
+  STROKE_ICON_GLYPHS,
 } from "../index";
 import { FileIconSprite, FileTypeIcon, StrokeIcon } from "../react/index";
 
@@ -53,17 +54,13 @@ describe("@shaulavo/workbench-icons", () => {
     expect(resolveFileIcon({ name: "link", type: "symlink" }).name).toBe("file-symlink-duo");
   });
 
-  it("builds complete rich and stroke sprite markup and renders React components cleanly", () => {
-    const richSprite = buildFileIconSpriteMarkup("rich");
-    expect(richSprite).toContain('id="wb-file-icon-claude"');
-    expect(richSprite).toContain('id="wb-file-icon-typescript"');
+  it("builds canonical file icon sprite markup and renders file and chrome icon components cleanly", () => {
+    const sprite = buildFileIconSpriteMarkup();
+    expect(sprite).toContain('id="wb-file-icon-claude"');
+    expect(sprite).toContain('id="wb-file-icon-typescript"');
 
-    const strokeSprite = buildFileIconSpriteMarkup("stroke");
-    expect(strokeSprite).toContain('id="wb-stroke-icon-claude"');
-    expect(strokeSprite).toContain('id="wb-stroke-icon-test"');
-
-    const spriteHtml = renderToStaticMarkup(<FileIconSprite preset="rich" />);
-    expect(spriteHtml).toContain('data-wb-icon-sprite="rich"');
+    const spriteHtml = renderToStaticMarkup(<FileIconSprite />);
+    expect(spriteHtml).toContain("data-wb-icon-sprite");
 
     const inlineHtml = renderToStaticMarkup(<FileTypeIcon entry={{ name: "CLAUDE.md", type: "file" }} />);
     expect(inlineHtml).toContain('data-wb-icon="claude"');
@@ -74,13 +71,10 @@ describe("@shaulavo/workbench-icons", () => {
     );
     expect(useHtml).toContain('href="#wb-file-icon-lang-typescript-duo"');
 
-    const strokeHtml = renderToStaticMarkup(
-      <FileTypeIcon entry={{ name: "App.test.tsx", type: "file" }} preset="stroke" />,
-    );
-    expect(strokeHtml).toContain('data-wb-stroke-icon="test"');
-
     const uiStroke = renderToStaticMarkup(<StrokeIcon name="search" />);
     expect(uiStroke).toContain('data-wb-stroke-icon="search"');
+    expect("react" in STROKE_ICON_GLYPHS).toBe(false);
+    expect("typescript" in STROKE_ICON_GLYPHS).toBe(false);
   });
 
   it("rejects unsafe SVG elements, event handlers, and external references", () => {

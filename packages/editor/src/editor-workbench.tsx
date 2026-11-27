@@ -10,7 +10,6 @@ import type {
   TabId,
 } from "@shaulavo/workbench-core";
 import { useSubscribable } from "@shaulavo/workbench-core/react";
-import type { FileIconPreset } from "@shaulavo/workbench-icons";
 import type { ThemeVersionSource } from "@shaulavo/workbench-tokens";
 import { cx } from "@shaulavo/workbench-ui";
 import type { Editor } from "@singapore-editor/core/editor";
@@ -25,7 +24,6 @@ export interface EditorWorkbenchProps {
   /** Optional explicit group ID to render; defaults to `groups.activeGroupId`. */
   readonly groupId?: GroupId;
   readonly active?: boolean;
-  readonly iconPreset?: FileIconPreset;
   readonly themeVersion?: ThemeVersionSource;
   readonly fontSize?: number;
   readonly lineHeight?: number;
@@ -66,7 +64,6 @@ export function EditorWorkbench({
   groups,
   groupId,
   active = true,
-  iconPreset = "rich",
   themeVersion,
   fontSize,
   lineHeight,
@@ -110,7 +107,6 @@ export function EditorWorkbench({
         groupId={group.id}
         tabs={group.tabs}
         selectedTabId={selectedTab?.id ?? null}
-        iconPreset={iconPreset}
         actions={tabActions}
         onSelectTab={handleSelectTab}
         onCloseTab={(gid, tid) => groups.closeTabs(gid, [tid])}

@@ -15,9 +15,7 @@ export {
   getFileIconRule,
   resolveFileIcon,
   resolveFileIconName,
-  strokeIconSymbolHref,
   type FileIconEntry,
-  type FileIconPreset,
   type ResolvedFileIcon,
 } from "./resolver";
 export {

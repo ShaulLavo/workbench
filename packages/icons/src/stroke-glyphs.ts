@@ -1,16 +1,14 @@
 export interface StrokeGlyph {
   readonly paths: readonly string[];
-  readonly label?: string;
 }
 
 const FILE_SHEET = "M6 3.5h7.5l5 5V19a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 19V5A1.5 1.5 0 0 1 6 3.5z";
 
 /**
- * Minimal 24x24 single-stroke icon set (MIT, original to Sprockt/Workbench) for file kinds and
- * lightweight workbench chrome controls.
+ * Minimal 24x24 single-stroke UI chrome icons (MIT) for lightweight workbench controls
+ * such as chevrons, search, close buttons, pane tabs, and status indicators.
  */
 export const STROKE_ICON_GLYPHS = {
-  // Chrome and controls
   chevron: { paths: ["m9 6 6 6-6 6"] },
   folder: {
     paths: [
@@ -23,6 +21,7 @@ export const STROKE_ICON_GLYPHS = {
       "M3.5 17.5 5 11.1A1.5 1.5 0 0 1 6.45 10H20.5l-1.35 7.5A1.5 1.5 0 0 1 17.7 19H5a1.5 1.5 0 0 1-1.5-1.5z",
     ],
   },
+  file: { paths: [FILE_SHEET, "M13.5 3.5v5h5"] },
   search: { paths: ["M11 4.5a6.5 6.5 0 1 0 0 13 6.5 6.5 0 0 0 0-13z", "m20 20-4.2-4.2"] },
   close: { paths: ["M6.5 6.5l11 11M17.5 6.5l-11 11"] },
   plus: { paths: ["M12 5v14M5 12h14"] },
@@ -57,79 +56,6 @@ export const STROKE_ICON_GLYPHS = {
   },
   refresh: {
     paths: ["M19 12a7 7 0 1 1-2.05-4.95L19 9", "M19 4.5V9h-4.5"],
-  },
-
-  // File kinds
-  file: { paths: [FILE_SHEET, "M13.5 3.5v5h5"] },
-  symlink: { paths: [FILE_SHEET, "M13.5 3.5v5h5", "M9.5 15.5 14 11m0 0h-3m3 0v3"] },
-  test: {
-    paths: [
-      "M9.5 4.5h5M10.5 4.5v4.5l-4.8 8.2A1.5 1.5 0 0 0 7 19.5h10a1.5 1.5 0 0 0 1.3-2.3L13.5 9V4.5",
-      "M8.2 15h7.6",
-    ],
-  },
-  shell: {
-    paths: [
-      "M4.5 6A1.5 1.5 0 0 1 6 4.5h12A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18z",
-      "m8 9.5 3 2.5-3 2.5M12.5 15H16",
-    ],
-  },
-  typescript: {
-    paths: [
-      "M4.5 6A1.5 1.5 0 0 1 6 4.5h12A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18z",
-    ],
-    label: "TS",
-  },
-  javascript: {
-    paths: [
-      "M4.5 6A1.5 1.5 0 0 1 6 4.5h12A1.5 1.5 0 0 1 19.5 6v12a1.5 1.5 0 0 1-1.5 1.5H6A1.5 1.5 0 0 1 4.5 18z",
-    ],
-    label: "JS",
-  },
-  react: {
-    paths: [
-      "M12 12.01h.01",
-      "M12 6.5c4.7 0 8.5 2.5 8.5 5.5s-3.8 5.5-8.5 5.5-8.5-2.5-8.5-5.5S7.3 6.5 12 6.5z",
-      "M8.8 9.25c2.35-4.1 5.3-6.2 6.9-5.3s1.5 4.4-.85 8.5-5.3 6.2-6.9 5.3-1.5-4.4.85-8.5z",
-      "M8.8 14.75c-2.35-4.1-2.45-7.6-.85-8.5s4.55 1.2 6.9 5.3 2.45 7.6.85 8.5-4.55-1.2-6.9-5.3z",
-    ],
-  },
-  braces: {
-    paths: [
-      "M9 4.5H8A2 2 0 0 0 6 6.5v3A2 2 0 0 1 4 11.5 2 2 0 0 1 6 13.5v3a2 2 0 0 0 2 2h1",
-      "M15 4.5h1a2 2 0 0 1 2 2v3a2 2 0 0 0 2 2 2 2 0 0 0-2 2v3a2 2 0 0 1-2 2h-1",
-    ],
-  },
-  hash: { paths: ["M9.5 4.5 8 19.5M16 4.5l-1.5 15M5 9h14.5M4.5 15H19"] },
-  markup: { paths: ["m8.5 7.5-5 4.5 5 4.5M15.5 7.5l5 4.5-5 4.5M13.5 5l-3 14"] },
-  markdown: {
-    paths: [
-      "M4 6.5A1.5 1.5 0 0 1 5.5 5h13A1.5 1.5 0 0 1 20 6.5v11a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 17.5z",
-      "M7 15V9l2.5 3L12 9v6M16 9v6m-2-2.2 2 2.2 2-2.2",
-    ],
-  },
-  lock: {
-    paths: [
-      "M6.5 11h11a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1V12a1 1 0 0 1 1-1z",
-      "M8.5 11V8a3.5 3.5 0 0 1 7 0v3",
-      "M12 14.5v2",
-    ],
-  },
-  settings: {
-    paths: [
-      "M4 7h9M17 7h3M4 17h3M11 17h9",
-      "M15 7m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0M9 17m-2 0a2 2 0 1 0 4 0 2 2 0 1 0-4 0",
-    ],
-  },
-  image: {
-    paths: [
-      "M5.5 4.5h13A1.5 1.5 0 0 1 20 6v12a1.5 1.5 0 0 1-1.5 1.5h-13A1.5 1.5 0 0 1 4 18V6a1.5 1.5 0 0 1 1.5-1.5z",
-      "M8.5 9.5h.01",
-      "m4.5 17 4.5-4.5 3 3 3-3.5 4.5 5",
-    ],
-  },
-  claude: {
-    paths: ["M12 4.5v15M4.5 12h15M6.7 6.7l10.6 10.6M17.3 6.7 6.7 17.3"],
   },
 } as const satisfies Record<string, StrokeGlyph>;
 

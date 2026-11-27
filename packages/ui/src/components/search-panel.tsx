@@ -31,7 +31,6 @@ export interface SearchPanelProps {
   readonly matches: readonly SearchMatch[];
   readonly pending?: boolean;
   readonly error?: string;
-  readonly iconPreset?: "rich" | "stroke";
   readonly placeholder?: string;
   readonly onSelectMatch: (match: SearchMatch, focus: ActivationFocusDecision) => void;
   readonly className?: string;
@@ -62,7 +61,6 @@ export function SearchPanel({
   matches,
   pending = false,
   error,
-  iconPreset = "rich",
   placeholder = "Search workspace…",
   onSelectMatch,
   className,
@@ -227,7 +225,7 @@ export function SearchPanel({
               onClick={(event) => handleMatchClick(match, index, event)}
             >
               <span className="wb-search-row-header">
-                <FileTypeIcon entry={{ name: match.path, type: "file" }} preset={iconPreset} />
+                <FileTypeIcon entry={{ name: match.path, type: "file" }} />
                 <span className="wb-search-path">{match.path}</span>
                 <span className="wb-search-loc">
                   {match.line}:{match.column}

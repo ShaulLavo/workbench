@@ -7,9 +7,6 @@ import {
   type FileIconRule,
   type FileIconRuleName,
 } from "./rules";
-import { STROKE_ICON_GLYPHS, type StrokeIconName } from "./stroke-glyphs";
-
-export type FileIconPreset = "rich" | "stroke";
 
 export interface FileIconEntry {
   readonly name: string;
@@ -21,8 +18,7 @@ export interface ResolvedFileIcon {
   readonly rule: FileIconRule;
 }
 
-const RICH_SYMBOL_PREFIX = "wb-file-icon-";
-const STROKE_SYMBOL_PREFIX = "wb-stroke-icon-";
+const FILE_SYMBOL_PREFIX = "wb-file-icon-";
 const RESOLVED_CACHE = new Map<FileIconRuleName, ResolvedFileIcon>();
 
 function cachedResult(name: FileIconRuleName): ResolvedFileIcon {
@@ -84,32 +80,15 @@ export function getFileIconRule(name: FileIconRuleName): FileIconRule {
 }
 
 export function fileIconSymbolHref(glyph: FileIconGlyphName): string {
-  return `#${RICH_SYMBOL_PREFIX}${glyph}`;
-}
-
-export function strokeIconSymbolHref(glyph: StrokeIconName): string {
-  return `#${STROKE_SYMBOL_PREFIX}${glyph}`;
+  return `#${FILE_SYMBOL_PREFIX}${glyph}`;
 }
 
 /** Builds `<symbol>` markup for the document-wide sprite so virtualized lists draw one `<use>` per row. */
-export function buildFileIconSpriteMarkup(preset: FileIconPreset = "rich"): string {
-  if (preset === "stroke") {
-    return (Object.keys(STROKE_ICON_GLYPHS) as StrokeIconName[])
-      .map((name) => {
-        const glyph = STROKE_ICON_GLYPHS[name];
-        const paths = glyph.paths.map((d) => `<path d="${d}"/>`).join("");
-        const label =
-          "label" in glyph && glyph.label
-            ? `<text x="12" y="15.6" text-anchor="middle" font-size="8.6" font-weight="700" fill="currentColor" stroke="none">${glyph.label}</text>`
-            : "";
-        return `<symbol id="${STROKE_SYMBOL_PREFIX}${name}" viewBox="0 0 24 24">${paths}${label}</symbol>`;
-      })
-      .join("");
-  }
+export function buildFileIconSpriteMarkup(): string {
   return (Object.keys(FILE_ICON_GLYPHS) as FileIconGlyphName[])
     .map((name) => {
       const glyph = FILE_ICON_GLYPHS[name];
-      return `<symbol id="${RICH_SYMBOL_PREFIX}${name}" viewBox="${glyph.viewBox}">${glyph.paths}</symbol>`;
+      return `<symbol id="${FILE_SYMBOL_PREFIX}${name}" viewBox="${glyph.viewBox}">${glyph.paths}</symbol>`;
     })
     .join("");
 }

@@ -64,7 +64,6 @@ export interface FileTreeViewportProps {
   readonly hasEntryTabStop: boolean;
   readonly label: string;
   readonly focusModality: "pointer" | "keyboard";
-  readonly iconPreset: "rich" | "stroke";
   readonly dragging: boolean;
   readonly touchDragging: boolean;
   readonly touchDragY: number | null;
@@ -98,7 +97,6 @@ export function FileTreeViewport({
   hasEntryTabStop,
   label,
   focusModality,
-  iconPreset,
   dragging,
   touchDragging,
   touchDragY,
@@ -321,7 +319,6 @@ export function FileTreeViewport({
         rows={stickyRows}
         initialPushUpPx={stickyPushUpRef.current}
         overlayRef={stickyOverlayRef}
-        iconPreset={iconPreset}
         onSelectAncestor={(dirPath) => {
           const idx = rows.findIndex((r) => r.type === "entry" && r.path === dirPath);
           if (idx >= 0) virtualizer.scrollToIndex(idx, { align: "start" });
