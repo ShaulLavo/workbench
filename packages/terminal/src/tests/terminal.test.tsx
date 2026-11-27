@@ -1121,8 +1121,9 @@ describe("@shaulavo/workbench-terminal", () => {
       { path: "src/other.ts", line: 7, column: 2 },
     ]);
 
-    // Malformed parenthesized suffixes must not emit partial paths or bogus line links.
-    const malformed = "src/App.tsx(12,) src/App.tsx(12,x) src/App.tsx(12,4)junk";
+    // Malformed parenthesized suffixes must not emit partial paths or bogus line links,
+    // while valid references immediately following a malformed suffix still parse.
+    const malformed = "src/App.tsx(12,) src/App.tsx(12,x) src/App.tsx(12,4)junk src/App.tsx(12,x)junk.ts:9:1";
     const malformedBounds = Array.from({ length: malformed.length + 1 }, (_, i) => i);
     expect(
       findTerminalSnapshotFileLinks({
@@ -1131,6 +1132,16 @@ describe("@shaulavo/workbench-terminal", () => {
         endCellByTextBoundary: malformedBounds,
       }),
     ).toEqual([]);
+
+    const adjacent = "src/App.tsx(12,x):(src/err.ts:9:1)";
+    const adjacentBounds = Array.from({ length: adjacent.length + 1 }, (_, i) => i);
+    expect(
+      findTerminalSnapshotFileLinks({
+        text: adjacent,
+        startCellByTextBoundary: adjacentBounds,
+        endCellByTextBoundary: adjacentBounds,
+      }).map((l) => l.reference),
+    ).toEqual([{ path: "src/err.ts", line: 9, column: 1 }]);
   });
 
   it("moves focus to the terminal on New terminal, tab click, and Split while keeping arrow-key navigation on tabs", async () => {

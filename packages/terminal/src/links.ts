@@ -136,9 +136,14 @@ function isLocationSuffixDelimiter(ch: string | undefined): boolean {
   return ch === undefined || HARD_BOUNDARY.has(ch) || TRAILING_PUNCTUATION.has(ch);
 }
 
-function scanUntilNonParenBoundary(text: string, start: number): number {
-  let end = start;
-  while (end < text.length && !NON_PAREN_BOUNDARY.has(text[end] ?? "")) {
+function scanMalformedSuffixEnd(text: string, openIndex: number): number {
+  let end = openIndex + 1;
+  while (end < text.length && !NON_PAREN_BOUNDARY.has(text[end] ?? "") && text[end] !== "(") {
+    const ch = text[end];
+    end += 1;
+    if (ch === ")") break;
+  }
+  while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "") && text[end] !== "(") {
     end += 1;
   }
   return end;
@@ -163,30 +168,29 @@ function prefixEndsWithRecognizedFile(prefix: string): boolean {
   return isRecognizedFileLeaf(leaf);
 }
 
-function scanTokenEnd(text: string, start: number): number {
+function scanToken(text: string, start: number): { readonly end: number; readonly reject: boolean } {
   let end = start;
   while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "")) {
     if (text[end] !== "(") {
       end += 1;
       continue;
     }
-    if (end > start && text[end - 1] === "/") {
-      const groupEnd = scanRouteGroupSegmentEnd(text, end);
-      if (groupEnd !== null) {
-        end = groupEnd;
-        continue;
-      }
+    const routeGroupEnd = end > start && text[end - 1] === "/" ? scanRouteGroupSegmentEnd(text, end) : null;
+    if (routeGroupEnd !== null) {
+      end = routeGroupEnd;
+      continue;
     }
-    if (!prefixEndsWithRecognizedFile(text.slice(start, end))) break;
+    if (!prefixEndsWithRecognizedFile(text.slice(start, end))) {
+      return { end, reject: false };
+    }
     const validLoc = PAREN_LOCATION_RE.exec(text.slice(end));
     const afterSuffix = validLoc ? text[end + validLoc[0].length] : undefined;
     if (validLoc && isLocationSuffixDelimiter(afterSuffix)) {
-      return end + validLoc[0].length;
+      return { end: end + validLoc[0].length, reject: false };
     }
-    // Malformed parenthesized suffix on a file (e.g. `(12,)`, `(12,x)`, `(12,4)junk`): consume whole so parsing rejects it.
-    return scanUntilNonParenBoundary(text, end);
+    return { end: scanMalformedSuffixEnd(text, end), reject: true };
   }
-  return end;
+  return { end, reject: false };
 }
 
 function matchSnapshotToken(
@@ -227,9 +231,11 @@ export function findTerminalSnapshotFileLinks(
       cursor += 1;
       continue;
     }
-    const end = scanTokenEnd(text, cursor);
-    const matched = matchSnapshotToken(line, cursor, end);
-    if (matched) results.push(matched);
+    const { end, reject } = scanToken(text, cursor);
+    if (!reject) {
+      const matched = matchSnapshotToken(line, cursor, end);
+      if (matched) results.push(matched);
+    }
     cursor = end;
   }
 
