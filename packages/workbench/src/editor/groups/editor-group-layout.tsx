@@ -28,7 +28,7 @@ import type { ThemeVersionSource } from "../../tokens/index";
 import { BarTab, BarTabStrip, cx } from "../../ui/index";
 import type { EditorPlugin } from "@singapore-editor/core/extensions";
 import type { HighlightingService, HighlightingThemeSource } from "@singapore-editor/highlighting";
-import { EditorView } from "../editor-view";
+import { CodeEditor } from "../code-editor";
 import type { GroupDropEdge } from "./model";
 
 export interface EditorGroupLayoutProps {
@@ -38,7 +38,7 @@ export interface EditorGroupLayoutProps {
   readonly fontSize?: number;
   readonly lineHeight?: number;
   readonly wordWrap?: boolean;
-  readonly highlightingService?: HighlightingService | null;
+  readonly highlighting?: false | HighlightingService;
   readonly highlightingTheme?: HighlightingThemeSource;
   readonly extraPlugins?: readonly EditorPlugin[];
   readonly renderTabActions?: (group: EditorGroupNode) => ReactNode;
@@ -142,7 +142,7 @@ interface LeafGroupProps {
   readonly fontSize?: number;
   readonly lineHeight?: number;
   readonly wordWrap?: boolean;
-  readonly highlightingService?: HighlightingService | null;
+  readonly highlighting?: false | HighlightingService;
   readonly highlightingTheme?: HighlightingThemeSource;
   readonly extraPlugins?: readonly EditorPlugin[];
   readonly renderTabActions?: (group: EditorGroupNode) => ReactNode;
@@ -161,7 +161,7 @@ function EditorGroupPane({
   fontSize,
   lineHeight,
   wordWrap,
-  highlightingService,
+  highlighting,
   highlightingTheme,
   extraPlugins,
   renderTabActions,
@@ -216,7 +216,7 @@ function EditorGroupPane({
 
       <div className="wb-editor-body">
         {selectedTab ? (
-          <EditorView
+          <CodeEditor
             adapter={documents}
             documentId={selectedTab.documentId}
             path={selectedTab.path}
@@ -228,7 +228,7 @@ function EditorGroupPane({
             fontSize={fontSize}
             lineHeight={lineHeight}
             wordWrap={wordWrap}
-            highlightingService={highlightingService}
+            highlighting={highlighting}
             highlightingTheme={highlightingTheme}
             extraPlugins={extraPlugins}
             onDirtyChange={onDirtyChange}
@@ -267,7 +267,7 @@ export function EditorGroupLayout({
   fontSize,
   lineHeight,
   wordWrap,
-  highlightingService,
+  highlighting,
   highlightingTheme,
   extraPlugins,
   renderTabActions,
@@ -347,7 +347,7 @@ export function EditorGroupLayout({
           fontSize={fontSize}
           lineHeight={lineHeight}
           wordWrap={wordWrap}
-          highlightingService={highlightingService}
+          highlighting={highlighting}
           highlightingTheme={highlightingTheme}
           extraPlugins={extraPlugins}
           renderTabActions={renderTabActions}

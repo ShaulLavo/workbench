@@ -4,13 +4,15 @@ import "../styles/ui.css";
 import "../styles/editor.css";
 
 export {
-  EditorSessionView,
+  CodeEditor,
+  type CodeEditorAdapterProps,
+  type CodeEditorCommonProps,
+  type CodeEditorProps,
+  type CodeEditorSessionProps,
   type EditorRevealTarget,
   type EditorSessionAttachment,
-  type EditorSessionViewProps,
-} from "./editor-session-view";
+} from "./code-editor";
 export { EditorTabBar, type EditorTabBarProps } from "./editor-tab-bar";
-export { EditorView, type EditorViewProps } from "./editor-view";
 export { EditorWorkbench, type EditorWorkbenchProps } from "./editor-workbench";
 export { languageIdForPath, languageLabelForPath } from "./utils/language";
 export {

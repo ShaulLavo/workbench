@@ -701,7 +701,7 @@ export function MinReactCheck(props: {
   }
   writeFileSync(
     path.join(bareEditorDir, "bare-entry.ts"),
-    `import { EditorWorkbench, EditorView, EditorTabBar, buildWorkbenchEditorTheme, capOverscrollTop, createWorkbenchEditorPlugins, documentFeatureTier, languageIdForPath } from "@shaulavo/workbench/editor";\nexport const bare = { EditorWorkbench, EditorView, EditorTabBar, buildWorkbenchEditorTheme, capOverscrollTop, createWorkbenchEditorPlugins, documentFeatureTier, languageIdForPath };\n`,
+    `import { EditorWorkbench, CodeEditor, EditorTabBar, buildWorkbenchEditorTheme, capOverscrollTop, createWorkbenchEditorPlugins, documentFeatureTier, languageIdForPath } from "@shaulavo/workbench/editor";\nexport const bare = { EditorWorkbench, CodeEditor, EditorTabBar, buildWorkbenchEditorTheme, capOverscrollTop, createWorkbenchEditorPlugins, documentFeatureTier, languageIdForPath };\n`,
   );
   run(
     "bun",
@@ -713,7 +713,7 @@ export function MinReactCheck(props: {
        const css = built.outputs.find((o) => o.path.endsWith(".css"));
        if (!js || !css) throw new Error("Bare editor bundle missing JS or auto-imported CSS output");
        const text = await js.text();
-       if (!text.includes("wb-editor-view")) throw new Error("Bare editor bundle missing EditorView");
+       if (!text.includes("wb-editor-view")) throw new Error("Bare editor bundle missing CodeEditor");
        for (const forbidden of ["@dnd-kit", "ghostty-webgpu", "wb-markdown-composer", "wb-diagnostic-peek"]) {
          if (text.includes(forbidden)) throw new Error("Bare editor bundle unexpectedly included " + forbidden);
        }`,
@@ -867,11 +867,11 @@ import {
 } from "@shaulavo/workbench/terminal";
 import { PreviewPane } from "@shaulavo/workbench/preview";
 import {
-  EditorView,
-  EditorSessionView,
+  CodeEditor,
   EditorWorkbench,
   EditorTabBar,
   MI_CODE_UNITS,
+  type CodeEditorProps,
   type EditorRevealTarget,
   type EditorSessionAttachment,
 } from "@shaulavo/workbench/editor";
@@ -921,6 +921,7 @@ export type AllConsumerTypes = [
   FileTreeViewHandle,
   TerminalKey,
   TerminalSavedScroll,
+  CodeEditorProps,
   EditorRevealTarget,
   EditorSessionAttachment,
   DiagnosticPeekClientRect,
@@ -954,8 +955,7 @@ export const allConsumerValues = [
   TERMINAL_KEYS,
   controlKeyFor,
   PreviewPane,
-  EditorView,
-  EditorSessionView,
+  CodeEditor,
   EditorWorkbench,
   EditorTabBar,
   MI_CODE_UNITS,

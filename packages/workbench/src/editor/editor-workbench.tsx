@@ -15,8 +15,8 @@ import { cx } from "../ui/index";
 import type { Editor } from "@singapore-editor/core/editor";
 import type { EditorPlugin } from "@singapore-editor/core/extensions";
 import type { HighlightingService, HighlightingThemeSource } from "@singapore-editor/highlighting";
+import { CodeEditor } from "./code-editor";
 import { EditorTabBar } from "./editor-tab-bar";
-import { EditorView } from "./editor-view";
 
 export interface EditorWorkbenchProps {
   readonly documents: EditorDocumentAdapter;
@@ -28,7 +28,7 @@ export interface EditorWorkbenchProps {
   readonly fontSize?: number;
   readonly lineHeight?: number;
   readonly wordWrap?: boolean;
-  readonly highlightingService?: HighlightingService | null;
+  readonly highlighting?: false | HighlightingService;
   readonly highlightingTheme?: HighlightingThemeSource;
   readonly extraPlugins?: readonly EditorPlugin[];
   readonly tabActions?: ReactNode;
@@ -56,7 +56,7 @@ function findFirstGroup(node: EditorGroupTreeNode): EditorGroupNode {
 }
 
 /**
- * Complete single-group editor workbench combining `EditorTabBar` and `EditorView` with
+ * Complete single-group editor workbench combining `EditorTabBar` and `CodeEditor` with
  * per-activation touch focus handoff and empty state.
  */
 export function EditorWorkbench({
@@ -68,7 +68,7 @@ export function EditorWorkbench({
   fontSize,
   lineHeight,
   wordWrap,
-  highlightingService,
+  highlighting,
   highlightingTheme,
   extraPlugins,
   tabActions,
@@ -115,7 +115,7 @@ export function EditorWorkbench({
 
       <div className="wb-editor-body">
         {selectedTab ? (
-          <EditorView
+          <CodeEditor
             adapter={documents}
             documentId={selectedTab.documentId}
             path={selectedTab.path}
@@ -127,7 +127,7 @@ export function EditorWorkbench({
             fontSize={fontSize}
             lineHeight={lineHeight}
             wordWrap={wordWrap}
-            highlightingService={highlightingService}
+            highlighting={highlighting}
             highlightingTheme={highlightingTheme}
             extraPlugins={extraPlugins}
             onDirtyChange={onDirtyChange}
