@@ -17,7 +17,6 @@ const GIT_BADGE_LETTER: Readonly<Record<GitStatusCode, string>> = {
 
 export interface FileTreeRowProps {
   readonly row: TreeEntryRow;
-  readonly iconPreset: "rich" | "stroke";
   readonly activeParentPath: string | undefined;
   readonly dropTargetDirectory: string | undefined;
   readonly dropTargetSegment: string | undefined;
@@ -64,7 +63,6 @@ export interface FileTreeRowProps {
 /** Renders one virtualized file or folder row with indent guides, compact segments, git status, and inline rename. */
 export function FileTreeRow({
   row,
-  iconPreset,
   activeParentPath,
   dropTargetDirectory,
   dropTargetSegment,
@@ -199,12 +197,7 @@ export function FileTreeRow({
         ) : null}
       </span>
 
-      <FileTypeIcon
-        entry={{ name: row.name, type: row.kind }}
-        open={row.expanded}
-        preset={iconPreset}
-        sprite
-      />
+      <FileTypeIcon entry={{ name: row.name, type: row.kind }} open={row.expanded} sprite />
 
       {row.editing ? (
         <RenameField
@@ -310,19 +303,12 @@ function RenameField({
 
 export interface FileTreeDraftRowProps {
   readonly row: TreeDraftRow;
-  readonly iconPreset: "rich" | "stroke";
   readonly siblingNames: ReadonlySet<string>;
   readonly onCommit: (parent: string, kind: "file" | "directory", name: string) => void;
   readonly onCancel: () => void;
 }
 
-export function FileTreeDraftRow({
-  row,
-  iconPreset,
-  siblingNames,
-  onCommit,
-  onCancel,
-}: FileTreeDraftRowProps) {
+export function FileTreeDraftRow({ row, siblingNames, onCommit, onCancel }: FileTreeDraftRowProps) {
   return (
     <div
       data-wb-tree-draft=""
@@ -330,7 +316,7 @@ export function FileTreeDraftRow({
       style={{ paddingLeft: `calc(${row.depth} * var(--wb-tree-indent) + 0.375rem)` }}
     >
       <span className="wb-tree-chevron" aria-hidden="true" />
-      <FileTypeIcon entry={{ name: "", type: row.kind }} preset={iconPreset} sprite />
+      <FileTypeIcon entry={{ name: "", type: row.kind }} sprite />
       <ValidatingInlineInput
         initialValue=""
         siblingNames={siblingNames}

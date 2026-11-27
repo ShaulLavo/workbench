@@ -6,7 +6,6 @@ export interface StickyAncestorsOverlayProps {
   readonly rows: StickyAncestorsState["rows"];
   readonly initialPushUpPx?: number;
   readonly overlayRef?: Ref<HTMLDivElement>;
-  readonly iconPreset: "rich" | "stroke";
   readonly onSelectAncestor: (dirPath: string) => void;
 }
 
@@ -19,7 +18,6 @@ export function StickyAncestorsOverlay({
   rows,
   initialPushUpPx = 0,
   overlayRef,
-  iconPreset,
   onSelectAncestor,
 }: StickyAncestorsOverlayProps) {
   if (rows.length === 0) return null;
@@ -50,7 +48,7 @@ export function StickyAncestorsOverlay({
           <span className="wb-tree-chevron" data-expanded="true" aria-hidden="true">
             <StrokeIcon name="chevron" />
           </span>
-          <FileTypeIcon entry={{ name: row.name, type: "directory" }} open preset={iconPreset} sprite />
+          <FileTypeIcon entry={{ name: row.name, type: "directory" }} open sprite />
           <span className="wb-tree-name">
             <span className="wb-tree-stem">{row.name}</span>
           </span>

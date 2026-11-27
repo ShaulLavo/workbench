@@ -141,7 +141,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [preset, setPreset] = useState<"sprockt" | "fregat">(initialPreset);
   const [mode, setMode] = useState<"light" | "dark">(initialMode);
   const [density, setDensity] = useState<"default" | "compact">("default");
-  const [iconPreset, setIconPreset] = useState<"rich" | "stroke">("rich");
   const [scopedMode, setScopedMode] = useState<"light" | "dark">(initialMode === "light" ? "dark" : "light");
   const [phoneShell, setPhoneShell] = useState<boolean>(() => isPhoneViewport());
   const [keyboardOpen, setKeyboardOpen] = useState(false);
@@ -313,7 +312,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
         options={searchOptions}
         onOptionsChange={setSearchOptions}
         matches={filteredMatches}
-        iconPreset={iconPreset}
         onSelectMatch={(match, decision) => {
           onTabActivate(match.path, decision);
           if (phoneShell) layout.setMobileActivePane("editor");
@@ -359,7 +357,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
           key={treeMode}
           model={treeBundle.model}
           adapter={treeBundle.adapter}
-          iconPreset={iconPreset}
           onOpenFile={(path, decision) => {
             onTabActivate(path, decision);
             if (phoneShell) layout.setMobileActivePane("editor");
@@ -380,7 +377,7 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             active={activeTab === tab.id}
             label={tab.label}
             tone={tab.tone}
-            icon={<FileTypeIcon entry={{ name: tab.id, type: "file" }} preset={iconPreset} sprite />}
+            icon={<FileTypeIcon entry={{ name: tab.id, type: "file" }} sprite />}
             data-testid={`sample-tab-${tab.id}`}
             onActivate={(decision, event) => onTabActivate(tab.id, decision, event.currentTarget)}
           />
@@ -423,14 +420,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             }}
           >
             Context menu
-          </button>
-          <button
-            type="button"
-            className="wb-button"
-            data-testid="toggle-icon-preset"
-            onClick={() => setIconPreset((p) => (p === "rich" ? "stroke" : "rich"))}
-          >
-            Icons: {iconPreset}
           </button>
           <button
             type="button"
@@ -523,7 +512,6 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             <EditorGroupLayout
               documents={editorBundle.documents}
               groups={editorBundle.groups}
-              iconPreset={iconPreset}
               renderGroupOverlay={(group) => {
                 if (!showDiagnosticPeek || group.id !== "main") return null;
                 const peekModel: DiagnosticPeekModel = {
@@ -776,8 +764,7 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
       }
       overlays={
         <>
-          <FileIconSprite preset="rich" />
-          <FileIconSprite preset="stroke" />
+          <FileIconSprite />
           <CommandPalette
             open={paletteOpen}
             onOpenChange={setPaletteOpen}

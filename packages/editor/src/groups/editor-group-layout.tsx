@@ -23,7 +23,6 @@ import {
   type TabId,
 } from "@shaulavo/workbench-core";
 import { useSubscribable } from "@shaulavo/workbench-core/react";
-import type { FileIconPreset } from "@shaulavo/workbench-icons";
 import { FileTypeIcon } from "@shaulavo/workbench-icons/react";
 import type { ThemeVersionSource } from "@shaulavo/workbench-tokens";
 import { BarTab, BarTabStrip, cx } from "@shaulavo/workbench-ui";
@@ -35,7 +34,6 @@ import type { GroupDropEdge } from "./model";
 export interface EditorGroupLayoutProps {
   readonly documents: EditorDocumentAdapter;
   readonly groups: EditorGroupAdapter;
-  readonly iconPreset?: FileIconPreset;
   readonly themeVersion?: ThemeVersionSource;
   readonly fontSize?: number;
   readonly lineHeight?: number;
@@ -68,13 +66,12 @@ interface SortableTabProps {
   readonly groupId: GroupId;
   readonly tab: EditorTabDescriptor;
   readonly active: boolean;
-  readonly iconPreset: FileIconPreset;
   readonly onSelect: (tab: EditorTabDescriptor, focus: ActivationFocusDecision, target: HTMLElement) => void;
   readonly onClose: (tabId: TabId) => void;
   readonly onPin: (tabId: TabId) => void;
 }
 
-function SortableEditorTab({ groupId, tab, active, iconPreset, onSelect, onClose, onPin }: SortableTabProps) {
+function SortableEditorTab({ groupId, tab, active, onSelect, onClose, onPin }: SortableTabProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: `tab:${groupId}:${tab.id}`,
     data: { kind: "editor-tab", groupId, tabId: tab.id },
@@ -95,7 +92,7 @@ function SortableEditorTab({ groupId, tab, active, iconPreset, onSelect, onClose
         preview={tab.preview}
         dirty={tab.dirty}
         data-testid={`wb-editor-tab-${tab.id}`}
-        icon={<FileTypeIcon entry={{ name: tab.path ?? tab.label, type: "file" }} preset={iconPreset} />}
+        icon={<FileTypeIcon entry={{ name: tab.path ?? tab.label, type: "file" }} />}
         onActivate={(focus, event) => {
           const resolved = focus ?? resolveActivationFocus(event, "auto");
           onSelect(tab, resolved, event.currentTarget);
@@ -141,7 +138,6 @@ interface LeafGroupProps {
   readonly isDraggingTab: boolean;
   readonly documents: EditorDocumentAdapter;
   readonly groups: EditorGroupAdapter;
-  readonly iconPreset: FileIconPreset;
   readonly themeVersion?: ThemeVersionSource;
   readonly fontSize?: number;
   readonly lineHeight?: number;
@@ -161,7 +157,6 @@ function EditorGroupPane({
   isDraggingTab,
   documents,
   groups,
-  iconPreset,
   themeVersion,
   fontSize,
   lineHeight,
@@ -205,7 +200,6 @@ function EditorGroupPane({
               groupId={group.id}
               tab={tab}
               active={tab.id === selectedTab?.id}
-              iconPreset={iconPreset}
               onSelect={(item, decision, target) => {
                 if (!decision.shouldFocusEditor) {
                   dismissSoftKeyboardOnTouchActivation(decision, target);
@@ -269,7 +263,6 @@ function EditorGroupPane({
 export function EditorGroupLayout({
   documents,
   groups,
-  iconPreset = "rich",
   themeVersion,
   fontSize,
   lineHeight,
@@ -350,7 +343,6 @@ export function EditorGroupLayout({
           isDraggingTab={draggingTabId !== null}
           documents={documents}
           groups={groups}
-          iconPreset={iconPreset}
           themeVersion={themeVersion}
           fontSize={fontSize}
           lineHeight={lineHeight}

@@ -16,7 +16,6 @@ import {
   type GroupId,
   type TabId,
 } from "@shaulavo/workbench-core";
-import type { FileIconPreset } from "@shaulavo/workbench-icons";
 import { FileTypeIcon } from "@shaulavo/workbench-icons/react";
 import { BarTab, BarTabStrip } from "@shaulavo/workbench-ui";
 
@@ -27,7 +26,6 @@ export interface EditorTabBarProps {
   readonly tabs: readonly EditorTabDescriptor[];
   readonly selectedTabId: TabId | null;
   readonly label?: string;
-  readonly iconPreset?: FileIconPreset;
   readonly actions?: ReactNode;
   readonly stripRef?: RefObject<HTMLDivElement | null>;
   readonly getTabTone?: (tab: EditorTabDescriptor) => string | undefined;
@@ -136,7 +134,6 @@ export function EditorTabBar({
   tabs,
   selectedTabId,
   label = "Open editors",
-  iconPreset = "rich",
   actions,
   stripRef,
   getTabTone,
@@ -319,7 +316,7 @@ export function EditorTabBar({
         const icon = renderIcon ? (
           renderIcon(tab)
         ) : (
-          <FileTypeIcon entry={{ name: tab.path ?? tab.label, type: "file" }} preset={iconPreset} />
+          <FileTypeIcon entry={{ name: tab.path ?? tab.label, type: "file" }} />
         );
         return (
           <BarTab
