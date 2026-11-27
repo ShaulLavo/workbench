@@ -223,7 +223,7 @@ describe("@shaulavo/workbench-editor", () => {
       );
       buttons[0]?.dispatchEvent(new MouseEvent("click", { bubbles: true, detail: 1 }));
     });
-    expect(onReorder).toHaveBeenCalledWith("main", 0, 1);
+    expect(onReorder).toHaveBeenCalledWith("main", 0, 1, "src/a/index.ts");
     expect(onSelect).not.toHaveBeenCalled();
 
     // Touch pointerdown -> click resolves shouldFocusEditor: false even when click lacks pointerType.
@@ -324,7 +324,7 @@ describe("@shaulavo/workbench-editor", () => {
     };
 
     const tabEls = mockRects(host);
-    // Start dragging A past C (slot 2) without host updating tabs yet, then drag back between B and C (slot 1).
+    // Drag A past C, then back between B and C, then drop: emits exactly ONE reorder (0 -> 1, "a").
     act(() => {
       tabEls[0]?.dispatchEvent(
         new PointerEvent("pointerdown", {
@@ -352,12 +352,71 @@ describe("@shaulavo/workbench-editor", () => {
         }),
       );
     });
-    expect(onReorder).toHaveBeenNthCalledWith(1, "g1", 0, 2);
-    expect(onReorder).toHaveBeenNthCalledWith(2, "g1", 0, 1);
+    expect(onReorder).not.toHaveBeenCalled();
+    act(() => {
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 10,
+          pointerType: "mouse",
+          clientX: 180,
+        }),
+      );
+    });
+    expect(onReorder).toHaveBeenCalledTimes(1);
+    expect(onReorder).toHaveBeenCalledWith("g1", 0, 1, "a");
+
+    // Dragging A past C and returning it to slot 0 before dropping emits zero reorders.
+    onReorder.mockClear();
+    act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointerup", {
+          bubbles: true,
+          pointerId: 11,
+          pointerType: "mouse",
+          clientX: 30,
+        }),
+      );
+    });
+    expect(onReorder).not.toHaveBeenCalled();
 
     // Changing groupId while dragging cancels the gesture instead of emitting a reorder for g2.
     onReorder.mockClear();
     act(() => {
+      tabEls[0]?.dispatchEvent(
+        new PointerEvent("pointerdown", {
+          bubbles: true,
+          button: 0,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 40,
+        }),
+      );
+      window.dispatchEvent(
+        new PointerEvent("pointermove", {
+          bubbles: true,
+          pointerId: 12,
+          pointerType: "mouse",
+          clientX: 280,
+        }),
+      );
       activeRoot?.render(
         <WorkbenchPortalProvider>
           <EditorTabBar
@@ -376,7 +435,7 @@ describe("@shaulavo/workbench-editor", () => {
       window.dispatchEvent(
         new PointerEvent("pointermove", {
           bubbles: true,
-          pointerId: 10,
+          pointerId: 12,
           pointerType: "mouse",
           clientX: 280,
         }),
@@ -384,7 +443,7 @@ describe("@shaulavo/workbench-editor", () => {
       window.dispatchEvent(
         new PointerEvent("pointerup", {
           bubbles: true,
-          pointerId: 10,
+          pointerId: 12,
           pointerType: "mouse",
           clientX: 280,
         }),

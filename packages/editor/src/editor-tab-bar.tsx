@@ -37,7 +37,7 @@ export interface EditorTabBarProps {
   readonly onSelectTab: (groupId: GroupId, tabId: TabId, focus: ActivationFocusDecision) => void;
   readonly onCloseTab: (groupId: GroupId, tabId: TabId) => void;
   readonly onPinTab?: (groupId: GroupId, tabId: TabId) => void;
-  readonly onReorderTab?: (groupId: GroupId, fromIndex: number, toIndex: number) => void;
+  readonly onReorderTab?: (groupId: GroupId, fromIndex: number, toIndex: number, tabId: TabId) => void;
   readonly onTabContextMenu?: (tab: EditorTabDescriptor, event: MouseEvent<HTMLDivElement>) => void;
   readonly className?: string;
   readonly testId?: string;
@@ -49,7 +49,6 @@ interface TabDragState {
   readonly startX: number;
   readonly pointerId: number;
   moved: boolean;
-  lastEmittedSlot: number | null;
 }
 
 function parentDirectory(path: string): string {
@@ -162,7 +161,10 @@ export function EditorTabBar({
   const suppressClickRef = useRef(false);
   const suppressTimerRef = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
   const reorderCallbackRef = useRef(onReorderTab);
-  const [draggingTabId, setDraggingTabId] = useState<TabId | null>(null);
+  const [dragVisual, setDragVisual] = useState<{
+    readonly groupId: GroupId;
+    readonly tabId: TabId;
+  } | null>(null);
 
   useEffect(() => {
     tabsRef.current = tabs;
@@ -171,12 +173,7 @@ export function EditorTabBar({
     const activeDrag = dragRef.current;
     if (!activeDrag) return;
     const stillPresent = activeDrag.groupId === groupId && tabs.some((tab) => tab.id === activeDrag.tabId);
-    if (stillPresent) {
-      activeDrag.lastEmittedSlot = null;
-      return;
-    }
-    dragRef.current = null;
-    queueMicrotask(() => setDraggingTabId(null));
+    if (!stillPresent) dragRef.current = null;
   }, [groupId, onReorderTab, tabs]);
 
   useEffect(() => {
@@ -190,7 +187,11 @@ export function EditorTabBar({
   useEffect(() => {
     function cancelDrag(): void {
       dragRef.current = null;
-      setDraggingTabId(null);
+      setDragVisual(null);
+    }
+
+    function clearSuppressedClick(): void {
+      suppressClickRef.current = false;
     }
 
     function handlePointerMove(event: PointerEvent): void {
@@ -201,25 +202,26 @@ export function EditorTabBar({
       if (currentIndex < 0) return cancelDrag();
       if (!state.moved && Math.abs(event.clientX - state.startX) < DRAG_THRESHOLD_PX) return;
       state.moved = true;
-      setDraggingTabId(state.tabId);
-      const slot = findDragSlotByTabId(resolvedStripRef.current, event.clientX, state.tabId);
-      if (slot === currentIndex || slot === state.lastEmittedSlot) return;
-      state.lastEmittedSlot = slot;
-      reorderCallbackRef.current?.(state.groupId, currentIndex, slot);
+      setDragVisual({ groupId: state.groupId, tabId: state.tabId });
     }
 
     function handlePointerEnd(event: PointerEvent): void {
       const state = dragRef.current;
       if (!state || event.pointerId !== state.pointerId) return;
-      const shouldSuppress = event.type !== "pointercancel" && state.moved;
+      const isDrop = event.type !== "pointercancel";
+      const didMove = state.moved;
       cancelDrag();
       clearTimeout(suppressTimerRef.current);
-      suppressClickRef.current = shouldSuppress;
-      if (!shouldSuppress) return;
+      suppressClickRef.current = isDrop && didMove;
+      if (!isDrop || !didMove) return;
       // Only suppress the synthetic click that immediately follows pointerup on the dragged tab.
-      suppressTimerRef.current = setTimeout(() => {
-        suppressClickRef.current = false;
-      }, 0);
+      suppressTimerRef.current = setTimeout(clearSuppressedClick, 0);
+      if (state.groupId !== groupIdRef.current) return;
+      const fromIndex = tabsRef.current.findIndex((tab) => tab.id === state.tabId);
+      if (fromIndex < 0) return;
+      const slot = findDragSlotByTabId(resolvedStripRef.current, event.clientX, state.tabId);
+      if (slot === fromIndex) return;
+      reorderCallbackRef.current?.(state.groupId, fromIndex, slot, state.tabId);
     }
 
     window.addEventListener("pointermove", handlePointerMove);
@@ -244,7 +246,6 @@ export function EditorTabBar({
       startX: event.clientX,
       pointerId: event.pointerId,
       moved: false,
-      lastEmittedSlot: null,
     };
   }
 
@@ -329,7 +330,7 @@ export function EditorTabBar({
             preview={tab.preview}
             dirty={tab.dirty}
             missing={tab.missing}
-            dragging={draggingTabId === tab.id}
+            dragging={dragVisual?.groupId === groupId && dragVisual.tabId === tab.id}
             dirtyTestId={dirtyTestId?.(tab, active)}
             data-testid={tabTestId ? tabTestId(tab) : `wb-editor-tab-${tab.id}`}
             data-tab-id={tab.id}

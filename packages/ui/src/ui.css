@@ -524,6 +524,7 @@
 
   .wb-tab-strip-content {
     display: flex;
+    flex: none;
     align-items: stretch;
     min-width: 100%;
     width: max-content;
