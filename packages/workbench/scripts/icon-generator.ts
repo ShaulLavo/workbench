@@ -26,6 +26,15 @@ const PKG_ROOT = path.resolve(import.meta.dirname, "..");
 const VSCODE_SVG_DIR = path.join(PKG_ROOT, "node_modules/@pierre/vscode-icons/svgs");
 const CATPPUCCIN_JSON = path.join(PKG_ROOT, "node_modules/@iconify-json/catppuccin/icons.json");
 const EXCLUDED_SET = new Set<string>(EXCLUDED_VSCODE_ICON_SOURCES);
+/**
+ * Upstream `@pierre/vscode-icons` SVGs whose outer fill and inner cutout were authored as
+ * separate opaque `fill="currentColor"` paths. Merging them with `fill-rule="evenodd"`
+ * restores the cutout so the inner detail does not disappear into the outer fill.
+ */
+const VSCODE_CUTOUT_SOURCES = new Set<string>(["html"]);
+const SVG_NUM_RE = /^[\s,]*([+-]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][+-]?\d+)?)/;
+const PLAIN_CURRENT_COLOR_PATH_RE =
+  /^<path\s+(?:fill="currentColor"\s+d="([^"]+)"|d="([^"]+)"\s+fill="currentColor")\s*\/>$/;
 
 const ALLOWED_SVG_TAGS = new Set([
   "g",
@@ -150,6 +159,64 @@ export function validateSafeSvgGlyph(glyphName: string, glyph: GeneratedGlyph): 
   }
 }
 
+/**
+ * Converts a leading lowercase `m x y [dx dy ...]` moveto to an absolute `M x y[l dx dy ...]`
+ * so the subpath stays in the same coordinates when appended after another subpath.
+ */
+export function normalizeLeadingMoveToAbsolute(pathData: string): string {
+  const trimmed = pathData.trim();
+  if (!trimmed.startsWith("m")) return trimmed;
+
+  const afterCommand = trimmed.slice(1);
+  const firstMatch = SVG_NUM_RE.exec(afterCommand);
+  if (!firstMatch?.[1]) {
+    throw new Error(`Could not parse leading moveto X coordinate in SVG path "${trimmed.slice(0, 40)}"`);
+  }
+  const afterX = afterCommand.slice(firstMatch[0].length);
+  const secondMatch = SVG_NUM_RE.exec(afterX);
+  if (!secondMatch?.[1]) {
+    throw new Error(`Could not parse leading moveto Y coordinate in SVG path "${trimmed.slice(0, 40)}"`);
+  }
+
+  const rest = afterX.slice(secondMatch[0].length).replace(/^[\s,]+/, "");
+  if (rest.length === 0 || /^[a-zA-Z]/.test(rest)) {
+    return `M${firstMatch[1]} ${secondMatch[1]}${rest}`;
+  }
+  // Subsequent coordinate pairs after a lowercase `m` are implicit relative `l` commands.
+  return `M${firstMatch[1]} ${secondMatch[1]}l${rest}`;
+}
+
+/**
+ * Combines multiple plain opaque `fill="currentColor"` `<path>` elements into one
+ * `fill-rule="evenodd"` cutout path so nested contours punch out cleanly.
+ */
+export function combineEvenOddCutoutPaths(glyphName: string, inner: string): string {
+  const elements = inner.match(/<[^>]+>/g) ?? [];
+  const leftover = inner.replaceAll(/<[^>]+>/g, "").trim();
+  if (leftover.length > 0 || elements.length < 2) {
+    throw new Error(
+      `Cutout glyph "${glyphName}" expected >=2 plain currentColor <path> elements; update VSCODE_CUTOUT_SOURCES if upstream changed`,
+    );
+  }
+
+  const subpaths: string[] = [];
+  for (let i = 0; i < elements.length; i += 1) {
+    const element = elements[i]!;
+    const match = PLAIN_CURRENT_COLOR_PATH_RE.exec(element);
+    const rawD = match?.[1] ?? match?.[2];
+    if (!rawD) {
+      throw new Error(
+        `Cutout glyph "${glyphName}" contains non-plain element "${element.slice(0, 60)}"; cannot safely merge with evenodd`,
+      );
+    }
+    const normalized = normalizeLeadingMoveToAbsolute(rawD);
+    const needsClose = i < elements.length - 1 && !/[zZ]$/.test(normalized);
+    subpaths.push(needsClose ? `${normalized}Z` : normalized);
+  }
+
+  return `<path fill="currentColor" fill-rule="evenodd" d="${subpaths.join("")}" clip-rule="evenodd"/>`;
+}
+
 function extractVscodeSvg(glyphName: string, sourceName: string): GeneratedGlyph {
   if (EXCLUDED_SET.has(sourceName)) {
     throw new Error(`Refusing to ingest excluded @pierre/vscode-icons source: ${sourceName}`);
@@ -163,12 +230,15 @@ function extractVscodeSvg(glyphName: string, sourceName: string): GeneratedGlyph
     throw new Error(`Could not parse SVG inner markup for ${sourceName}.svg`);
   }
   const prefix = `wb-icon-${glyphName}-`;
-  const inner = innerMatch[1]
+  let inner = innerMatch[1]
     .replaceAll(/\bid="([^"]+)"/g, (_m, id: string) => `id="${prefix}${id}"`)
     .replaceAll(/url\(#([^)]+)\)/g, (_m, id: string) => `url(#${prefix}${id})`)
     .replaceAll(/(?:xlink:)?href="#([^"]+)"/g, (_m, id: string) => `href="#${prefix}${id}"`)
     .replaceAll(/\s+/g, " ")
     .trim();
+  if (VSCODE_CUTOUT_SOURCES.has(sourceName)) {
+    inner = combineEvenOddCutoutPaths(glyphName, inner);
+  }
   return { viewBox, paths: inner };
 }
 
