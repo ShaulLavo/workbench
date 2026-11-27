@@ -34,9 +34,9 @@ interface AdapterDraftStore {
 }
 
 interface ExpandedEditWindow {
-  readonly bStart: number;
+  bStart: number;
   bEnd: number;
-  readonly aStart: number;
+  aStart: number;
   aEnd: number;
 }
 
@@ -93,18 +93,46 @@ export function utf8ByteLength(text: string): number {
   return bytes;
 }
 
-function resolveDocByteLength(doc: LoadedDocument): number {
-  if (typeof doc.byteLength === "number" && Number.isFinite(doc.byteLength) && doc.byteLength >= 0) {
-    return doc.byteLength;
-  }
-  return utf8ByteLength(doc.text);
+/** Computes exact UTF-8 byte length of a normalized Singapore `DocumentTextSnapshot` without materializing. */
+export function utf8ByteLengthOfSnapshot(snapshot: DocumentTextSnapshot): number {
+  let bytes = 0;
+  let pendingHigh = false;
+  snapshot.forEachTextChunk((chunk) => {
+    for (let i = 0; i < chunk.length; i += 1) {
+      const code = chunk.charCodeAt(i);
+      if (pendingHigh && isLowSurrogate(code)) {
+        pendingHigh = false;
+        bytes += 4;
+        continue;
+      }
+      if (pendingHigh) {
+        pendingHigh = false;
+        bytes += 3;
+      }
+      if (code <= 0x7f) {
+        bytes += 1;
+        continue;
+      }
+      if (code <= 0x7ff) {
+        bytes += 2;
+        continue;
+      }
+      if (isHighSurrogate(code)) {
+        pendingHigh = true;
+        continue;
+      }
+      bytes += 3;
+    }
+  });
+  if (pendingHigh) bytes += 3;
+  return bytes;
 }
 
 /**
  * Computes exact incremental UTF-8 byte-length delta across a batch of edits without reading the
- * full document. Expands edit boundaries by 1 UTF-16 code unit whenever a boundary touches a
- * pairing surrogate (`0xD800-0xDBFF` on the left, `0xDC00-0xDFFF` on the right) and merges
- * overlapping windows so split or joined astral surrogate pairs are always measured accurately.
+ * full document. First merges touching/overlapping edits into disjoint raw spans so surviving
+ * outer boundaries are guaranteed intact in both snapshots, then expands each outer boundary by
+ * 1 UTF-16 code unit when touching a pairing surrogate (`0xD800-0xDBFF` left, `0xDC00-0xDFFF` right).
  */
 export function computeIncrementalUtf8Delta(
   before: DocumentTextSnapshot,
@@ -112,23 +140,19 @@ export function computeIncrementalUtf8Delta(
   edits: readonly TextEdit[],
 ): number {
   if (edits.length === 0) return 0;
-  const sorted = edits.toSorted((a, b) => a.from - b.from);
+  const sorted = edits.toSorted((a, b) => a.from - b.from || a.to - b.to);
   const windows: ExpandedEditWindow[] = [];
   let cumDelta = 0;
 
   for (const edit of sorted) {
-    const padLeft =
-      edit.from > 0 && isHighSurrogate(before.readRange(edit.from - 1, edit.from).charCodeAt(0)) ? 1 : 0;
-    const padRight =
-      edit.to < before.length && isLowSurrogate(before.readRange(edit.to, edit.to + 1).charCodeAt(0)) ? 1 : 0;
-    const bStart = edit.from - padLeft;
-    const bEnd = edit.to + padRight;
-    const aStart = edit.from + cumDelta - padLeft;
-    const aEnd = edit.from + cumDelta + edit.text.length + padRight;
+    const bStart = edit.from;
+    const bEnd = edit.to;
+    const aStart = edit.from + cumDelta;
+    const aEnd = aStart + edit.text.length;
     cumDelta += edit.text.length - (edit.to - edit.from);
 
     const prev = windows.at(-1);
-    if (prev && (bStart <= prev.bEnd || aStart <= prev.aEnd)) {
+    if (prev && bStart <= prev.bEnd) {
       prev.bEnd = Math.max(prev.bEnd, bEnd);
       prev.aEnd = Math.max(prev.aEnd, aEnd);
     } else {
@@ -138,6 +162,22 @@ export function computeIncrementalUtf8Delta(
 
   let byteDelta = 0;
   for (const window of windows) {
+    if (
+      window.bStart > 0 &&
+      window.aStart > 0 &&
+      isHighSurrogate(before.readRange(window.bStart - 1, window.bStart).charCodeAt(0))
+    ) {
+      window.bStart -= 1;
+      window.aStart -= 1;
+    }
+    if (
+      window.bEnd < before.length &&
+      window.aEnd < after.length &&
+      isLowSurrogate(before.readRange(window.bEnd, window.bEnd + 1).charCodeAt(0))
+    ) {
+      window.bEnd += 1;
+      window.aEnd += 1;
+    }
     const beforeSlice = before.readRange(window.bStart, window.bEnd);
     const afterSlice = after.readRange(window.aStart, window.aEnd);
     byteDelta += utf8ByteLength(afterSlice) - utf8ByteLength(beforeSlice);
@@ -191,6 +231,7 @@ function attachBufferSubscription(
   store: AdapterDraftStore,
   documentId: DocumentId,
   entry: DocumentDraftEntry,
+  nativeIsDirty: () => boolean,
 ): void {
   entry.unsubBuffer?.();
   entry.unsubBuffer = entry.buffer.subscribe((event: EditorTextBufferChange) => {
@@ -202,7 +243,7 @@ function attachBufferSubscription(
       event.change.edits,
     );
     entry.byteLength = Math.max(0, entry.byteLength + delta);
-    if (!isDraftDirty(entry) && entry.buffer.isDirty()) {
+    if (!isDraftDirty(entry) && nativeIsDirty()) {
       entry.buffer.markClean();
     }
     notifyDoc(store, documentId);
@@ -221,11 +262,12 @@ export function seedDocumentDraft(
 
   const buffer = createEditorTextBuffer(doc.text);
   buffer.markClean();
+  const nativeIsDirty = buffer.isDirty.bind(buffer);
   const entry: DocumentDraftEntry = {
     buffer,
     revision: doc.revision,
     languageId: doc.languageId,
-    byteLength: resolveDocByteLength(doc),
+    byteLength: utf8ByteLengthOfSnapshot(buffer.getTextSnapshot()),
     readOnly: doc.readOnly,
     savedSnapshot: buffer.getSnapshot(),
     savedRevision: buffer.getRevision(),
@@ -236,7 +278,11 @@ export function seedDocumentDraft(
     saveChain: Promise.resolve(),
     unsubBuffer: null,
   };
-  attachBufferSubscription(store, documentId, entry);
+  Object.defineProperty(buffer, "isDirty", {
+    value: () => isDraftDirty(entry),
+    configurable: true,
+  });
+  attachBufferSubscription(store, documentId, entry, nativeIsDirty);
   store.entries.set(documentId, entry);
   notifyDoc(store, documentId);
   return entry;
@@ -264,7 +310,7 @@ function replaceBufferFromDisk(
     entry.buffer.markClean();
     entry.revision = doc.revision;
     entry.languageId = doc.languageId;
-    entry.byteLength = resolveDocByteLength(doc);
+    entry.byteLength = utf8ByteLengthOfSnapshot(entry.buffer.getTextSnapshot());
     entry.readOnly = doc.readOnly;
     entry.savedSnapshot = entry.buffer.getSnapshot();
     entry.savedRevision = entry.buffer.getRevision();
@@ -315,6 +361,7 @@ async function executeSave(
   callbacks: PersistDraftCallbacks,
 ): Promise<void> {
   if (entry.epoch !== capturedEpoch || entry.readOnly) return;
+  const capturedReloadSeq = entry.reloadSeq;
   entry.buffer.breakTypingRun();
   const targetRevision = entry.buffer.getRevision();
   const targetSnapshot = entry.buffer.getSnapshot();
@@ -322,12 +369,17 @@ async function executeSave(
   entry.byteLength = utf8ByteLength(snapshotText);
   const expectedRevision = forceOverwrite ? undefined : entry.revision;
   const outcome = await adapter.writeIfUnchanged(documentId, snapshotText, expectedRevision);
-  if (entry.epoch !== capturedEpoch) return;
   if (!outcome.written) {
-    callbacks.onWriteConflict?.(documentId, outcome);
+    if (entry.epoch === capturedEpoch) {
+      callbacks.onWriteConflict?.(documentId, outcome);
+    }
     return;
   }
-  entry.revision = outcome.nextRevision;
+  // Always record nextRevision if disk was not replaced underneath us, so a failed "Take theirs" never strands revision.
+  if (entry.reloadSeq === capturedReloadSeq) {
+    entry.revision = outcome.nextRevision;
+  }
+  if (entry.epoch !== capturedEpoch) return;
   await adapter.save(documentId);
   if (entry.epoch !== capturedEpoch) return;
   entry.savedSnapshot = targetSnapshot;

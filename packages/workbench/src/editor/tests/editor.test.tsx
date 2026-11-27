@@ -888,6 +888,46 @@ describe("@shaulavo/workbench-editor", () => {
     expect(replaced.revision).toBe("12");
     expect(isDraftDirty(replaced)).toBe(false);
 
+    // Failed "Take theirs" after an in-flight write succeeds retains nextRevision so a retry never falsely conflicts.
+    let releaseFailWrite: (() => void) | undefined;
+    let notifyFailWriteStarted: (() => void) | undefined;
+    const failWriteStarted = new Promise<void>((resolve) => {
+      notifyFailWriteStarted = resolve;
+    });
+    let failAdapterRev = "12";
+    adapter.writeIfUnchanged = async (_docId, _text, expected) => {
+      if (expected !== failAdapterRev) {
+        return { written: false as const, currentText: "disk", currentRevision: failAdapterRev };
+      }
+      if (failAdapterRev === "12") {
+        notifyFailWriteStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseFailWrite = resolve;
+        });
+        failAdapterRev = "13";
+        return { written: true as const, nextRevision: "13" };
+      }
+      failAdapterRev = "14";
+      return { written: true as const, nextRevision: "14" };
+    };
+    adapter.resolveConflict = async () => {
+      throw new Error("conflict resolution failed");
+    };
+    replaceAll(draftA, "in-flight-before-failed-take-theirs");
+    const inFlightSave = persistDocumentDraft(adapter, "a.ts", false, {});
+    await failWriteStarted;
+    const failedTakeTheirs = resolveDocumentConflict(adapter, "a.ts", "take-theirs", {});
+    releaseFailWrite?.();
+    await inFlightSave;
+    await expect(failedTakeTheirs).rejects.toThrow("conflict resolution failed");
+    expect(draftA.revision).toBe("13");
+    const retryConflict = vi.fn();
+    await persistDocumentDraft(adapter, "a.ts", false, { onWriteConflict: retryConflict });
+    expect(retryConflict).not.toHaveBeenCalled();
+    expect(draftA.revision).toBe("14");
+    adapter.writeIfUnchanged = origWrite;
+    adapter.resolveConflict = origResolve;
+
     unsubscribe();
     materializeSpy.mockRestore();
   });
@@ -970,6 +1010,37 @@ describe("@shaulavo/workbench-editor", () => {
     // Zero calls to buffer.materializeFullText throughout all edits!
     expect(materializeSpy).not.toHaveBeenCalled();
     materializeSpy.mockRestore();
+
+    // 6. CRLF loads normalize to LF in Singapore's buffer, so initial byteLength matches normalized LF bytes.
+    const crlfDraft = seedDocumentDraft(adapter, "crlf.ts", {
+      text: "a\r\nb\r\n",
+      revision: "1",
+      byteLength: 6,
+    });
+    expect(crlfDraft.byteLength).toBe(4);
+    const crlfSnap = crlfDraft.buffer.getSnapshot();
+    crlfDraft.buffer.applyEdits(createSelectionSet([createAnchorSelection(crlfSnap, 0, crlfSnap.length)]), [
+      { from: 0, to: crlfSnap.length, text: "" },
+    ]);
+    expect(crlfDraft.byteLength).toBe(0);
+
+    // 7. Single batch inserting before and deleting an unpaired low surrogate at the same offset stays in-bounds and notifies.
+    const loneDraft = seedDocumentDraft(adapter, "lone.ts", {
+      text: "\uDE00",
+      revision: "1",
+      byteLength: 3,
+    });
+    const loneListener = vi.fn();
+    const unsubLone = subscribeDocumentDraft(adapter, "lone.ts", loneListener);
+    const loneSnap = loneDraft.buffer.getSnapshot();
+    loneDraft.buffer.applyEdits(createSelectionSet([createAnchorSelection(loneSnap, 0, 0)]), [
+      { from: 0, to: 0, text: "a" },
+      { from: 0, to: 1, text: "" },
+    ]);
+    expect(loneDraft.buffer.getTextSnapshot().materializeFullText()).toBe("a");
+    expect(loneDraft.byteLength).toBe(1);
+    expect(loneListener).toHaveBeenCalledTimes(1);
+    unsubLone();
   });
 
   it("shares one live EditorTextBuffer across split CodeEditor panes with independent views and flips maxAnalysisBytes live", async () => {
@@ -1066,6 +1137,75 @@ describe("@shaulavo/workbench-editor", () => {
     });
     expect(keepButtons[0]?.disabled).toBe(true);
     expect(keepButtons[1]?.disabled).toBe(true);
+  });
+
+  it("keeps EditorState.isDirty in sync when undo runs during an in-flight save", async () => {
+    let releaseWrite: (() => void) | undefined;
+    let notifyWriteStarted: (() => void) | undefined;
+    const writeStarted = new Promise<void>((resolve) => {
+      notifyWriteStarted = resolve;
+    });
+    const adapter: EditorDocumentAdapter = {
+      getConflict: () => createSubscribable<DocumentConflict | undefined>(undefined),
+      loadDocument: async () => ({ text: "a", revision: "1", byteLength: 1 }),
+      async writeIfUnchanged() {
+        notifyWriteStarted?.();
+        await new Promise<void>((resolve) => {
+          releaseWrite = resolve;
+        });
+        return { written: true as const, nextRevision: "2" };
+      },
+      save: async () => undefined,
+    };
+
+    let editor: Editor | null = null;
+    mount(
+      <CodeEditor
+        adapter={adapter}
+        documentId="undo-save.ts"
+        path="undo-save.ts"
+        highlighting={false}
+        onEditorReady={(ed) => {
+          editor = ed;
+        }}
+      />,
+    );
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    const draft = getDocumentDraft(adapter, "undo-save.ts")!;
+    expect(editor).not.toBeNull();
+    expect(editor!.getState().isDirty).toBe(false);
+
+    // Edit "a" -> "ab", start saving "ab", then undo back to "a" BEFORE the save finishes.
+    act(() => {
+      editor!.edit({ from: 1, to: 1, text: "b" });
+    });
+    expect(editor!.getState().isDirty).toBe(true);
+    const savePromise = persistDocumentDraft(adapter, "undo-save.ts", false, {});
+    await writeStarted;
+    act(() => {
+      draft.buffer.undo();
+    });
+    expect(editor!.getTextSnapshot().materializeFullText()).toBe("a");
+
+    // Once "ab" finishes saving to disk, BOTH isDraftDirty and Singapore's EditorState.isDirty report true!
+    releaseWrite?.();
+    await act(async () => {
+      await savePromise;
+    });
+    expect(isDraftDirty(draft)).toBe(true);
+    expect(draft.buffer.isDirty()).toBe(true);
+    expect(editor!.getState().isDirty).toBe(true);
+
+    // Redoing back to the saved "ab" checkpoint clears both cleanly.
+    act(() => {
+      draft.buffer.redo();
+    });
+    expect(isDraftDirty(draft)).toBe(false);
+    expect(draft.buffer.isDirty()).toBe(false);
+    expect(editor!.getState().isDirty).toBe(false);
   });
 
   it("preserves Sprockt session-mode contract: persistent editor, onBeforeDetach before swap & unmount, reveal.seq, scroll clamp, and fonts.ready", async () => {
