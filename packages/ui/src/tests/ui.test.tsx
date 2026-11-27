@@ -9,6 +9,7 @@ import {
   FilterField,
   InlineRenameInput,
   MobilePaneShell,
+  PointContextMenu,
   RenderErrorBoundary,
   resolveListboxKeyAction,
   SearchPanel,
@@ -66,6 +67,40 @@ describe("@shaulavo/workbench-ui", () => {
     expect(scope?.getAttribute("data-wb-theme")).toBe("sprockt");
     expect(scope?.getAttribute("data-wb-density")).toBe("compact");
     expect(dialog).not.toBeNull();
+  });
+
+  it("forwards Base UI dismissal reason from PointContextMenu (escape-key vs outside-press)", () => {
+    const reasons: (string | undefined)[] = [];
+    const onOpenChange = vi.fn((open: boolean, reason?: string) => {
+      if (!open) reasons.push(reason);
+    });
+    const host = mount(
+      <WorkbenchPortalProvider>
+        <button type="button" data-testid="outside-btn">
+          Outside
+        </button>
+        <PointContextMenu
+          open={true}
+          x={40}
+          y={40}
+          items={[{ id: "copy", label: "Copy", onSelect: vi.fn() }]}
+          onOpenChange={onOpenChange}
+        />
+      </WorkbenchPortalProvider>,
+    );
+    const menu = host.querySelector<HTMLElement>("[data-wb-point-context-menu]");
+    expect(menu).not.toBeNull();
+    act(() => {
+      menu?.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
+    });
+    expect(reasons[0]).toBe("escape-key");
+
+    const outside = host.querySelector<HTMLButtonElement>('[data-testid="outside-btn"]');
+    act(() => {
+      outside?.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0 }));
+      outside?.dispatchEvent(new MouseEvent("mousedown", { bubbles: true, button: 0 }));
+    });
+    expect(reasons[1]).toBe("outside-press");
   });
 
   it("handles UnsavedChangesDialog save, discard, cancel, and busy lock", () => {

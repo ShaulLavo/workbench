@@ -59,9 +59,11 @@ export function setSplitterOpen(
 
 /** Fits saved pane preferences into the actual container room without letting the editor collapse. */
 export function fitPaneGeometry(geometry: GlobalPaneGeometry, space: Space): FittedGeometry {
-  const maxExplorer = Math.max(
-    0,
-    Math.min(LAYOUT_LIMITS.explorerMaxPx, space.width - LAYOUT_LIMITS.editorMinPx),
+  const spare = Math.max(0, space.width - LAYOUT_LIMITS.editorMinPx);
+  const previewReserve = geometry.previewOpen ? LAYOUT_LIMITS.previewMinPx : 0;
+  const maxExplorer = Math.min(
+    LAYOUT_LIMITS.explorerMaxPx,
+    Math.min(Math.max(spare - previewReserve, LAYOUT_LIMITS.explorerMinPx), spare),
   );
   const explorerPx = geometry.explorerOpen
     ? clamp(geometry.explorerWidthPx, Math.min(LAYOUT_LIMITS.explorerMinPx, maxExplorer), maxExplorer)

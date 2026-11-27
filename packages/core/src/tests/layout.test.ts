@@ -16,6 +16,17 @@ describe("layout", () => {
     expect(fitted.terminalPx).toBe(220);
   });
 
+  test("fits a wide saved explorer into a narrow viewport while preserving editor and preview minimums", () => {
+    const fitted = fitPaneGeometry(
+      { ...DEFAULT_PANE_GEOMETRY, explorerWidthPx: 480 },
+      { width: 736, height: 700 },
+    );
+    expect(fitted.editorPx).toBeGreaterThanOrEqual(260);
+    expect(fitted.previewPx).toBeGreaterThanOrEqual(220);
+    expect(fitted.explorerPx).toBeGreaterThanOrEqual(160);
+    expect(fitted.explorerPx + fitted.editorPx + fitted.previewPx).toBe(736);
+  });
+
   test("dragging below half minimum snaps pane closed", () => {
     const collapsed = dragPaneGeometry("explorer", {
       startGeometry: DEFAULT_PANE_GEOMETRY,
