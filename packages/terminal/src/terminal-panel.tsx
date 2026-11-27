@@ -128,7 +128,9 @@ export function TerminalPanel({
   const headerRef = useRef<HTMLDivElement | null>(null);
   const restoreFocusSessionRef = useRef<string | null>(null);
   const restoreFocusTargetRef = useRef<
-    { readonly kind: "tab"; readonly id: string } | { readonly kind: "new" } | null
+    | { readonly closingId: string; readonly kind: "tab"; readonly id: string }
+    | { readonly closingId: string; readonly kind: "new" }
+    | null
   >(null);
   const pendingFocusRef = useRef<string | null>(null);
   const focusSeqRef = useRef(0);
@@ -146,6 +148,7 @@ export function TerminalPanel({
 
   function requestTerminalFocus(sessionId: string | undefined): void {
     if (!sessionId) return;
+    restoreFocusTargetRef.current = null;
     focusSeqRef.current += 1;
     pendingFocusRef.current = sessionId;
     if (terminalsByIdRef.current.has(sessionId)) {
@@ -154,6 +157,7 @@ export function TerminalPanel({
   }
 
   function clearPendingTerminalFocus(): void {
+    restoreFocusTargetRef.current = null;
     focusSeqRef.current += 1;
     pendingFocusRef.current = null;
   }
@@ -182,7 +186,7 @@ export function TerminalPanel({
       if (!activeIds.has(id)) terminalsByIdRef.current.delete(id);
     }
     const pendingRestore = restoreFocusTargetRef.current;
-    if (!pendingRestore) return;
+    if (!pendingRestore || activeIds.has(pendingRestore.closingId)) return;
     restoreFocusTargetRef.current = null;
     if (pendingRestore.kind === "tab" && activeIds.has(pendingRestore.id)) {
       focusTabButton(pendingRestore.id);
@@ -223,7 +227,9 @@ export function TerminalPanel({
       event.preventDefault();
       clearPendingTerminalFocus();
       const survivor = sessions[index + 1] ?? sessions[index - 1];
-      restoreFocusTargetRef.current = survivor ? { kind: "tab", id: survivor.id } : { kind: "new" };
+      restoreFocusTargetRef.current = survivor
+        ? { closingId: sessionId, kind: "tab", id: survivor.id }
+        : { closingId: sessionId, kind: "new" };
       void adapter.closeSession(sessionId);
       return;
     }

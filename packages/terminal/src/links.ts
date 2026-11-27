@@ -13,10 +13,12 @@ export interface TerminalSnapshotFileLink {
   readonly text: string;
 }
 
-const HARD_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "[", "]", "{", "}"]);
+const HARD_BOUNDARY = new Set([" ", "\t", '"', "'", "`", "<", ">", "|", "[", "]", "{", "}", ")"]);
 const TRAILING_PUNCTUATION = new Set([".", ",", ":", ";", "!", "?"]);
 const URL_SCHEME_RE = /^[A-Za-z][A-Za-z\d+.-]*:\/\//;
 const HOSTNAME_RE = /^(?:[a-z0-9-]+\.)+(?:com|org|net|io|dev|app|ai|edu|gov|local|localhost)$/i;
+const NUMERIC_PAREN_PREFIX_RE = /^\(\d+(?:,\d*)?\)/;
+const PAREN_LOCATION_RE = /^\(\d+(?:,\d+)?\)/;
 const PAREN_SUFFIX_RE = /^(.*)\((\d+)(?:,(\d+))?\)$/;
 const KNOWN_BARE_NAMES = new Set([
   "Makefile",
@@ -116,25 +118,35 @@ export function parseTerminalFileReference(rawToken: string): TerminalFileRefere
   return ref;
 }
 
-function stripUnmatchedClosingParens(token: string): string {
-  let openCount = 0;
-  let closeCount = 0;
-  for (let i = 0; i < token.length; i += 1) {
-    if (token[i] === "(") openCount += 1;
-    else if (token[i] === ")") closeCount += 1;
+function isLocationSuffixDelimiter(ch: string | undefined): boolean {
+  return ch === undefined || HARD_BOUNDARY.has(ch) || TRAILING_PUNCTUATION.has(ch);
+}
+
+function scanUntilHardBoundary(text: string, start: number): number {
+  let end = start;
+  while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "")) {
+    end += 1;
   }
-  let end = token.length;
-  while (end > 0 && closeCount > openCount && token[end - 1] === ")") {
-    end -= 1;
-    closeCount -= 1;
-  }
-  return token.slice(0, end);
+  return end;
 }
 
 function scanTokenEnd(text: string, start: number): number {
   let end = start;
   while (end < text.length && !HARD_BOUNDARY.has(text[end] ?? "")) {
-    end += 1;
+    if (text[end] !== "(") {
+      end += 1;
+      continue;
+    }
+    const rest = text.slice(end);
+    const numericParen = NUMERIC_PAREN_PREFIX_RE.exec(rest);
+    if (!numericParen) break;
+    const validLoc = PAREN_LOCATION_RE.exec(rest);
+    const afterSuffix = validLoc ? text[end + validLoc[0].length] : undefined;
+    if (validLoc && isLocationSuffixDelimiter(afterSuffix)) {
+      return end + validLoc[0].length;
+    }
+    // Malformed parenthesized suffix (e.g. `(12,)` or `(12,4)junk`): consume the whole token so parsing rejects it.
+    return scanUntilHardBoundary(text, end + numericParen[0].length);
   }
   return end;
 }
@@ -144,8 +156,7 @@ function matchSnapshotToken(
   start: number,
   end: number,
 ): TerminalSnapshotFileLink | null {
-  const raw = stripUnmatchedClosingParens(stripTrailingPunctuation(line.text.slice(start, end)));
-  const trimmed = stripTrailingPunctuation(raw);
+  const trimmed = stripTrailingPunctuation(line.text.slice(start, end));
   if (trimmed.length === 0 || trimmed.length > MAX_CANDIDATE_LENGTH || URL_SCHEME_RE.test(trimmed)) {
     return null;
   }
@@ -174,7 +185,7 @@ export function findTerminalSnapshotFileLinks(
 
   while (cursor < text.length) {
     const ch = text[cursor] ?? "";
-    if (HARD_BOUNDARY.has(ch) || ch === "(" || ch === ")") {
+    if (HARD_BOUNDARY.has(ch) || ch === "(") {
       cursor += 1;
       continue;
     }

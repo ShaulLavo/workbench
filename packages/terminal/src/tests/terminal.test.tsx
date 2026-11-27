@@ -1104,7 +1104,8 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(parseTerminalFileReference("Makefile:10")).toEqual({ path: "Makefile", line: 10 });
     expect(parseTerminalFileReference("Dockerfile")).toEqual({ path: "Dockerfile" });
 
-    const text = "error:src/App.tsx(12,4): see Makefile and (src/other.ts:7:2)";
+    const text =
+      "error:src/App.tsx(12,4): see Makefile, error:(src/err.ts:9:1), include(src/inc.ts) and (src/other.ts:7:2)";
     const boundaries = Array.from({ length: text.length + 1 }, (_, i) => i);
     const links = findTerminalSnapshotFileLinks({
       text,
@@ -1114,6 +1115,8 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(links.map((l) => l.reference)).toEqual([
       { path: "src/App.tsx", line: 12, column: 4 },
       { path: "Makefile" },
+      { path: "src/err.ts", line: 9, column: 1 },
+      { path: "src/inc.ts" },
       { path: "src/other.ts", line: 7, column: 2 },
     ]);
 
@@ -1242,9 +1245,18 @@ describe("@shaulavo/workbench-terminal", () => {
     }
   });
 
-  it("restores focus on Delete, expands collapsed empty New, and ignores stale createSession focus", async () => {
+  it("restores focus on async Delete, expands collapsed empty New, and ignores stale createSession focus", async () => {
     const focusSpies = new Map<string, ReturnType<typeof vi.fn>>();
+    let createCalls = 0;
+    let resolveCreateB: (() => void) | undefined;
     const createSpy = vi.spyOn(Terminal, "create").mockImplementation(async () => {
+      createCalls += 1;
+      // Delay the second terminal creation (session "b" when switching from "a") until after New resolves.
+      if (createCalls === 2) {
+        await new Promise<void>((resolve) => {
+          resolveCreateB = resolve;
+        });
+      }
       const focusSpy = vi.fn();
       return Object.assign(
         createMockPanelTerminal(new Set(), () => {}),
@@ -1259,7 +1271,7 @@ describe("@shaulavo/workbench-terminal", () => {
     const activeId = createSubscribable<string | undefined>("a");
     const splitId = createSubscribable<string | undefined>(undefined);
     let resolveCreate: ((id: string) => void) | undefined;
-    let resolveAttachB: (() => void) | undefined;
+    let resolveCloseLast: (() => void) | undefined;
     const onToggleCollapsed = vi.fn();
 
     const adapter: TerminalAdapter = {
@@ -1272,6 +1284,13 @@ describe("@shaulavo/workbench-terminal", () => {
         });
       },
       async closeSession(id) {
+        if (sessions.getSnapshot().length === 1) {
+          // Simulate an async close with an interim status update before the closing tab disappears.
+          sessions.set([{ id, title: "bash 2", status: "exited" }]);
+          await new Promise<void>((resolve) => {
+            resolveCloseLast = resolve;
+          });
+        }
         const next = sessions.getSnapshot().filter((s) => s.id !== id);
         sessions.set(next);
         if (activeId.getSnapshot() === id) activeId.set(next[0]?.id);
@@ -1281,21 +1300,14 @@ describe("@shaulavo/workbench-terminal", () => {
       },
       renameSession() {},
       toggleSplit() {},
-      async attach(id) {
-        if (id === "b") {
-          await new Promise<void>((resolve) => {
-            resolveAttachB = resolve;
-          });
-        }
-        return { write: () => {}, resize: () => {}, detach: () => {} };
-      },
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
     };
 
     try {
       const root = mount(
         <TerminalPanel
           adapter={adapter}
-          keepAlive
+          keepAlive={false}
           loadRuntime={async () => ({}) as GhosttyRuntime}
           onTerminalReady={(id, term) => {
             focusSpies.set(id, term.focus as unknown as ReturnType<typeof vi.fn>);
@@ -1306,7 +1318,7 @@ describe("@shaulavo/workbench-terminal", () => {
         await flushMicrotasks();
       });
 
-      // Click New, then click B before either resolves -> late New resolution must not cancel B's focus.
+      // Click New, then click B while B is still opening -> late New resolution must not overwrite B's pending focus.
       const newBtn = root.querySelector<HTMLButtonElement>('[data-testid="wb-term-new"]')!;
       const tabBBtn = root.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-b"] button[role="tab"]',
@@ -1319,13 +1331,14 @@ describe("@shaulavo/workbench-terminal", () => {
         resolveCreate?.("c");
         await flushMicrotasks();
       });
+      expect(focusSpies.get("b")).toBeUndefined();
       await act(async () => {
-        resolveAttachB?.();
+        resolveCreateB?.();
         await flushMicrotasks();
       });
-      expect(focusSpies.get("b")).toHaveBeenCalled();
+      expect(focusSpies.get("b")).toHaveBeenCalledTimes(1);
 
-      // Delete on focused tab A moves focus to surviving tab B; Delete on last tab B moves focus to New.
+      // Delete on focused tab A moves focus to surviving tab B.
       const tabABtn = root.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-a"] button[role="tab"]',
       )!;
@@ -1340,10 +1353,18 @@ describe("@shaulavo/workbench-terminal", () => {
       )!;
       expect(document.activeElement).toBe(survivingB);
 
+      // Async Delete on last tab B with an interim status update keeps restore pending until B disappears.
       act(() => {
         survivingB.dispatchEvent(
           new KeyboardEvent("keydown", { key: "Delete", bubbles: true, cancelable: true }),
         );
+      });
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      await act(async () => {
+        resolveCloseLast?.();
+        await flushMicrotasks();
       });
       expect(document.activeElement).toBe(newBtn);
 
