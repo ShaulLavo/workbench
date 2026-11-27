@@ -13,7 +13,7 @@ import {
   type PreparedFileTreeInput,
   type RawTreeEntry,
 } from "./index-store";
-import { ancestorsOf, isInside, isSameOrInside, joinPath, parentOf } from "./paths";
+import { ancestorsOf, isInside, isSameOrInside, joinPath, normalizeTreePath, parentOf } from "./paths";
 
 export type TreeDraft =
   | { readonly mode: "create"; readonly kind: EntryKind; readonly parent: string }
@@ -696,9 +696,9 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   }
 
   private pruneRemovedPaths(removedPaths: readonly string[]): void {
-    if (removedPaths.length === 0) return;
-    const isRemoved = (path: string): boolean =>
-      removedPaths.some((removed) => isSameOrInside(path, removed));
+    const normalized = removedPaths.map(normalizeTreePath).filter(Boolean);
+    if (normalized.length === 0) return;
+    const isRemoved = (path: string): boolean => normalized.some((removed) => isSameOrInside(path, removed));
     if (this.selected.size > 0) {
       let changed = false;
       const next = new Set<string>();
@@ -720,10 +720,13 @@ export class FileTreeModel implements Subscribable<FileTreeStateSnapshot> {
   }
 
   private rebaseMovedPaths(moves: readonly { readonly from: string; readonly to: string }[]): void {
-    if (moves.length === 0) return;
+    const normalizedMoves = moves
+      .map((move) => ({ from: normalizeTreePath(move.from), to: normalizeTreePath(move.to) }))
+      .filter((move) => move.from.length > 0 && move.to.length > 0);
+    if (normalizedMoves.length === 0) return;
     const rebase = (path: string): string => {
       let current = path;
-      for (const move of moves) {
+      for (const move of normalizedMoves) {
         if (isSameOrInside(current, move.from)) {
           current = move.to + current.slice(move.from.length);
         }

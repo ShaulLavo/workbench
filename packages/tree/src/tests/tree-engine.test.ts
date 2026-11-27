@@ -583,7 +583,7 @@ describe("@shaulavo/workbench-tree engine", () => {
       kind: "move",
       baseRevision: 3,
       nextRevision: 4,
-      moves: [{ from: "src/a.txt", to: "dst/a.txt", entryKind: "file" }],
+      moves: [{ from: "/src/a.txt", to: "/dst/a.txt", entryKind: "file" }],
     });
     expect(moveRes).toEqual({ status: "applied", revision: 4 });
     expect(model.getSelectedPaths()).toEqual(["dst/a.txt"]);
