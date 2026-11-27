@@ -548,4 +548,35 @@ describe("@shaulavo/workbench-tree engine", () => {
 
     bound.dispose();
   });
+
+  it("reconciles focusedPath, selected, and rename draft when paths are removed by replacePreparedInput or replaceSnapshot", () => {
+    const model = new FileTreeModel({ paths: ["remove.ts", "keep.ts"] });
+    model.select("remove.ts", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "remove.ts" });
+
+    model.replacePreparedInput(prepareFileTreeInput(["keep.ts"]));
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+    expect(model.getSnapshot().draft).toBeUndefined();
+
+    model.select("keep.ts", "replace", "keyboard");
+    model.replaceSnapshot({
+      revision: 2,
+      entries: [{ path: "other.ts", kind: "file" }],
+      loadedDirectoryPaths: new Set([""]),
+    });
+    expect(model.getSnapshot().focusedPath).toBeUndefined();
+    expect(model.getSelectedPaths()).toEqual([]);
+
+    // Temporary absence via notifyIndexChange (e.g., optimistic delete rollback or lazy reset) preserves state.
+    model.select("other.ts", "replace", "keyboard");
+    model.setDraft({ mode: "rename", path: "other.ts" });
+    model.index.applyOptimistic("opt-del", { kind: "delete", path: "other.ts" }, { inFlight: true });
+    model.notifyIndexChange();
+    model.index.rollbackOptimistic("opt-del");
+    model.notifyIndexChange();
+    expect(model.getSnapshot().focusedPath).toBe("other.ts");
+    expect(model.getSelectedPaths()).toEqual(["other.ts"]);
+    expect(model.getSnapshot().draft).toEqual({ mode: "rename", path: "other.ts" });
+  });
 });

@@ -149,12 +149,21 @@
     bottom: 0;
     width: 1px;
     background: var(--wb-tree-guide);
-    opacity: 0.55;
+    opacity: var(--wb-tree-guide-opacity, 0.55);
+    transition: opacity 120ms var(--wb-ease-out);
+  }
+
+  .wb-tree:hover .wb-tree-guide {
+    opacity: var(--wb-tree-guide-hover-opacity, var(--wb-tree-guide-opacity, 0.55));
   }
 
   .wb-tree-guide[data-active-guide="true"] {
     background: var(--wb-tree-guide-active);
-    opacity: 0.95;
+    opacity: var(--wb-tree-guide-active-opacity, 0.95);
+  }
+
+  .wb-tree:hover .wb-tree-guide[data-active-guide="true"] {
+    opacity: var(--wb-tree-guide-active-opacity, 0.95);
   }
 
   .wb-tree-chevron {
@@ -326,7 +335,8 @@
   }
 
   @media (prefers-reduced-motion: reduce) {
-    .wb-tree-chevron {
+    .wb-tree-chevron,
+    .wb-tree-guide {
       transition: none;
     }
   }

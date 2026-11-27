@@ -4,6 +4,7 @@ import type {
   DirectoryLoadState,
   FileSystemAdapter,
   FileTreeGitState,
+  LazyInvalidationEvent,
   Subscribable,
 } from "@shaulavo/workbench-core";
 import { WorkbenchPortalProvider } from "@shaulavo/workbench-ui";
@@ -941,5 +942,145 @@ describe("@shaulavo/workbench-tree React view", () => {
     const inlineInput = host.querySelector<HTMLInputElement>('[data-testid="wb-tree-inline-input"]');
     expect(inlineInput).not.toBeNull();
     expect(document.activeElement).toBe(inlineInput);
+  });
+
+  it("falls back to focused row on keyboard Delete, honors externalCommands, and sets data-guide-level", async () => {
+    const onRequestDelete = vi.fn();
+    const model = new FileTreeModel({
+      paths: ["src/a.ts", "a/b/c.ts", "README.md"],
+      initialExpanded: ["src", "a", "a/b"],
+    });
+    const host = mount(<FileTreeView model={model} onRequestDelete={onRequestDelete} />);
+
+    // Indent guide carries 0-based depth level for consumer syntax-color styling.
+    const guide = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-src/a.ts"] .wb-tree-guide');
+    expect(guide?.getAttribute("data-guide-level")).toBe("0");
+
+    // Focused row with empty selection still triggers onRequestDelete on Delete key.
+    const readmeRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+    act(() => {
+      readmeRow?.focus();
+    });
+    expect(model.getSelectedPaths()).toEqual([]);
+    act(() => {
+      readmeRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onRequestDelete).toHaveBeenCalledWith(["README.md"]);
+
+    // Focused intermediate compact segment `a` inside `a/b` deletes `a`, not `a/b`.
+    onRequestDelete.mockClear();
+    const compactRow = host.querySelector<HTMLElement>('[data-testid="wb-tree-row-a/b"]');
+    act(() => {
+      model.setFocusedPath("a", "keyboard");
+    });
+    act(() => {
+      compactRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(onRequestDelete).toHaveBeenCalledWith(["a"]);
+
+    // externalCommands suppresses built-in F2/Mod+A/Space/Delete shortcuts so consumer keymaps own them.
+    onRequestDelete.mockClear();
+    const extModel = new FileTreeModel({ paths: ["README.md", "notes.md"] });
+    const extHost = mount(
+      <FileTreeView
+        model={extModel}
+        onRequestDelete={onRequestDelete}
+        externalCommands={new Set(["rename", "selectAll", "toggleMark", "delete"])}
+      />,
+    );
+    const extRow = extHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-README.md"]');
+    act(() => {
+      extRow?.focus();
+    });
+    act(() => {
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "F2", bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "a", ctrlKey: true, bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
+      extRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    expect(extModel.getSnapshot().draft).toBeUndefined();
+    expect(extModel.getSelectedPaths()).toEqual([]);
+    expect(onRequestDelete).not.toHaveBeenCalled();
+
+    // Adapterless delete reconciles selection/focus on completion so a subsequent Delete targets the surviving row.
+    const delModel = new FileTreeModel({ paths: ["gone.ts", "keep.ts"] });
+    const delHost = mount(<FileTreeView model={delModel} />);
+    const goneRow = delHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-gone.ts"]');
+    act(() => {
+      goneRow?.click();
+    });
+    expect(delModel.getSelectedPaths()).toEqual(["gone.ts"]);
+    act(() => {
+      goneRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const confirmBtn = delHost.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    expect(confirmBtn).not.toBeNull();
+    await act(async () => {
+      confirmBtn?.click();
+      await Promise.resolve();
+    });
+    expect(delModel.index.hasPath("gone.ts")).toBe(false);
+    expect(delModel.getSelectedPaths()).toEqual([]);
+    expect(delModel.getSnapshot().focusedPath).toBeUndefined();
+
+    // Partial batch delete rollback during a lazy reset prunes only the deleted path and keeps the surviving row's focus/selection.
+    const rootState = createSubscribable<DirectoryLoadState>({
+      status: "loaded",
+      entries: [
+        { name: "first.ts", kind: "file" },
+        { name: "second.ts", kind: "file" },
+      ],
+    });
+    const invListeners = new Set<(event: LazyInvalidationEvent) => void>();
+    const onPartialError = vi.fn();
+    const partialAdapter: FileSystemAdapter = {
+      workspaceId: "test-partial-reset",
+      writable: createSubscribable(true),
+      lazy: {
+        getDirectoryState: () => rootState,
+        loadDirectory: async () => {},
+        subscribeInvalidation(listener) {
+          invListeners.add(listener);
+          return () => invListeners.delete(listener);
+        },
+      },
+      listFiles: async () => [],
+      readText: async () => "",
+      createFile: async () => {},
+      createDirectory: async () => {},
+      move: async () => {},
+      async remove(path) {
+        if (path === "first.ts") {
+          for (const listener of invListeners) {
+            listener({ reset: true, directories: [], moves: [], removed: [] });
+          }
+          return;
+        }
+        throw new Error("second delete failed");
+      },
+    };
+    const partialModel = new FileTreeModel();
+    const partialHost = mount(
+      <FileTreeView model={partialModel} adapter={partialAdapter} onError={onPartialError} />,
+    );
+    act(() => {
+      partialModel.setSelectedPaths(["first.ts", "second.ts"], {
+        focusedPath: "second.ts",
+        modality: "keyboard",
+      });
+    });
+    const secondRow = partialHost.querySelector<HTMLElement>('[data-testid="wb-tree-row-second.ts"]');
+    act(() => {
+      secondRow?.dispatchEvent(new KeyboardEvent("keydown", { key: "Delete", bubbles: true }));
+    });
+    const partialConfirm = partialHost.querySelector<HTMLButtonElement>('[data-testid="wb-confirm-accept"]');
+    await act(async () => {
+      partialConfirm?.click();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(onPartialError).toHaveBeenCalledTimes(1);
+    expect(partialModel.getSelectedPaths()).toEqual(["second.ts"]);
+    expect(partialModel.getSnapshot().focusedPath).toBe("second.ts");
   });
 });
