@@ -5,6 +5,8 @@ import { normalizeTreePath } from "./paths";
 export interface BoundFileTreeAdapter {
   /** Ensures a lazy directory is subscribed and loaded when expanded or retried. */
   ensureDirectoryLoaded(dirPath: string, options?: { readonly force?: boolean }): Promise<void>;
+  /** True when a lazy directory was invalidated while collapsed and has not been reloaded yet. */
+  isDirectoryStale(dirPath: string): boolean;
   /** Stops all snapshot, patch, lazy directory, invalidation, and git subscriptions. */
   dispose(): void;
 }
@@ -172,6 +174,8 @@ export function bindFileSystemAdapter(
     if (disposed) return;
     handlingInvalidation = true;
     try {
+      filterListGen += 1;
+      model.setFilterPaths(undefined);
       model.index.applyLazyInvalidation(event);
       model.notifyIndexChange(
         event.moves.length > 0 || event.removed.length > 0
@@ -205,8 +209,13 @@ export function bindFileSystemAdapter(
 
   return {
     ensureDirectoryLoaded,
+    isDirectoryStale(dirPath) {
+      return staleLazyDirs.has(normalizeTreePath(dirPath));
+    },
     dispose() {
       disposed = true;
+      filterListGen += 1;
+      model.setFilterPaths(undefined);
       for (const cleanup of cleanups) cleanup();
       cleanups.length = 0;
       for (const unsub of lazyUnsubs.values()) unsub();

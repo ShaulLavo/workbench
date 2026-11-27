@@ -57,6 +57,8 @@ export interface FileTreeViewportProps {
   readonly scrollAlign?: "auto" | "start" | "center" | "end";
   readonly rowHeight?: number;
   readonly initialScrollTop?: number;
+  /** When true, keep waiting for lazy root/restored folders before finalizing a clamped initialScrollTop. */
+  readonly deferInitialScroll?: boolean;
   readonly onScrollTopChange?: (scrollTop: number) => void;
   readonly scrollerRef?: RefObject<HTMLDivElement | null>;
   readonly hasEntryTabStop: boolean;
@@ -90,6 +92,7 @@ export function FileTreeViewport({
   scrollAlign = "auto",
   rowHeight: explicitRowHeight,
   initialScrollTop,
+  deferInitialScroll = false,
   onScrollTopChange,
   scrollerRef: externalScrollerRef,
   hasEntryTabStop,
@@ -194,21 +197,32 @@ export function FileTreeViewport({
 
   useLayoutEffect(() => {
     const pending = pendingInitialScrollRef.current;
-    if (pending === null || rows.length === 0) return;
+    if (pending === null) return;
     const node = internalScrollerRef.current;
     if (!node) return;
+    if (rows.length === 0) {
+      if (deferInitialScroll) return;
+      pendingInitialScrollRef.current = null;
+      lastRestoredScrollTopRef.current = null;
+      syncStickyFromScrollTop(node.scrollTop);
+      onScrollTopChange?.(node.scrollTop);
+      return;
+    }
     const totalSize = virtualizer.getTotalSize();
     if (totalSize <= 0) return;
+    const before = node.scrollTop;
     node.scrollTop = pending;
     const applied = node.scrollTop;
-    lastRestoredScrollTopRef.current = applied;
+    if (applied !== before) lastRestoredScrollTopRef.current = applied;
     syncStickyFromScrollTop(applied);
     const scrollable = node.scrollHeight > 0 ? Math.max(0, node.scrollHeight - node.clientHeight) : totalSize;
-    if (applied >= pending - 1 && scrollable >= pending - 1) {
+    const reached = applied >= pending - 1 && scrollable >= pending - 1;
+    if (reached || !deferInitialScroll) {
       pendingInitialScrollRef.current = null;
+      onScrollTopChange?.(applied);
     }
     // oxlint-disable-next-line react/exhaustive-deps
-  }, [initialScrollTop, rows.length, rowHeight]);
+  }, [initialScrollTop, rows.length, rowHeight, deferInitialScroll]);
 
   useLayoutEffect(() => {
     if (scrollSeq <= 0 || scrollSeq === lastScrolledSeqRef.current) return;
@@ -281,8 +295,6 @@ export function FileTreeViewport({
     if (restored !== null && Math.abs(node.scrollTop - restored) <= 1) {
       lastRestoredScrollTopRef.current = null;
       syncStickyFromScrollTop(node.scrollTop);
-      if (pendingInitialScrollRef.current !== null) return;
-      onScrollTopChange?.(node.scrollTop);
       return;
     }
     cancelPendingInitialScroll();

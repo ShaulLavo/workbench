@@ -38,7 +38,7 @@ import {
   type TreeNavigationKey,
   type TreeRow,
 } from "../model";
-import { baseName, joinPath, parentOf } from "../paths";
+import { ancestorsOf, baseName, joinPath, normalizeTreePath, parentOf } from "../paths";
 import { FileTreeDraftRow, FileTreeRow, FileTreeStatusRow } from "./tree-row";
 import { FileTreeViewport } from "./tree-viewport";
 
@@ -158,6 +158,53 @@ function findModelRowIndex(model: FileTreeModel, targetPath: string): number {
   );
 }
 
+function lazyDirStatus(
+  model: FileTreeModel,
+  lazy: NonNullable<FileSystemAdapter["lazy"]>,
+  dir: string,
+): "idle" | "loading" | "loaded" | "error" {
+  const adapterStatus = lazy.getDirectoryState(dir).getSnapshot().status;
+  if (adapterStatus === "idle" || adapterStatus === "loading") return adapterStatus;
+  if (adapterStatus === "error") return "error";
+  return model.index.getDirectoryLoadState(dir).status;
+}
+
+function isInitialLazyDirPending(
+  model: FileTreeModel,
+  lazy: NonNullable<FileSystemAdapter["lazy"]>,
+  dir: string,
+): boolean {
+  const chain = ancestorsOf(dir).concat([dir]);
+  for (let i = 0; i < chain.length; i += 1) {
+    const segment = chain[i];
+    if (!segment) continue;
+    const parent = i === 0 ? "" : (chain[i - 1] ?? "");
+    const parentStatus = lazyDirStatus(model, lazy, parent);
+    if (parentStatus === "error") return false;
+    if (parentStatus === "idle" || parentStatus === "loading") return true;
+    if (model.index.getConfirmedKind(segment) !== "directory") return false;
+    const segStatus = lazyDirStatus(model, lazy, segment);
+    if (segStatus === "error") return false;
+    if (segStatus === "idle" || segStatus === "loading") return true;
+  }
+  return false;
+}
+
+function hasPendingInitialLazyLoads(
+  model: FileTreeModel,
+  lazy: NonNullable<FileSystemAdapter["lazy"]>,
+  initialExpanded: readonly string[],
+): boolean {
+  const rootStatus = lazyDirStatus(model, lazy, "");
+  if (rootStatus === "idle" || rootStatus === "loading") return true;
+  if (rootStatus === "error") return false;
+  for (const rawDir of initialExpanded) {
+    const dir = normalizeTreePath(rawDir);
+    if (dir && isInitialLazyDirPending(model, lazy, dir)) return true;
+  }
+  return false;
+}
+
 function startModelCreate(model: FileTreeModel, parent: string, kind: "file" | "directory"): void {
   if (parent !== "" && model.index.getKind(parent) !== "directory") return;
   if (model.getSnapshot().filter) model.setFilter("");
@@ -258,6 +305,7 @@ export function FileTreeView({
   const focusSeqRef = useRef(0);
   const readOnlyRef = useRef(readOnly);
   const lastSelectedRef = useRef<ReadonlySet<string>>(state.selected);
+  const [initialExpandedPaths] = useState<readonly string[]>(() => model.getExpandedPaths());
 
   useLayoutEffect(() => {
     readOnlyRef.current = readOnly;
@@ -558,6 +606,27 @@ export function FileTreeView({
     }
   }
 
+  async function ensureMoveDestinationReady(destinationDir: string): Promise<boolean> {
+    if (!adapter?.lazy) return true;
+    const needsLoad =
+      model.index.getDirectoryLoadState(destinationDir).status !== "loaded" ||
+      Boolean(boundRef.current?.isDirectoryStale(destinationDir));
+    if (!needsLoad) return true;
+    try {
+      await boundRef.current?.ensureDirectoryLoaded(destinationDir, { force: true });
+    } catch (error) {
+      onError?.("Unable to inspect destination folder", error);
+      return false;
+    }
+    if (!isCurrentlyWritable()) return false;
+    const destState = model.index.getDirectoryLoadState(destinationDir);
+    if (destState.status === "loaded") return true;
+    const message =
+      destState.status === "error" ? destState.message : "Destination folder could not be loaded";
+    onError?.("Unable to move selected items", new Error(message));
+    return false;
+  }
+
   async function executeMove(sources: readonly string[], destinationDir: string): Promise<void> {
     if (!isCurrentlyWritable()) return;
     const top = topLevelPaths(sources);
@@ -579,15 +648,18 @@ export function FileTreeView({
       }
       seenDestinations.add(move.to);
     }
-    if (!onMove && model.index.getDirectoryLoadState(destinationDir).status === "loaded") {
-      const sourceSet = new Set(top);
-      const collision = moves.find((move) => !sourceSet.has(move.to) && model.index.hasPath(move.to));
-      if (collision) {
-        onError?.(
-          `${baseName(collision.to)} already exists in destination`,
-          new Error(`Destination already exists: ${collision.to}`),
-        );
-        return;
+    if (!onMove) {
+      if (adapter?.lazy && !(await ensureMoveDestinationReady(destinationDir))) return;
+      if (model.index.getDirectoryLoadState(destinationDir).status === "loaded") {
+        const sourceSet = new Set(top);
+        const collision = moves.find((move) => !sourceSet.has(move.to) && model.index.hasPath(move.to));
+        if (collision) {
+          onError?.(
+            `${baseName(collision.to)} already exists in destination`,
+            new Error(`Destination already exists: ${collision.to}`),
+          );
+          return;
+        }
       }
     }
     if (onMove) {
@@ -1119,6 +1191,11 @@ export function FileTreeView({
         scrollAlign={scrollRequest.align}
         rowHeight={rowHeight}
         initialScrollTop={initialScrollTop}
+        deferInitialScroll={
+          adapter?.lazy
+            ? hasPendingInitialLazyLoads(model, adapter.lazy, initialExpandedPaths)
+            : state.rows.length === 0
+        }
         onScrollTopChange={onScrollTopChange}
         scrollerRef={scrollerRef}
         hasEntryTabStop={tabStopIndex >= 0}

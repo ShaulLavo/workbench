@@ -615,11 +615,15 @@ describe("@shaulavo/workbench-tree engine", () => {
     };
     const closedState: DirectoryLoadState = { status: "idle" };
     let workspaceFiles = ["open.ts", "closed/needle.txt"];
+    let failListFiles = false;
 
     const adapter: FileSystemAdapter = {
       workspaceId: "lazy-filter",
       writable: { getSnapshot: () => true, subscribe: () => () => {} },
-      listFiles: async () => workspaceFiles.slice(),
+      listFiles: async () => {
+        if (failListFiles) throw new Error("list failed");
+        return workspaceFiles.slice();
+      },
       readText: async () => undefined,
       size: async () => undefined,
       createFile: async () => {},
@@ -671,6 +675,42 @@ describe("@shaulavo/workbench-tree engine", () => {
       .map((row) => row.path);
     expect(updatedPaths).toEqual(["closed", "closed/needle-two.txt", "closed/needle.txt"]);
 
+    // If invalidation refresh fails, previously deleted files in collapsed folders are cleared, not kept searchable.
+    failListFiles = true;
+    for (const listener of invListeners) {
+      listener({ directories: ["closed"], reset: false, moves: [], removed: ["closed/needle.txt"] });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    const afterFailedRefresh = model
+      .getSnapshot()
+      .rows.filter((row) => row.type === "entry")
+      .map((row) => row.path);
+    expect(afterFailedRefresh).toEqual([]);
+
+    // Repopulating works again once listFiles succeeds, and dispose clears auxiliary filter paths.
+    failListFiles = false;
+    workspaceFiles = ["open.ts", "closed/needle-two.txt"];
+    for (const listener of invListeners) {
+      listener({ directories: ["closed"], reset: false, moves: [], removed: [] });
+    }
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(
+      model
+        .getSnapshot()
+        .rows.filter((row) => row.type === "entry")
+        .map((row) => row.path),
+    ).toEqual(["closed", "closed/needle-two.txt"]);
+
+    bound.dispose();
+    expect(
+      model
+        .getSnapshot()
+        .rows.filter((row) => row.type === "entry")
+        .map((row) => row.path),
+    ).toEqual([]);
+
     // Clearing filter leaves "closed" collapsed.
     model.setFilter("");
     const collapsedPaths = model
@@ -678,7 +718,5 @@ describe("@shaulavo/workbench-tree engine", () => {
       .rows.filter((row) => row.type === "entry")
       .map((row) => row.path);
     expect(collapsedPaths).toEqual(["closed", "open.ts"]);
-
-    bound.dispose();
   });
 });
