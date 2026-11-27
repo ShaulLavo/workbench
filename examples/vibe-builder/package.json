@@ -1,0 +1,41 @@
+{
+  "name": "@shaulavo/workbench-example-vibe-builder",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@base-ui/react": "catalog:",
+    "@shaulavo/hotkeys": "catalog:",
+    "@shaulavo/workbench-core": "workspace:*",
+    "@shaulavo/workbench-editor": "workspace:*",
+    "@shaulavo/workbench-icons": "workspace:*",
+    "@shaulavo/workbench-preview": "workspace:*",
+    "@shaulavo/workbench-terminal": "workspace:*",
+    "@shaulavo/workbench-tokens": "workspace:*",
+    "@shaulavo/workbench-tree": "workspace:*",
+    "@shaulavo/workbench-ui": "workspace:*",
+    "@singapore-editor/core": "catalog:",
+    "@singapore-editor/find": "catalog:",
+    "@singapore-editor/gutters": "catalog:",
+    "@singapore-editor/highlighting": "catalog:",
+    "@singapore-editor/markdown": "catalog:",
+    "@singapore-editor/plugin-ui": "catalog:",
+    "@singapore-editor/react": "catalog:",
+    "ghostty-webgpu": "catalog:",
+    "react": "catalog:",
+    "react-dom": "catalog:"
+  },
+  "devDependencies": {
+    "@types/react": "catalog:",
+    "@types/react-dom": "catalog:",
+    "@vitejs/plugin-react": "catalog:",
+    "typescript": "catalog:",
+    "vite": "catalog:"
+  }
+}

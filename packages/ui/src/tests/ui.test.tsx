@@ -16,6 +16,7 @@ import {
   ToastHost,
   ToolPane,
   UnsavedChangesDialog,
+  VirtualList,
   WorkbenchPortalProvider,
   WorkbenchShell,
 } from "../index";
@@ -373,5 +374,214 @@ describe("@shaulavo/workbench-ui", () => {
     expect(resolveListboxKeyAction({ key: "Enter", count: 3, activeIndex: 1 })).toEqual({
       kind: "commit",
     });
+  });
+
+  it("supports VirtualList flow layout (Plan 181: never directDomUpdates) and measured absolute directDomUpdates", () => {
+    const items = Array.from({ length: 100 }, (_, i) => ({ id: `item-${i}`, label: `Row ${i}` }));
+    const origRect = HTMLElement.prototype.getBoundingClientRect;
+    const origScrollTo = HTMLElement.prototype.scrollTo;
+    const origResizeObserver = globalThis.ResizeObserver;
+    const origClientHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientHeight");
+    const origClientWidth = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "clientWidth");
+    const origScrollHeight = Object.getOwnPropertyDescriptor(HTMLElement.prototype, "scrollHeight");
+    const observedRows = new Set<Element>();
+    class TrackingResizeObserver {
+      observe(target: Element): void {
+        if (target.classList.contains("wb-virtual-list-row")) observedRows.add(target);
+      }
+      unobserve(target: Element): void {
+        observedRows.delete(target);
+      }
+      disconnect(): void {
+        observedRows.clear();
+      }
+    }
+    globalThis.ResizeObserver = TrackingResizeObserver as unknown as typeof ResizeObserver;
+    HTMLElement.prototype.scrollTo = function mockScrollTo(arg?: ScrollToOptions | number, y?: number) {
+      if (typeof arg === "number") {
+        this.scrollTop = y ?? 0;
+        return;
+      }
+      if (arg?.top !== undefined) this.scrollTop = arg.top;
+    };
+    Object.defineProperty(HTMLElement.prototype, "scrollHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-wb-virtual-list") ? 2600 : 30;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientHeight", {
+      configurable: true,
+      get(this: HTMLElement) {
+        return this.hasAttribute("data-wb-virtual-list") ? 260 : 30;
+      },
+    });
+    Object.defineProperty(HTMLElement.prototype, "clientWidth", {
+      configurable: true,
+      get() {
+        return 320;
+      },
+    });
+    HTMLElement.prototype.getBoundingClientRect = function mockRect() {
+      const h = this.hasAttribute("data-wb-virtual-list") ? 260 : 30;
+      return {
+        width: 320,
+        height: h,
+        top: 0,
+        left: 0,
+        right: 320,
+        bottom: h,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      } as DOMRect;
+    };
+
+    try {
+      // Flow layout keeps normal flow (paddingTop/paddingBottom + marginTop + estimated height) even if directDomUpdates={true} is passed.
+      const flowHost = mount(
+        <VirtualList
+          items={items}
+          getKey={(item) => item.id}
+          layout="flow"
+          directDomUpdates={true}
+          initialRect={{ width: 320, height: 260 }}
+          renderRow={(item) => <div style={{ height: "12px" }}>{item.label}</div>}
+        />,
+      );
+      const flowList = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(flowList?.dataset.layout).toBe("flow");
+      const flowInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(flowInner?.style.height).toBe("");
+      expect(flowInner?.style.paddingTop).toBe("0px");
+      const flowRows = flowHost.querySelectorAll<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
+      expect(flowRows.length).toBeGreaterThan(5);
+      expect(flowRows[0]?.style.transform).toBe("");
+      expect(flowRows[0]?.style.height).toBe("26px");
+
+      // Switching runtime modes (absolute direct -> flow -> absolute non-direct -> absolute direct) leaves zero stale inline styles.
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            measureItems={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const absDirectInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(absDirectInner?.style.height).toMatch(/^\d+px$/);
+      const absDirectRows = flowHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(absDirectRows.length).toBeGreaterThan(5);
+      expect(absDirectRows[1]?.style.transform).toContain("translate3d");
+
+      // Switch back to flow from a scrolled absolute list: preserve scroller/inner identity + scrollTop and clear inline height/transforms.
+      const scroller = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(scroller).not.toBeNull();
+      if (scroller) scroller.scrollTop = 1000;
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="flow"
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const flowAgainScroller = flowHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(flowAgainScroller).toBe(scroller);
+      expect(flowAgainScroller?.scrollTop).toBe(1000);
+      const flowAgainInner = flowHost.querySelector<HTMLDivElement>(".wb-virtual-list-inner");
+      expect(flowAgainInner).toBe(absDirectInner);
+      expect(flowAgainInner?.style.height).toBe("");
+      const flowAgainRow = flowHost.querySelector<HTMLDivElement>('.wb-virtual-list-row[data-layout="flow"]');
+      expect(flowAgainRow?.style.transform).toBe("");
+      expect(flowAgainRow?.style.height).toBe("26px");
+
+      // Toggling measureItems off on absolute directDomUpdates={false} replaces row DOM nodes so ResizeObserver detaches.
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={false}
+            measureItems={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const measuredRowNode = flowHost.querySelector<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(observedRows.size).toBeGreaterThan(0);
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={false}
+            measureItems={false}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const absOffRows = flowHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(absOffRows[0]).not.toBe(measuredRowNode);
+      expect(observedRows.size).toBe(0);
+      expect(absOffRows[1]?.style.transform).toBe("translateY(26px)");
+
+      act(() => {
+        activeRoot?.render(
+          <VirtualList
+            items={items}
+            getKey={(item) => item.id}
+            layout="absolute"
+            directDomUpdates={true}
+            initialRect={{ width: 320, height: 260 }}
+            renderRow={(item) => <div>{item.label}</div>}
+          />,
+        );
+      });
+      const absBackOnRows = flowHost.querySelectorAll<HTMLDivElement>(
+        '.wb-virtual-list-row[data-layout="absolute"]',
+      );
+      expect(absBackOnRows[1]?.style.transform).toContain("translate3d(0, 26px, 0)");
+
+      // Fresh mount with an offscreen activeIndex scrolls the scroller immediately during initial mount.
+      act(() => {
+        activeRoot?.unmount();
+      });
+      const activeHost = mount(
+        <VirtualList
+          items={items}
+          getKey={(item) => item.id}
+          activeIndex={80}
+          initialRect={{ width: 320, height: 260 }}
+          renderRow={(item) => <div>{item.label}</div>}
+        />,
+      );
+      const activeScroller = activeHost.querySelector<HTMLDivElement>("[data-wb-virtual-list]");
+      expect(activeScroller?.scrollTop).toBe(1846);
+    } finally {
+      HTMLElement.prototype.getBoundingClientRect = origRect;
+      HTMLElement.prototype.scrollTo = origScrollTo;
+      globalThis.ResizeObserver = origResizeObserver;
+      if (origClientHeight) Object.defineProperty(HTMLElement.prototype, "clientHeight", origClientHeight);
+      if (origClientWidth) Object.defineProperty(HTMLElement.prototype, "clientWidth", origClientWidth);
+      if (origScrollHeight) Object.defineProperty(HTMLElement.prototype, "scrollHeight", origScrollHeight);
+    }
   });
 });

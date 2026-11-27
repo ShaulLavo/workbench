@@ -1,0 +1,118 @@
+{
+  "recordedAt": "2026-11-27",
+  "tanstackReactVirtual": "3.14.28",
+  "protocol": "80 smooth-scroll rAF steps (6px/18px cadence, 672px total) in Playwright Chromium and WebKit",
+  "decision": {
+    "virtualListFlow": false,
+    "virtualListAbsoluteFixed": false,
+    "virtualListAbsoluteMeasured": true,
+    "fileTreeViewportFixed": false,
+    "notes": "Plan 181 hard constraint keeps directDomUpdates strictly false for layout='flow'. Measured absolute VirtualList saved 12% commits and 15%-41% render time across Chromium/WebKit with zero regressions. Fixed-height VirtualList and 50k FileTreeViewport saved 0 commits with directDomUpdates because virtual-core already skips same-range updates and FileTreeViewport now applies sticky ancestor push-up directly to the sticky overlay DOM."
+  },
+  "results": [
+    {
+      "engine": "chromium",
+      "directDomUpdates": false,
+      "virtualListFixed": {
+        "commits": 48,
+        "renderMs": 153.6,
+        "meanFrameMs": 16.35,
+        "p95FrameMs": 16.8,
+        "rowsAligned": true
+      },
+      "virtualListMeasured": {
+        "commits": 33,
+        "renderMs": 80.9,
+        "meanFrameMs": 16.61,
+        "p95FrameMs": 16.7,
+        "rowsAligned": true
+      },
+      "fileTree50k": {
+        "commits": 48,
+        "renderMs": 295.9,
+        "meanFrameMs": 16.6,
+        "p95FrameMs": 16.8,
+        "stickyObserved": true,
+        "rowsAligned": true
+      }
+    },
+    {
+      "engine": "chromium",
+      "directDomUpdates": true,
+      "virtualListFixed": {
+        "commits": 48,
+        "renderMs": 171.4,
+        "meanFrameMs": 16.32,
+        "p95FrameMs": 16.7,
+        "rowsAligned": true
+      },
+      "virtualListMeasured": {
+        "commits": 29,
+        "renderMs": 68.5,
+        "meanFrameMs": 16.59,
+        "p95FrameMs": 16.7,
+        "rowsAligned": true
+      },
+      "fileTree50k": {
+        "commits": 48,
+        "renderMs": 282.0,
+        "meanFrameMs": 16.57,
+        "p95FrameMs": 16.7,
+        "stickyObserved": true,
+        "rowsAligned": true
+      }
+    },
+    {
+      "engine": "webkit",
+      "directDomUpdates": false,
+      "virtualListFixed": {
+        "commits": 48,
+        "renderMs": 32.0,
+        "meanFrameMs": 15.94,
+        "p95FrameMs": 17.0,
+        "rowsAligned": true
+      },
+      "virtualListMeasured": {
+        "commits": 33,
+        "renderMs": 17.0,
+        "meanFrameMs": 16.06,
+        "p95FrameMs": 17.0,
+        "rowsAligned": true
+      },
+      "fileTree50k": {
+        "commits": 48,
+        "renderMs": 72.0,
+        "meanFrameMs": 16.02,
+        "p95FrameMs": 17.0,
+        "stickyObserved": true,
+        "rowsAligned": true
+      }
+    },
+    {
+      "engine": "webkit",
+      "directDomUpdates": true,
+      "virtualListFixed": {
+        "commits": 48,
+        "renderMs": 19.0,
+        "meanFrameMs": 16.07,
+        "p95FrameMs": 17.0,
+        "rowsAligned": true
+      },
+      "virtualListMeasured": {
+        "commits": 29,
+        "renderMs": 10.0,
+        "meanFrameMs": 16.02,
+        "p95FrameMs": 17.0,
+        "rowsAligned": true
+      },
+      "fileTree50k": {
+        "commits": 48,
+        "renderMs": 74.0,
+        "meanFrameMs": 16.0,
+        "p95FrameMs": 17.0,
+        "stickyObserved": true,
+        "rowsAligned": true
+      }
+    }
+  ]
+}
