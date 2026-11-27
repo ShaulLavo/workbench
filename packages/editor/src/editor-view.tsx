@@ -396,7 +396,9 @@ export function EditorView({
 
   async function handleResolveConflict(choice: "keep-mine" | "take-theirs"): Promise<void> {
     const targetDocId = documentId;
+    const targetReadOnly = effectiveReadOnly;
     if (!adapter.resolveConflict || resolvingConflictDocId === targetDocId) return;
+    if (choice === "keep-mine" && targetReadOnly) return;
     if (choice === "keep-mine" && committedDocIdRef.current === targetDocId) {
       recordDocumentEdit(adapter, targetDocId, controller.materializeFullText());
     }
@@ -405,7 +407,7 @@ export function EditorView({
       await adapter.resolveConflict(targetDocId, choice);
       if (choice === "take-theirs") {
         await applyTakeTheirs(targetDocId);
-      } else {
+      } else if (!targetReadOnly) {
         await persistDocumentDraft(adapter, targetDocId, true, {
           onDirtyChange: emitDirty,
           onSave: emitSave,
@@ -448,7 +450,7 @@ export function EditorView({
             <button
               type="button"
               className="wb-button"
-              disabled={resolvingCurrentConflict}
+              disabled={effectiveReadOnly || resolvingCurrentConflict}
               data-testid="wb-editor-conflict-keep"
               onClick={() => void handleResolveConflict("keep-mine")}
             >
