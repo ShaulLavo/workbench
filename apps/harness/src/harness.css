@@ -145,4 +145,24 @@
     font-size: var(--wb-text-xs);
     color: var(--wb-fg-muted);
   }
+
+  .harness-singapore-stage {
+    position: relative;
+    height: 220px;
+    min-height: 200px;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-md);
+    overflow: hidden;
+    background: var(--wb-bg-well);
+  }
+
+  .harness-composer-card {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.625rem;
+    border: 1px solid var(--wb-border);
+    border-radius: var(--wb-radius-md);
+    background: var(--wb-bg-panel);
+  }
 }

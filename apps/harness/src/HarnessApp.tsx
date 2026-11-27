@@ -10,6 +10,10 @@ import {
   type WorkbenchPaneId,
 } from "@shaulavo/workbench-core";
 import { useSubscribable, useWorkbenchTheme } from "@shaulavo/workbench-core/react";
+import { MarkdownComposer } from "@shaulavo/workbench-editor/composer";
+import { DiffEditorView } from "@shaulavo/workbench-editor/diff";
+import { EditorGroupLayout } from "@shaulavo/workbench-editor/groups";
+import { DiagnosticPeek, LspStatusBadge, type DiagnosticPeekModel } from "@shaulavo/workbench-editor/lsp";
 import { FileIconSprite, FileTypeIcon, StrokeIcon } from "@shaulavo/workbench-icons/react";
 import { PreviewPane } from "@shaulavo/workbench-preview";
 import { TerminalPanel } from "@shaulavo/workbench-terminal";
@@ -37,6 +41,7 @@ import {
   type SearchQueryOptions,
 } from "@shaulavo/workbench-ui";
 import type { Terminal } from "ghostty-webgpu";
+import { createHarnessEditorBundle, HARNESS_DIFF_MODIFIED, HARNESS_DIFF_ORIGINAL } from "./editor-fixture";
 import { createBridgedHarnessPreviewAdapter, createRemoteHarnessPreviewAdapter } from "./preview-fixture";
 import { createHarnessTerminalBundle } from "./terminal-fixture";
 import {
@@ -148,6 +153,13 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [previewMode, setPreviewMode] = useState<"bridged" | "remote">("bridged");
   const [bridgedPreview] = useState(() => createBridgedHarnessPreviewAdapter());
   const [remotePreview] = useState(() => createRemoteHarnessPreviewAdapter());
+  const [editorBundle] = useState(() => createHarnessEditorBundle());
+  const [showDiff, setShowDiff] = useState(false);
+  const [diffMode, setDiffMode] = useState<"split" | "stacked">("split");
+  const [showDiagnosticPeek, setShowDiagnosticPeek] = useState(false);
+  const [composerText, setComposerText] = useState("");
+  const [composerSubmitted, setComposerSubmitted] = useState("none");
+  const [composerCommand, setComposerCommand] = useState("none");
   const [terminalTransparent, setTerminalTransparent] = useState(false);
   const [terminalBundle] = useState(() =>
     createHarnessTerminalBundle((path) => {
@@ -447,6 +459,121 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
           >
             Enable DECCKM
           </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="editor-split-right"
+            onClick={() => editorBundle.splitActiveRight()}
+          >
+            Split editor
+          </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="editor-toggle-peek"
+            onClick={() => setShowDiagnosticPeek((v) => !v)}
+          >
+            Diagnostic peek
+          </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="editor-trigger-conflict"
+            onClick={() => editorBundle.triggerConflict("src/App.tsx")}
+          >
+            Trigger conflict
+          </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="editor-open-large"
+            onClick={() => editorBundle.openLargeFile()}
+          >
+            Open &gt;2MiB file
+          </button>
+          <button
+            type="button"
+            className="wb-button"
+            data-testid="editor-toggle-diff"
+            onClick={() => setShowDiff((v) => !v)}
+          >
+            {showDiff ? "Show editor" : "Show diff"}
+          </button>
+          {showDiff ? (
+            <button
+              type="button"
+              className="wb-button"
+              data-testid="editor-diff-mode"
+              onClick={() => setDiffMode((m) => (m === "split" ? "stacked" : "split"))}
+            >
+              Diff: {diffMode}
+            </button>
+          ) : null}
+        </div>
+
+        <div className="harness-singapore-stage">
+          {showDiff ? (
+            <DiffEditorView
+              path="src/App.tsx"
+              mode={diffMode}
+              originalText={HARNESS_DIFF_ORIGINAL}
+              modifiedText={HARNESS_DIFF_MODIFIED}
+            />
+          ) : (
+            <EditorGroupLayout
+              documents={editorBundle.documents}
+              groups={editorBundle.groups}
+              iconPreset={iconPreset}
+              renderGroupOverlay={(group) => {
+                if (!showDiagnosticPeek || group.id !== "main") return null;
+                const peekModel: DiagnosticPeekModel = {
+                  severity: "error",
+                  message: "Type 'string' is not assignable to type 'number'.",
+                  source: "ts",
+                  code: "2322",
+                  geometry: {
+                    kind: "visible",
+                    anchorRect: { top: 48, bottom: 68, left: 24, right: 120, width: 96, height: 20 },
+                    clipRect: { top: 0, bottom: 220, left: 0, right: 640, width: 640, height: 220 },
+                  },
+                  relatedInformation: [
+                    {
+                      label: "Expected number here",
+                      target: { path: "src/styles.css", line: 1, column: 1 },
+                    },
+                  ],
+                };
+                return (
+                  <DiagnosticPeek
+                    model={peekModel}
+                    onClose={() => setShowDiagnosticPeek(false)}
+                    onOpenTarget={(target) => {
+                      editorBundle.lsp.openLocation(target, {
+                        shouldFocusEditor: true,
+                        origin: "mouse",
+                      });
+                    }}
+                  />
+                );
+              }}
+            />
+          )}
+        </div>
+
+        <div className="harness-composer-card">
+          <MarkdownComposer
+            ariaLabel="Message"
+            mentionItems={editorBundle.mentionItems}
+            slashCommands={editorBundle.slashCommands}
+            onChange={(next) => setComposerText(next)}
+            onSelectCommand={(cmd) => setComposerCommand(cmd.name)}
+            onSubmit={(payload) => setComposerSubmitted(`${payload.text} [${payload.mentions.join(" | ")}]`)}
+          />
+          <div className="harness-well">
+            <span data-testid="composer-text-probe">{JSON.stringify(composerText)}</span> ·{" "}
+            <span data-testid="composer-submit-probe">submitted: {composerSubmitted}</span> ·{" "}
+            <span data-testid="composer-command-probe">command: {composerCommand}</span>
+          </div>
         </div>
 
         <div className="harness-grid">
@@ -640,6 +767,7 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
           leading={<span>{activeTab}</span>}
           trailing={
             <>
+              <LspStatusBadge adapter={editorBundle.lsp} />
               <span>{preset}</span>
               <span>{mode}</span>
             </>
