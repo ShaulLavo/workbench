@@ -36,6 +36,7 @@ import {
   topLevelPaths,
   type TreeEntryRow,
   type TreeNavigationKey,
+  type TreeRow,
 } from "../model";
 import { baseName, joinPath, parentOf } from "../paths";
 import { FileTreeDraftRow, FileTreeRow, FileTreeStatusRow } from "./tree-row";
