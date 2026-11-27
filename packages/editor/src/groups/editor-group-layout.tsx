@@ -391,7 +391,12 @@ export function EditorGroupLayout({
   }
 
   return (
-    <DndContext sensors={sensors} onDragStart={handleDragStart} onDragEnd={handleDragEnd}>
+    <DndContext
+      sensors={sensors}
+      onDragStart={handleDragStart}
+      onDragEnd={handleDragEnd}
+      onDragCancel={() => setDraggingTabId(null)}
+    >
       <div data-wb-editor-groups="" className={cx("wb-editor-groups-root", className)}>
         {renderNode(snapshot.root)}
       </div>

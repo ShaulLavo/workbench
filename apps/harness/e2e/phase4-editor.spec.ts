@@ -29,23 +29,55 @@ for (const host of [
     await page.getByTestId("toggle-mode").click();
 
     if (!isTouch) {
-      // Split groups: clicking Split editor creates a second group side-by-side.
-      await expect(page.locator("[data-wb-editor-group]")).toHaveCount(1);
-      await page.getByTestId("editor-split-right").click();
-      await expect(page.locator("[data-wb-editor-group]")).toHaveCount(2);
+      // Unsaved draft preservation across tab switches (without clobbering sibling tabs).
+      await editorView.getByTestId("wb-editor-surface").click();
+      await page.keyboard.type("// UNSAVED_DRAFT_MARKER\n");
+      await expect(editorView).toContainText("UNSAVED_DRAFT_MARKER");
+      await page.locator('[data-testid="wb-editor-tab-src/styles.css"] button[role="tab"]').click();
+      const stylesView = page.locator('[data-wb-editor][data-document-id="src/styles.css"]').first();
+      await expect(stylesView).toHaveAttribute("data-status", "ready", { timeout: 10000 });
+      await expect(stylesView).toContainText("@layer workbench-app");
+      await page.locator('[data-testid="wb-editor-tab-src/App.tsx"] button[role="tab"]').click();
+      await expect(page.locator('[data-wb-editor][data-document-id="src/App.tsx"]').first()).toContainText(
+        "UNSAVED_DRAFT_MARKER",
+      );
 
-      // DiagnosticPeek opens, shows related info, and closes cleanly on Escape.
+      // Dragging a tab shows edge drop overlay and Escape cancels cleanly without leaving overlay behind.
+      const dragTab = page.locator('[data-testid="wb-editor-tab-src/App.tsx"] button[role="tab"]').first();
+      const dragBox = await dragTab.boundingBox();
+      expect(dragBox).not.toBeNull();
+      await page.mouse.move(dragBox!.x + 8, dragBox!.y + dragBox!.height / 2);
+      await page.mouse.down();
+      await page.mouse.move(dragBox!.x + 18, dragBox!.y + dragBox!.height / 2, {
+        steps: 4,
+      });
+      await expect(page.getByTestId("wb-group-drop-overlay-main")).toBeVisible();
+      await page.keyboard.press("Escape");
+      await page.mouse.up();
+      await expect(page.getByTestId("wb-group-drop-overlay-main")).toHaveCount(0);
+
+      // Split groups: clicking Split editor creates a second group side-by-side (polls past dnd-kit's 50ms detach click guard).
+      await expect(page.locator("[data-wb-editor-group]")).toHaveCount(1);
+      await expect(async () => {
+        await page.getByTestId("editor-split-right").click();
+        await expect(page.locator("[data-wb-editor-group]")).toHaveCount(2, { timeout: 250 });
+      }).toPass({ timeout: 5000 });
+
+      // DiagnosticPeek opens, focuses dialog, and closes cleanly on Escape.
       await page.getByTestId("editor-toggle-peek").click();
       const peek = page.getByTestId("wb-diagnostic-peek");
       await expect(peek).toBeVisible();
       await page.keyboard.press("Escape");
       await expect(peek).toHaveCount(0);
 
-      // Conflict bar appears and resolves cleanly via Take theirs.
+      // Conflict bar appears and Take theirs replaces buffer with disk text.
       await page.getByTestId("editor-trigger-conflict").click();
       await expect(page.getByTestId("wb-editor-conflict-bar")).toBeVisible();
       await page.getByTestId("wb-editor-conflict-theirs").click();
       await expect(page.getByTestId("wb-editor-conflict-bar")).toHaveCount(0);
+      await expect(page.locator('[data-wb-editor][data-document-id="src/App.tsx"]').first()).toContainText(
+        "export const fromDisk = true;",
+      );
 
       // Large file (>2 MiB) disables analysis and displays the large-file tier notice.
       await page.getByTestId("editor-open-large").click();
@@ -54,11 +86,32 @@ for (const host of [
         page.locator('[data-wb-editor][data-document-id="logs/large.log"]').first(),
       ).toHaveAttribute("data-analysis-allowed", "false");
 
-      // Diff view toggles on and renders split diff panes.
+      // Diff view toggles on, synchronizes split scroll via onDidScroll, and supports stacked mode.
       await page.getByTestId("editor-toggle-diff").click();
       await expect(page.getByTestId("wb-diff-view")).toBeVisible();
-      await expect(page.getByTestId("wb-diff-pane-old")).toBeVisible();
-      await expect(page.getByTestId("wb-diff-pane-new")).toBeVisible();
+      const oldPane = page.getByTestId("wb-diff-pane-old");
+      const newPane = page.getByTestId("wb-diff-pane-new");
+      await expect(oldPane).toBeVisible();
+      await expect(newPane).toBeVisible();
+
+      const oldBox = await oldPane.boundingBox();
+      expect(oldBox).not.toBeNull();
+      await page.mouse.move(oldBox!.x + oldBox!.width / 2, oldBox!.y + oldBox!.height / 2);
+      await page.mouse.wheel(0, 320);
+
+      await expect
+        .poll(async () => {
+          return await newPane.evaluate((pane) => {
+            const scroller =
+              pane.querySelector<HTMLElement>(".se-scroll-container, [data-scroll-container]") ?? pane;
+            const candidates = [scroller, ...Array.from(pane.querySelectorAll<HTMLElement>("*"))];
+            return Math.max(...candidates.map((el) => el.scrollTop));
+          });
+        })
+        .toBeGreaterThan(40);
+
+      await page.getByTestId("editor-diff-mode").click();
+      await expect(page.getByTestId("wb-diff-pane-stacked")).toBeVisible();
       await page.getByTestId("editor-toggle-diff").click();
     }
 
@@ -94,17 +147,26 @@ for (const host of [
     await page.keyboard.press("Enter");
     await expect(composer.locator('[data-wb-mention-chip="src/App.tsx"]')).toBeVisible();
 
-    // Atomic single-Backspace deletes the entire @src/App.tsx chip (first Backspace removes trailing space, second deletes whole chip).
+    // Atomic single-Backspace deletes the entire @src/App.tsx token with zero partial residue.
     await page.keyboard.press("Backspace");
     await page.keyboard.press("Backspace");
     await expect(composer.locator('[data-wb-mention-chip="src/App.tsx"]')).toHaveCount(0);
+    await expect(page.getByTestId("composer-text-probe")).toHaveText('"Inspect "');
 
-    // Re-insert @app chip, then test slash command popup -> select /fix inserts command text.
-    await page.keyboard.type("@app");
+    // Select comma-containing path via @ popup AND drop bracket-containing path; both render atomic chips and submit intact.
+    await page.keyboard.type("@a,b");
     await expect(page.getByTestId("wb-composer-mention-menu")).toBeVisible();
     await page.keyboard.press("Enter");
-    await expect(composer.locator('[data-wb-mention-chip="src/App.tsx"]')).toBeVisible();
+    await expect(composer.locator('[data-wb-mention-chip="src/a,b.ts"]')).toBeVisible();
 
+    await composer.evaluate((el) => {
+      const dt = new DataTransfer();
+      dt.setData("application/x-workbench-paths", JSON.stringify(["docs/closing ] bracket.md"]));
+      el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
+    });
+    await expect(composer.locator('[data-wb-mention-chip="docs/closing ] bracket.md"]')).toBeVisible();
+
+    // Slash command popup inserts command text.
     await page.keyboard.type("/fi");
     await expect(page.getByTestId("wb-composer-slash-menu")).toBeVisible();
     await page.keyboard.press("Enter");
@@ -118,18 +180,12 @@ for (const host of [
     });
     await expect(page.getByTestId("composer-submit-probe")).toContainText("submitted: none");
 
-    // Submit prompt on Enter -> emits prompt text + extracted mentions and clears composer.
+    // Submit prompt on Enter -> emits both tricky mention paths intact and clears composer.
     await page.keyboard.press("Enter");
-    await expect(page.getByTestId("composer-submit-probe")).toContainText("src/App.tsx");
+    await expect(page.getByTestId("composer-submit-probe")).toContainText(
+      "[src/a,b.ts | docs/closing ] bracket.md]",
+    );
     await expect(page.getByTestId("wb-composer-placeholder")).toBeVisible();
-
-    // Dropping a file path into the composer inserts an atomic mention chip.
-    await composer.evaluate((el) => {
-      const dt = new DataTransfer();
-      dt.setData("application/x-workbench-paths", JSON.stringify(["src/styles.css"]));
-      el.dispatchEvent(new DragEvent("drop", { bubbles: true, cancelable: true, dataTransfer: dt }));
-    });
-    await expect(composer.locator('[data-wb-mention-chip="src/styles.css"]')).toBeVisible();
 
     expect(errors).toEqual([]);
   });

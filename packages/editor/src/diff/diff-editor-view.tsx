@@ -109,17 +109,18 @@ function DiffSidePane({
     fontSize,
     lineHeight,
     inputLabel: `Diff ${side}: ${file.path}`,
-    onChange() {
-      const snap = controller.getSnapshot();
-      if (snap) emitScrollTop(side, snap.viewport.scrollTop);
-    },
   });
 
   const { ref: mountRef } = controller;
 
   useEffect(() => {
-    emitEditorRef(side, controller.getEditor());
+    const editor = controller.getEditor();
+    emitEditorRef(side, editor);
+    const scrollSub = editor?.onDidScroll((position) => {
+      emitScrollTop(side, position.top);
+    });
     return () => {
+      scrollSub?.dispose();
       emitEditorRef(side, null);
     };
   }, [controller, documentSpec, side]);
@@ -153,6 +154,7 @@ export function DiffEditorView({
 
   const editorsRef = useRef<Partial<Record<DiffGutterSide, Editor | null>>>({});
   const syncingScrollRef = useRef(false);
+  const suppressedTopRef = useRef<Partial<Record<DiffGutterSide, number>>>({});
 
   useEffect(() => {
     if (!hostEl) return;
@@ -177,14 +179,22 @@ export function DiffEditorView({
 
   function handleScrollTop(side: DiffGutterSide, top: number): void {
     if (mode !== "split" || syncingScrollRef.current) return;
+    const suppressed = suppressedTopRef.current[side];
+    if (suppressed !== undefined && Math.abs(suppressed - top) < 1) {
+      delete suppressedTopRef.current[side];
+      return;
+    }
     const peerSide: DiffGutterSide = side === "old" ? "new" : "old";
     const peer = editorsRef.current[peerSide];
     if (!peer) return;
+    if (Math.abs(peer.getScrollPosition().top - top) < 1) return;
     syncingScrollRef.current = true;
+    suppressedTopRef.current[peerSide] = top;
     try {
       peer.setScrollPosition({ top });
       syncingScrollRef.current = false;
     } catch (error) {
+      delete suppressedTopRef.current[peerSide];
       syncingScrollRef.current = false;
       throw error;
     }

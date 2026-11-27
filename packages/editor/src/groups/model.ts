@@ -184,15 +184,31 @@ export function applyTabPlacement(
   const source = findTabWithGroup(snapshot.root, placement.tabId);
   if (!source) return snapshot;
 
+  const { target } = placement;
+  const destinationGroup = findGroupNode(snapshot.root, target.groupId);
+  if (!destinationGroup) return snapshot;
+
   const isCopy = placement.mode === "copy";
+
+  if (!isCopy && target.kind === "strip" && target.beforeTabId === placement.tabId) {
+    return snapshot;
+  }
+
+  if (
+    !isCopy &&
+    target.kind === "edge" &&
+    source.groupId === target.groupId &&
+    destinationGroup.tabs.length <= 1
+  ) {
+    return snapshot;
+  }
+
   const tabToPlace: EditorTabDescriptor = isCopy
     ? {
         ...source.tab,
         id: options?.createCopyTabId?.(source.tab) ?? `${source.tab.id}-copy-${(generatedGroupSeq += 1)}`,
       }
     : source.tab;
-
-  const { target } = placement;
 
   if (target.kind === "edge") {
     const newGroupId = options?.createGroupId?.() ?? `group-${(generatedGroupSeq += 1)}`;

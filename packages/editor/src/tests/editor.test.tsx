@@ -21,6 +21,14 @@ import {
   EditorTabBar,
   languageIdForPath,
 } from "../index";
+import {
+  getDocumentDraft,
+  isDraftDirty,
+  persistDocumentDraft,
+  recordDocumentEdit,
+  replaceDocumentDraftFromDisk,
+  seedDocumentDraft,
+} from "../utils/draft-store";
 import { applyTabPlacement, computeEdgeDropZone, listGroupNodes } from "../groups/index";
 import { DiagnosticPeek, diagnosticPeekPlacement, LspStatusBadge } from "../lsp/index";
 import {
@@ -246,6 +254,117 @@ describe("@shaulavo/workbench-editor", () => {
     expect(computeEdgeDropZone({ x: 20, y: 150 }, rect)).toBe("left");
     expect(computeEdgeDropZone({ x: 380, y: 150 }, rect)).toBe("right");
     expect(computeEdgeDropZone({ x: 200, y: 150 }, rect)).toBe("center");
+
+    // Stale/missing destination groups must be lossless no-ops (never drop source tab or corrupt activeGroupId).
+    const missingGroupMove = applyTabPlacement(initial, {
+      tabId: "t1",
+      mode: "move",
+      target: { kind: "group", groupId: "missing-group" },
+    });
+    expect(missingGroupMove).toBe(initial);
+
+    const missingEdgeMove = applyTabPlacement(initial, {
+      tabId: "t1",
+      mode: "move",
+      target: { kind: "edge", groupId: "missing-group", edge: "right" },
+    });
+    expect(missingEdgeMove).toBe(initial);
+
+    // Strip self-placement (`beforeTabId === tabId`) must be a no-op rather than appending the tab.
+    const selfStrip = applyTabPlacement(initial, {
+      tabId: "t1",
+      mode: "move",
+      target: { kind: "strip", groupId: "g1", beforeTabId: "t1" },
+    });
+    expect(selfStrip).toBe(initial);
+
+    // 1-tab self-edge split must be a no-op.
+    const singleGroup: EditorGroupsSnapshot = {
+      activeGroupId: "solo",
+      root: { kind: "group", id: "solo", tabs: [t1], selectedTabId: "t1" },
+    };
+    const selfEdge = applyTabPlacement(singleGroup, {
+      tabId: "t1",
+      mode: "move",
+      target: { kind: "edge", groupId: "solo", edge: "right" },
+    });
+    expect(selfEdge).toBe(singleGroup);
+  });
+
+  it("preserves drafts across switches, serializes overlapping saves, and keeps dirty flag for mid-save edits", async () => {
+    let resolveFirstWrite: (() => void) | undefined;
+    let notifyFirstWriteStarted: (() => void) | undefined;
+    const firstWriteStarted = new Promise<void>((resolve) => {
+      notifyFirstWriteStarted = resolve;
+    });
+    const writes: { readonly docId: string; readonly text: string; readonly expected?: string }[] = [];
+    let revA = 1;
+    let revB = 10;
+
+    const adapter = {
+      getConflict: () => createSubscribable(undefined),
+      loadDocument: async () => undefined,
+      async writeIfUnchanged(docId: string, text: string, expectedRevision: string | undefined) {
+        writes.push({ docId, text, expected: expectedRevision });
+        if (writes.length === 1) {
+          notifyFirstWriteStarted?.();
+          await new Promise<void>((resolve) => {
+            resolveFirstWrite = resolve;
+          });
+        }
+        if (docId === "a.ts") {
+          revA += 1;
+          return { written: true as const, nextRevision: String(revA) };
+        }
+        revB += 1;
+        return { written: true as const, nextRevision: String(revB) };
+      },
+      save: async () => undefined,
+    };
+
+    seedDocumentDraft(adapter, "a.ts", { text: "v0", revision: "1", byteLength: 2 });
+    seedDocumentDraft(adapter, "b.ts", { text: "b0", revision: "10", byteLength: 2 });
+
+    // Edit doc A and kick off first save while pending.
+    expect(recordDocumentEdit(adapter, "a.ts", "v1")).toBe(true);
+    const dirtyEvents: { readonly docId: string; readonly dirty: boolean }[] = [];
+    const save1 = persistDocumentDraft(adapter, "a.ts", false, {
+      onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
+    });
+    await firstWriteStarted;
+
+    // User types v2 while save1 is in flight and switches to doc B.
+    expect(recordDocumentEdit(adapter, "a.ts", "v2")).toBe(true);
+    const save2 = persistDocumentDraft(adapter, "a.ts", false, {
+      onDirtyChange: (docId, dirty) => dirtyEvents.push({ docId, dirty }),
+    });
+
+    // Release save1 -> doc A must STILL be dirty because v2 has not been written yet!
+    resolveFirstWrite?.();
+    await save1;
+    expect(dirtyEvents[0]).toEqual({ docId: "a.ts", dirty: true });
+    // Doc B's revision and clean state must remain completely untouched.
+    expect(getDocumentDraft(adapter, "b.ts")?.revision).toBe("10");
+    expect(isDraftDirty(getDocumentDraft(adapter, "b.ts")!)).toBe(false);
+
+    // Wait for queued save2 -> writes v2 with expectedRevision "2" and clears dirty state.
+    await save2;
+    expect(writes).toEqual([
+      { docId: "a.ts", text: "v1", expected: "1" },
+      { docId: "a.ts", text: "v2", expected: "2" },
+    ]);
+    expect(getDocumentDraft(adapter, "a.ts")?.revision).toBe("3");
+    expect(isDraftDirty(getDocumentDraft(adapter, "a.ts")!)).toBe(false);
+
+    // Take-theirs replaces draft cleanly with authoritative disk text and bumps reloadSeq.
+    const replaced = replaceDocumentDraftFromDisk(adapter, "a.ts", {
+      text: "disk-v9",
+      revision: "9",
+      byteLength: 7,
+    });
+    expect(replaced.text).toBe("disk-v9");
+    expect(replaced.reloadSeq).toBe(1);
+    expect(isDraftDirty(replaced)).toBe(false);
   });
 
   it("positions DiagnosticPeek, closes on Escape, navigates related targets, and renders LspStatusBadge", () => {
@@ -267,7 +386,18 @@ describe("@shaulavo/workbench-editor", () => {
     });
     expect(placedAbove).toEqual({ left: 140, top: 214 });
 
-    const onClose = vi.fn();
+    // Clipped anchor above clipRect.top must still clamp the dialog strictly inside clipRect.top.
+    const clippedAbove = diagnosticPeekPlacement({
+      anchorRect: { top: -80, bottom: -60, left: 20, right: 100, width: 80, height: 20 },
+      clipRect: { top: 40, bottom: 300, left: 10, right: 500, width: 490, height: 260 },
+      layerRect: { top: 40, bottom: 300, left: 10, right: 500, width: 490, height: 260 },
+      surfaceHeight: 120,
+      surfaceWidth: 300,
+    });
+    expect(clippedAbove.top).toBe(0);
+
+    const onCloseA = vi.fn();
+    const onCloseB = vi.fn();
     const onOpenTarget = vi.fn();
     const lspStatus = createSubscribable<LspServerStatus>({
       state: "ready",
@@ -282,51 +412,98 @@ describe("@shaulavo/workbench-editor", () => {
       openLocation: () => true,
     };
 
+    const peekModel = {
+      severity: "error" as const,
+      message: "Type string is not assignable to number",
+      source: "ts",
+      code: "2322",
+      geometry: {
+        kind: "visible" as const,
+        anchorRect: { top: 40, bottom: 60, left: 20, right: 80, width: 60, height: 20 },
+        clipRect: { top: 0, bottom: 400, left: 0, right: 500, width: 500, height: 400 },
+      },
+      relatedInformation: [{ label: "Declared here", target: { path: "src/types.ts", line: 9, column: 3 } }],
+    };
+
     const host = mount(
       <div>
+        <button type="button" data-testid="outside-btn">
+          Outside
+        </button>
         <LspStatusBadge adapter={lspAdapter} />
-        <DiagnosticPeek
-          model={{
-            severity: "error",
-            message: "Type string is not assignable to number",
-            source: "ts",
-            code: "2322",
-            geometry: {
-              kind: "visible",
-              anchorRect: { top: 40, bottom: 60, left: 20, right: 80, width: 60, height: 20 },
-              clipRect: { top: 0, bottom: 400, left: 0, right: 500, width: 500, height: 400 },
-            },
-            relatedInformation: [
-              { label: "Declared here", target: { path: "src/types.ts", line: 9, column: 3 } },
-            ],
-          }}
-          onClose={onClose}
-          onOpenTarget={onOpenTarget}
-        />
+        <DiagnosticPeek model={peekModel} onClose={(r) => onCloseA(r)} onOpenTarget={onOpenTarget} />
+        <DiagnosticPeek model={peekModel} onClose={(r) => onCloseB(r)} />
       </div>,
     );
 
     expect(host.querySelector('[data-testid="wb-lsp-status"]')?.textContent).toContain("2E · 1W");
+
+    // Moving focus outside and re-rendering with fresh inline onClose closures must NOT steal focus.
+    const outsideBtn = host.querySelector<HTMLButtonElement>('[data-testid="outside-btn"]');
+    outsideBtn?.focus();
+    expect(document.activeElement).toBe(outsideBtn);
+    act(() => {
+      activeRoot?.render(
+        <WorkbenchPortalProvider>
+          <div>
+            <button type="button" data-testid="outside-btn">
+              Outside
+            </button>
+            <LspStatusBadge adapter={lspAdapter} />
+            <DiagnosticPeek model={peekModel} onClose={(r) => onCloseA(r)} onOpenTarget={onOpenTarget} />
+            <DiagnosticPeek model={peekModel} onClose={(r) => onCloseB(r)} />
+          </div>
+        </WorkbenchPortalProvider>,
+      );
+    });
+    expect(document.activeElement).toBe(outsideBtn);
+
+    // Escape outside both dialogs closes neither dialog.
+    act(() => {
+      outsideBtn?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(onCloseA).not.toHaveBeenCalled();
+    expect(onCloseB).not.toHaveBeenCalled();
+
+    // Escape inside peek A closes ONLY peek A (not peek B).
+    const peeks = host.querySelectorAll<HTMLDivElement>('[data-testid="wb-diagnostic-peek"]');
+    peeks[0]?.focus();
+    act(() => {
+      peeks[0]?.dispatchEvent(
+        new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }),
+      );
+    });
+    expect(onCloseA).toHaveBeenCalledWith(true);
+    expect(onCloseB).not.toHaveBeenCalled();
+
     act(() => {
       host.querySelector<HTMLButtonElement>('[data-testid="wb-diagnostic-related-0"]')?.click();
     });
-    expect(onClose).toHaveBeenCalledWith(false);
+    expect(onCloseA).toHaveBeenCalledWith(false);
     expect(onOpenTarget).toHaveBeenCalledWith({ path: "src/types.ts", line: 9, column: 3 });
-
-    act(() => {
-      window.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true, cancelable: true }));
-    });
-    expect(onClose).toHaveBeenCalledWith(true);
   });
 
-  it("parses @file mentions and /slash triggers while producing atomic reveal:never Singapore chips", () => {
+  it("parses @file mentions and /slash triggers with reversible encoding for commas, brackets, and backslashes", () => {
     expect(formatMentionToken("src/App.tsx")).toBe("@src/App.tsx");
     expect(formatMentionToken("docs/my guide.md")).toBe("@[docs/my guide.md]");
+    expect(formatMentionToken("src/a,b.ts")).toBe("@[src/a,b.ts]");
+    expect(formatMentionToken("docs/closing ] bracket.md")).toBe("@[docs/closing \\] bracket.md]");
+    expect(formatMentionToken("docs/sub\\path.md")).toBe("@[docs/sub\\\\path.md]");
 
-    const mentions = findMentionRanges("Check @src/App.tsx and @[docs/my guide.md], ignore user@example.com");
-    expect(mentions).toHaveLength(2);
-    expect(mentions[0]).toMatchObject({ path: "src/App.tsx", label: "@App.tsx" });
-    expect(mentions[1]).toMatchObject({ path: "docs/my guide.md", label: "@my guide.md" });
+    const trickyPaths = [
+      "src/App.tsx",
+      "docs/my guide.md",
+      "src/a,b.ts",
+      "docs/closing ] bracket.md",
+      "docs/sub\\path.md",
+    ];
+    const sentence = `Review ${trickyPaths.map((p) => formatMentionToken(p)).join(" and ")}, ignore user@example.com`;
+    const mentions = findMentionRanges(sentence);
+    expect(mentions.map((m) => m.path)).toEqual(trickyPaths);
+    const knownSet = new Set(trickyPaths);
+    expect(findMentionRanges(sentence, knownSet).map((m) => m.path)).toEqual(trickyPaths);
 
     expect(findTriggerAtCursor("Inspect @app", 12)).toEqual({
       kind: "mention",

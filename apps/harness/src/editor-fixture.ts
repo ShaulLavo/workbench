@@ -52,6 +52,22 @@ export interface HarnessEditorBundle {
   triggerConflict(documentId: DocumentId): void;
 }
 
+export const HARNESS_DIFF_ORIGINAL = Array.from({ length: 70 }, (_, i) =>
+  i === 3
+    ? '  const greeting = "Old Workbench";'
+    : i === 42
+      ? '  return "Legacy line 42";'
+      : `  const line${i + 1} = ${i + 1};`,
+).join("\n");
+
+export const HARNESS_DIFF_MODIFIED = Array.from({ length: 70 }, (_, i) =>
+  i === 3
+    ? '  const greeting = "Shared Workbench Ready";'
+    : i === 42
+      ? '  return "Updated line 42";'
+      : `  const line${i + 1} = ${i + 1};`,
+).join("\n");
+
 const INITIAL_DOCS: Readonly<Record<string, { readonly text: string; readonly languageId: string }>> = {
   "src/App.tsx": {
     languageId: "tsx",
@@ -304,6 +320,13 @@ export function createHarnessEditorBundle(): HarnessEditorBundle {
     { id: "styles", path: "src/styles.css", label: "styles.css", detail: "src/styles.css" },
     { id: "pkg", path: "package.json", label: "package.json", detail: "package.json" },
     { id: "claude", path: "CLAUDE.md", label: "CLAUDE.md", detail: "CLAUDE.md" },
+    { id: "comma", path: "src/a,b.ts", label: "a,b.ts", detail: "src/a,b.ts" },
+    {
+      id: "bracket",
+      path: "docs/closing ] bracket.md",
+      label: "closing ] bracket.md",
+      detail: "docs/closing ] bracket.md",
+    },
   ];
 
   const slashCommands: readonly ComposerSlashCommand[] = [

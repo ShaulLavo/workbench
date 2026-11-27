@@ -188,13 +188,15 @@ try {
       2,
     ),
   );
-  run("bun", ["install"], bareSprocktDir);
+  run("bun", ["install", "--linker=isolated"], bareSprocktDir);
 
   for (const absentOptional of [
     "@dnd-kit/core",
     "@dnd-kit/sortable",
-    "@singapore-editor/markdown",
+    "@dnd-kit/utilities",
+    "@singapore-editor/lsp",
     "@singapore-editor/lsp-plugin",
+    "@singapore-editor/markdown",
     "@singapore-editor/minimap",
     "@singapore-editor/scope-lines",
   ]) {
@@ -203,16 +205,63 @@ try {
       throw new Error(`Bare Sprockt fixture unexpectedly installed optional peer ${absentOptional}`);
     }
   }
+  // Under --linker=isolated, @singapore-editor/diff stays private inside @singapore-editor/highlighting and is absent at top level.
+  if (existsSync(path.join(bareSprocktDir, "node_modules/@singapore-editor/diff"))) {
+    throw new Error("Bare Sprockt fixture unexpectedly exposed optional peer @singapore-editor/diff");
+  }
+
+  writeFileSync(
+    path.join(bareSprocktDir, "entry.ts"),
+    [
+      'import "@shaulavo/workbench-editor/editor.css";',
+      "import {",
+      "  EditorWorkbench,",
+      "  EditorView,",
+      "  EditorTabBar,",
+      "  buildWorkbenchEditorTheme,",
+      "  capOverscrollTop,",
+      "  createWorkbenchEditorPlugins,",
+      "  documentFeatureTier,",
+      "  languageIdForPath,",
+      '} from "@shaulavo/workbench-editor";',
+      "export const bareEditorExports = {",
+      "  EditorWorkbench,",
+      "  EditorView,",
+      "  EditorTabBar,",
+      "  buildWorkbenchEditorTheme,",
+      "  capOverscrollTop,",
+      "  createWorkbenchEditorPlugins,",
+      "  documentFeatureTier,",
+      "  languageIdForPath,",
+      "};",
+      "",
+    ].join("\n"),
+  );
   run(
     "bun",
     [
       "-e",
-      `import { existsSync } from "node:fs";
-       import { fileURLToPath } from "node:url";
-       const rootEntry = fileURLToPath(import.meta.resolve("@shaulavo/workbench-editor"));
-       const cssEntry = fileURLToPath(import.meta.resolve("@shaulavo/workbench-editor/editor.css"));
-       if (!existsSync(rootEntry) || !existsSync(cssEntry)) process.exit(1);
-       console.log("bare-sprockt-editor-root-ok");`,
+      `const result = await Bun.build({
+         entrypoints: ["./entry.ts"],
+         target: "browser",
+         outdir: "./dist",
+         format: "esm",
+       });
+       if (!result.success) {
+         console.error(result.logs);
+         process.exit(1);
+       }
+       const jsOut = result.outputs.find((o) => o.path.endsWith(".js"));
+       const cssOut = result.outputs.find((o) => o.path.endsWith(".css"));
+       if (!jsOut || !cssOut) throw new Error("Expected bundled JS and CSS outputs for bare Sprockt fixture");
+       const builtText = await jsOut.text();
+       if (!builtText.includes("wb-editor-view")) throw new Error("Bare bundle missing EditorView output");
+       const { bareEditorExports } = await import(jsOut.path);
+       if (bareEditorExports.languageIdForPath("src/App.tsx") !== "tsx") process.exit(1);
+       if (typeof bareEditorExports.EditorWorkbench !== "function") process.exit(1);
+       if (typeof bareEditorExports.EditorView !== "function") process.exit(1);
+       if (typeof bareEditorExports.EditorTabBar !== "function") process.exit(1);
+       console.log("bare-sprockt-editor-root-bundle-ok");`,
     ],
     bareSprocktDir,
   );
@@ -347,6 +396,24 @@ try {
     throw new Error("@shaulavo/workbench-preview must not import ghostty-webgpu");
   }
 
+  writeFileSync(
+    path.join(fullPeerDir, "full-editor-entry.ts"),
+    [
+      'import "@shaulavo/workbench-ui/ui.css";',
+      'import "@shaulavo/workbench-tree/tree.css";',
+      'import "@shaulavo/workbench-terminal/terminal.css";',
+      'import "@shaulavo/workbench-preview/preview.css";',
+      'import "@shaulavo/workbench-editor/editor.css";',
+      'import * as editorRoot from "@shaulavo/workbench-editor";',
+      'import * as editorGroups from "@shaulavo/workbench-editor/groups";',
+      'import * as editorLsp from "@shaulavo/workbench-editor/lsp";',
+      'import * as editorComposer from "@shaulavo/workbench-editor/composer";',
+      'import * as editorDiff from "@shaulavo/workbench-editor/diff";',
+      "export const allEditorSubpaths = { editorRoot, editorGroups, editorLsp, editorComposer, editorDiff };",
+      "",
+    ].join("\n"),
+  );
+
   run(
     "bun",
     [
@@ -358,32 +425,40 @@ try {
        import * as treeReact from "@shaulavo/workbench-tree/react";
        import * as terminal from "@shaulavo/workbench-terminal";
        import * as preview from "@shaulavo/workbench-preview";
-       import { existsSync } from "node:fs";
-       import { fileURLToPath } from "node:url";
        if (!coreReact.useSubscribable || !iconsReact.FileTypeIcon || !ui.WorkbenchShell || !ui.CommandPalette) process.exit(1);
        if (!tree.prepareFileTreeInput || !tree.FileTreeModel || !treeReact.FileTreeView) process.exit(1);
        if (!terminal.TerminalPanel || !terminal.TerminalView || !terminal.TerminalAccessoryBar) process.exit(1);
        if (!preview.PreviewPane || !preview.createPreviewBridgeController || !preview.createBridgelessPreviewController) process.exit(1);
-       for (const entry of [
-         "@shaulavo/workbench-editor",
-         "@shaulavo/workbench-editor/groups",
-         "@shaulavo/workbench-editor/lsp",
-         "@shaulavo/workbench-editor/composer",
-         "@shaulavo/workbench-editor/diff",
-       ]) {
-         const resolved = fileURLToPath(import.meta.resolve(entry));
-         if (!existsSync(resolved)) throw new Error("Missing editor subpath: " + entry);
+       const build = await Bun.build({
+         entrypoints: ["./full-editor-entry.ts"],
+         target: "browser",
+         outdir: "./dist",
+         format: "esm",
+       });
+       if (!build.success) {
+         console.error(build.logs);
+         process.exit(1);
        }
-       for (const css of [
-         "@shaulavo/workbench-ui/ui.css",
-         "@shaulavo/workbench-tree/tree.css",
-         "@shaulavo/workbench-terminal/terminal.css",
-         "@shaulavo/workbench-preview/preview.css",
-         "@shaulavo/workbench-editor/editor.css",
-       ]) {
-         const resolved = fileURLToPath(import.meta.resolve(css));
-         if (!existsSync(resolved)) throw new Error("Missing CSS export: " + css);
+       const jsOut = build.outputs.find((o) => o.path.endsWith(".js"));
+       const cssOut = build.outputs.find((o) => o.path.endsWith(".css"));
+       if (!jsOut || !cssOut) throw new Error("Full-peer editor bundle missing JS or CSS output");
+       if (typeof globalThis.document === "undefined") {
+         globalThis.document = {
+           createElement: () => ({ innerHTML: "", textContent: "" }),
+         };
        }
+       const { allEditorSubpaths } = await import(jsOut.path);
+       if (allEditorSubpaths.editorRoot.languageIdForPath("src/App.tsx") !== "tsx") process.exit(1);
+       if (typeof allEditorSubpaths.editorGroups.EditorGroupLayout !== "function") process.exit(1);
+       if (typeof allEditorSubpaths.editorGroups.applyTabPlacement !== "function") process.exit(1);
+       if (typeof allEditorSubpaths.editorLsp.DiagnosticPeek !== "function") process.exit(1);
+       if (typeof allEditorSubpaths.editorLsp.diagnosticPeekPlacement !== "function") process.exit(1);
+       if (typeof allEditorSubpaths.editorComposer.MarkdownComposer !== "function") process.exit(1);
+       const tok = allEditorSubpaths.editorComposer.formatMentionToken("docs/closing ] bracket.md");
+       if (allEditorSubpaths.editorComposer.findMentionRanges(tok)[0]?.path !== "docs/closing ] bracket.md") {
+         throw new Error("Mention round-trip failed in packed bundle");
+       }
+       if (typeof allEditorSubpaths.editorDiff.DiffEditorView !== "function") process.exit(1);
        console.log("full-peer-8-packages-ok");`,
     ],
     fullPeerDir,

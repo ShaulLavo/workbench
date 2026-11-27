@@ -41,7 +41,7 @@ import {
   type SearchQueryOptions,
 } from "@shaulavo/workbench-ui";
 import type { Terminal } from "ghostty-webgpu";
-import { createHarnessEditorBundle } from "./editor-fixture";
+import { createHarnessEditorBundle, HARNESS_DIFF_MODIFIED, HARNESS_DIFF_ORIGINAL } from "./editor-fixture";
 import { createBridgedHarnessPreviewAdapter, createRemoteHarnessPreviewAdapter } from "./preview-fixture";
 import { createHarnessTerminalBundle } from "./terminal-fixture";
 import {
@@ -155,7 +155,9 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
   const [remotePreview] = useState(() => createRemoteHarnessPreviewAdapter());
   const [editorBundle] = useState(() => createHarnessEditorBundle());
   const [showDiff, setShowDiff] = useState(false);
+  const [diffMode, setDiffMode] = useState<"split" | "stacked">("split");
   const [showDiagnosticPeek, setShowDiagnosticPeek] = useState(false);
+  const [composerText, setComposerText] = useState("");
   const [composerSubmitted, setComposerSubmitted] = useState("none");
   const [composerCommand, setComposerCommand] = useState("none");
   const [terminalTransparent, setTerminalTransparent] = useState(false);
@@ -497,15 +499,25 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
           >
             {showDiff ? "Show editor" : "Show diff"}
           </button>
+          {showDiff ? (
+            <button
+              type="button"
+              className="wb-button"
+              data-testid="editor-diff-mode"
+              onClick={() => setDiffMode((m) => (m === "split" ? "stacked" : "split"))}
+            >
+              Diff: {diffMode}
+            </button>
+          ) : null}
         </div>
 
         <div className="harness-singapore-stage">
           {showDiff ? (
             <DiffEditorView
               path="src/App.tsx"
-              mode="split"
-              originalText={'export function App() {\n  return "Old";\n}\n'}
-              modifiedText={'export function App() {\n  return "Shared Workbench Ready";\n}\n'}
+              mode={diffMode}
+              originalText={HARNESS_DIFF_ORIGINAL}
+              modifiedText={HARNESS_DIFF_MODIFIED}
             />
           ) : (
             <EditorGroupLayout
@@ -553,10 +565,12 @@ export function HarnessApp({ hostKind, initialPreset, initialMode }: HarnessAppP
             ariaLabel="Message"
             mentionItems={editorBundle.mentionItems}
             slashCommands={editorBundle.slashCommands}
+            onChange={(next) => setComposerText(next)}
             onSelectCommand={(cmd) => setComposerCommand(cmd.name)}
-            onSubmit={(payload) => setComposerSubmitted(`${payload.text} [${payload.mentions.join(",")}]`)}
+            onSubmit={(payload) => setComposerSubmitted(`${payload.text} [${payload.mentions.join(" | ")}]`)}
           />
           <div className="harness-well">
+            <span data-testid="composer-text-probe">{JSON.stringify(composerText)}</span> ·{" "}
             <span data-testid="composer-submit-probe">submitted: {composerSubmitted}</span> ·{" "}
             <span data-testid="composer-command-probe">command: {composerCommand}</span>
           </div>

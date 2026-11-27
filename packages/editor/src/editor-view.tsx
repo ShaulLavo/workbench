@@ -1,10 +1,17 @@
-import { useEffect, useEffectEvent, useMemo, useRef, useState, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useEffectEvent,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
 import {
   dismissSoftKeyboardOnTouchActivation,
   type ActivationFocusDecision,
   type DocumentId,
   type EditorDocumentAdapter,
-  type LoadedDocument,
   type WriteOutcome,
 } from "@shaulavo/workbench-core";
 import { useSubscribable } from "@shaulavo/workbench-core/react";
@@ -15,10 +22,19 @@ import type { EditorPlugin } from "@singapore-editor/core/extensions";
 import type { EditorTheme } from "@singapore-editor/core/rendering";
 import type { HighlightingService, HighlightingThemeSource } from "@singapore-editor/highlighting";
 import { useEditor } from "@singapore-editor/react";
+import {
+  getDocumentDraft,
+  isDraftDirty,
+  persistDocumentDraft,
+  recordDocumentEdit,
+  replaceDocumentDraftFromDisk,
+  seedDocumentDraft,
+  type DocumentDraftEntry,
+} from "./utils/draft-store";
 import { languageIdForPath } from "./utils/language";
 import { DEFAULT_MAX_ANALYSIS_BYTES, documentFeatureTier } from "./utils/large-file";
 import { createWorkbenchEditorPlugins } from "./utils/plugins";
-import { capOverscrollTop, scrollPositionFromSnapshot } from "./utils/scroll";
+import { capOverscrollTop } from "./utils/scroll";
 import { buildWorkbenchEditorTheme } from "./utils/theme";
 
 export interface EditorViewProps {
@@ -52,10 +68,18 @@ export interface EditorViewProps {
   readonly className?: string;
 }
 
+interface ReadyDocumentSnapshot {
+  readonly text: string;
+  readonly languageId?: string;
+  readonly byteLength: number;
+  readonly readOnly?: boolean;
+  readonly reloadSeq: number;
+}
+
 interface LoadedState {
   readonly documentId: DocumentId;
   readonly status: "loading" | "ready" | "missing" | "error";
-  readonly doc: LoadedDocument | null;
+  readonly doc: ReadyDocumentSnapshot | null;
   readonly error?: string;
 }
 
@@ -63,11 +87,31 @@ function readNarrowViewport(): boolean {
   return typeof matchMedia === "function" && matchMedia("(max-width: 768px)").matches;
 }
 
+function snapshotFromDraft(entry: DocumentDraftEntry): ReadyDocumentSnapshot {
+  return {
+    text: entry.text,
+    languageId: entry.languageId,
+    byteLength: entry.byteLength,
+    readOnly: entry.readOnly,
+    reloadSeq: entry.reloadSeq,
+  };
+}
+
+function resolveEffectiveLoaded(
+  loaded: LoadedState,
+  documentId: DocumentId,
+  cachedDraft: DocumentDraftEntry | undefined,
+): LoadedState | null {
+  if (loaded.documentId === documentId) return loaded;
+  if (!cachedDraft) return null;
+  return { documentId, status: "ready", doc: snapshotFromDraft(cachedDraft) };
+}
+
 /**
  * Singapore React 19 code editor view over `EditorDocumentAdapter`.
- * Enforces per-activation touch focus policy across async document loads, degrades heavy analysis
- * cleanly above `maxAnalysisBytes`, renders external conflict resolution controls, and projects
- * `--wb-*` / `--wb-syn-*` tokens live onto Singapore's `EditorTheme`.
+ * Preserves unsaved drafts across tab switches and split rearrangements, serializes saves per
+ * document, enforces per-activation touch focus policy across async loads, degrades heavy analysis
+ * cleanly above `maxAnalysisBytes`, and projects `--wb-*` / `--wb-syn-*` tokens onto Singapore.
  */
 export function EditorView({
   adapter,
@@ -98,22 +142,37 @@ export function EditorView({
   const [hostEl, setHostEl] = useState<HTMLDivElement | null>(null);
   const [narrowViewport, setNarrowViewport] = useState<boolean>(() => readNarrowViewport());
   const [theme, setTheme] = useState<EditorTheme>(() => buildWorkbenchEditorTheme(null));
-  const [loaded, setLoaded] = useState<LoadedState>({
-    documentId,
-    status: "loading",
-    doc: null,
+  const [loaded, setLoaded] = useState<LoadedState>(() => {
+    const existing = getDocumentDraft(adapter, documentId);
+    if (existing) return { documentId, status: "ready", doc: snapshotFromDraft(existing) };
+    return { documentId, status: "loading", doc: null };
   });
-  const [resolvingConflict, setResolvingConflict] = useState(false);
+  const [resolvingConflictDocId, setResolvingConflictDocId] = useState<DocumentId | null>(null);
 
   const conflictSource = useMemo(() => adapter.getConflict(documentId), [adapter, documentId]);
   const conflict = useSubscribable(conflictSource);
 
-  const revisionRef = useRef<string | undefined>(undefined);
-  const dirtyRef = useRef(false);
+  const activeDocIdRef = useRef<DocumentId>(documentId);
+  const committedDocIdRef = useRef<DocumentId | null>(null);
+  const dirtyByDocRef = useRef<Map<DocumentId, boolean>>(new Map());
   const appliedFocusSeqRef = useRef<number>(-1);
   const restoredScrollDocRef = useRef<string | null>(null);
+  const mountedRef = useRef(true);
+
+  useEffect(() => {
+    activeDocIdRef.current = documentId;
+  }, [documentId]);
+
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => {
+      mountedRef.current = false;
+    };
+  }, []);
 
   const emitDirty = useEffectEvent((id: DocumentId, nextDirty: boolean) => {
+    if (dirtyByDocRef.current.get(id) === nextDirty) return;
+    dirtyByDocRef.current.set(id, nextDirty);
     onDirtyChange?.(id, nextDirty);
   });
   const emitSave = useEffectEvent((id: DocumentId) => {
@@ -134,22 +193,31 @@ export function EditorView({
     onEditorReady?.(editor);
   });
 
-  // Load document whenever adapter or documentId changes, cancelling stale loads cleanly.
+  // Restore live draft immediately when present; otherwise load from adapter with stale-load cancellation.
   useEffect(() => {
     let cancelled = false;
-    dirtyRef.current = false;
     restoredScrollDocRef.current = null;
+
+    const existing = getDocumentDraft(adapter, documentId);
+    if (existing) {
+      dirtyByDocRef.current.set(documentId, isDraftDirty(existing));
+      setLoaded({ documentId, status: "ready", doc: snapshotFromDraft(existing) });
+      return () => {
+        cancelled = true;
+      };
+    }
+
     void adapter
       .loadDocument(documentId)
       .then((doc) => {
         if (cancelled) return;
         if (!doc) {
-          revisionRef.current = undefined;
           setLoaded({ documentId, status: "missing", doc: null });
           return;
         }
-        revisionRef.current = doc.revision;
-        setLoaded({ documentId, status: "ready", doc });
+        const draft = seedDocumentDraft(adapter, documentId, doc);
+        dirtyByDocRef.current.set(documentId, isDraftDirty(draft));
+        setLoaded({ documentId, status: "ready", doc: snapshotFromDraft(draft) });
       })
       .catch((cause: unknown) => {
         if (cancelled) return;
@@ -183,7 +251,9 @@ export function EditorView({
     };
   }, [hostEl, themeVersion]);
 
-  const effectiveLoaded = loaded.documentId === documentId ? loaded : null;
+  const cachedDraft = getDocumentDraft(adapter, documentId);
+  const effectiveLoaded = resolveEffectiveLoaded(loaded, documentId, cachedDraft);
+
   const currentDoc = effectiveLoaded?.status === "ready" ? effectiveLoaded.doc : null;
   const maxBytes = adapter.maxAnalysisBytes ?? DEFAULT_MAX_ANALYSIS_BYTES;
   const tier = documentFeatureTier(currentDoc?.byteLength ?? 0, maxBytes);
@@ -207,7 +277,7 @@ export function EditorView({
   const editorDocument = useMemo(() => {
     if (!currentDoc) return null;
     return {
-      documentId: `${documentId}@${currentDoc.revision}`,
+      documentId: `${documentId}@${currentDoc.reloadSeq}`,
       defaultText: currentDoc.text,
       languageId: tier.analysisAllowed ? languageId : null,
       scrollPosition: initialScrollPosition,
@@ -228,33 +298,43 @@ export function EditorView({
     inputLabel: path ? `Editor: ${path}` : "Editor input",
     onChange(state: EditorState) {
       emitCursor(state.cursor);
-      if (state.isDirty !== dirtyRef.current) {
-        dirtyRef.current = state.isDirty;
-        emitDirty(documentId, state.isDirty);
-      }
-      const snap = controller.getSnapshot();
-      const pos = scrollPositionFromSnapshot(snap);
-      if (pos) emitScroll(documentId, pos);
+      if (committedDocIdRef.current !== documentId) return;
+      const nextText = controller.materializeFullText();
+      const dirty = recordDocumentEdit(adapter, documentId, nextText);
+      emitDirty(documentId, dirty);
     },
   });
 
   // Destructure ref callback first so React Compiler never flags controller reads as ref access.
   const { ref: editorMountRef, commands } = controller;
 
-  useEffect(() => {
-    emitEditorReady(controller.getEditor());
+  useLayoutEffect(() => {
+    committedDocIdRef.current = currentDoc ? documentId : null;
     return () => {
+      committedDocIdRef.current = null;
+    };
+  }, [currentDoc, documentId]);
+
+  useEffect(() => {
+    const editor = controller.getEditor();
+    emitEditorReady(editor);
+    const scrollSub = editor?.onDidScroll((position) => {
+      emitScroll(documentId, position);
+    });
+    return () => {
+      scrollSub?.dispose();
       emitEditorReady(null);
     };
-  }, [controller, editorDocument]);
+  }, [controller, documentId, editorDocument]);
 
   // Clamp restored scroll top so overscroll never leaves blank space when reopening a file.
   useEffect(() => {
     if (!currentDoc || !initialScrollPosition || initialScrollPosition.top === undefined) return;
-    if (restoredScrollDocRef.current === `${documentId}@${currentDoc.revision}`) return;
+    const key = `${documentId}@${currentDoc.reloadSeq}`;
+    if (restoredScrollDocRef.current === key) return;
     const snap = controller.getSnapshot();
     if (!snap) return;
-    restoredScrollDocRef.current = `${documentId}@${currentDoc.revision}`;
+    restoredScrollDocRef.current = key;
     const clampedTop = capOverscrollTop(initialScrollPosition.top, snap);
     if (clampedTop !== initialScrollPosition.top) {
       commands.setScrollPosition({ left: initialScrollPosition.left ?? 0, top: clampedTop });
@@ -275,52 +355,53 @@ export function EditorView({
     }
   }, [active, commands, controller, currentDoc, focusDecision, focusSeq]);
 
-  async function persistCurrentDocument(forceOverwrite = false): Promise<void> {
-    if (effectiveReadOnly || !currentDoc) return;
-    const nextText = controller.materializeFullText();
-    const expected = forceOverwrite ? undefined : revisionRef.current;
-    const outcome = await adapter.writeIfUnchanged(documentId, nextText, expected);
-    if (outcome.written) {
-      revisionRef.current = outcome.nextRevision;
-      dirtyRef.current = false;
-      emitDirty(documentId, false);
-      await adapter.save(documentId);
-      emitSave(documentId);
-      return;
-    }
-    emitWriteConflict(documentId, outcome);
+  function triggerPersist(targetDocId: DocumentId, forceOverwrite = false): Promise<void> {
+    if (effectiveReadOnly || !currentDoc) return Promise.resolve();
+    const liveText = controller.materializeFullText();
+    recordDocumentEdit(adapter, targetDocId, liveText);
+    return persistDocumentDraft(adapter, targetDocId, forceOverwrite, {
+      onDirtyChange: emitDirty,
+      onSave: emitSave,
+      onWriteConflict: emitWriteConflict,
+    });
   }
 
   function handleKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
     const isMod = event.metaKey || event.ctrlKey;
     if (isMod && event.key.toLowerCase() === "s") {
       event.preventDefault();
-      void persistCurrentDocument();
+      void triggerPersist(documentId, false);
     }
   }
 
+  async function applyTakeTheirs(targetDocId: DocumentId): Promise<void> {
+    const fresh = await adapter.loadDocument(targetDocId);
+    if (!fresh) return;
+    const replaced = replaceDocumentDraftFromDisk(adapter, targetDocId, fresh);
+    emitDirty(targetDocId, false);
+    if (!mountedRef.current || activeDocIdRef.current !== targetDocId) return;
+    setLoaded({ documentId: targetDocId, status: "ready", doc: snapshotFromDraft(replaced) });
+  }
+
   async function handleResolveConflict(choice: "keep-mine" | "take-theirs"): Promise<void> {
-    if (!adapter.resolveConflict || resolvingConflict) return;
-    setResolvingConflict(true);
+    const targetDocId = documentId;
+    if (!adapter.resolveConflict || resolvingConflictDocId === targetDocId) return;
+    setResolvingConflictDocId(targetDocId);
     try {
-      await adapter.resolveConflict(documentId, choice);
+      await adapter.resolveConflict(targetDocId, choice);
       if (choice === "take-theirs") {
-        const fresh = await adapter.loadDocument(documentId);
-        if (fresh) {
-          revisionRef.current = fresh.revision;
-          dirtyRef.current = false;
-          emitDirty(documentId, false);
-          setLoaded({ documentId, status: "ready", doc: fresh });
-        }
+        await applyTakeTheirs(targetDocId);
       } else {
-        await persistCurrentDocument(true);
+        await triggerPersist(targetDocId, true);
       }
-      setResolvingConflict(false);
+      if (mountedRef.current) setResolvingConflictDocId(null);
     } catch (error) {
-      setResolvingConflict(false);
+      if (mountedRef.current) setResolvingConflictDocId(null);
       throw error;
     }
   }
+
+  const resolvingCurrentConflict = resolvingConflictDocId === documentId;
 
   return (
     <div
@@ -344,65 +425,58 @@ export function EditorView({
           role="alert"
           data-testid="wb-editor-conflict-bar"
         >
-          <span className="wb-editor-banner-text">
-            {conflict.diskText === undefined
-              ? `${conflict.path ?? documentId} was deleted on disk.`
-              : `${conflict.path ?? documentId} changed on disk.`}
-          </span>
-          {adapter.resolveConflict ? (
-            <div className="wb-editor-banner-actions">
-              <button
-                type="button"
-                className="wb-button wb-button-primary"
-                data-testid="wb-editor-conflict-keep"
-                disabled={resolvingConflict}
-                onClick={() => void handleResolveConflict("keep-mine")}
-              >
-                Keep mine
-              </button>
-              <button
-                type="button"
-                className="wb-button"
-                data-testid="wb-editor-conflict-theirs"
-                disabled={resolvingConflict}
-                onClick={() => void handleResolveConflict("take-theirs")}
-              >
-                Take theirs
-              </button>
-            </div>
-          ) : null}
+          <span>External change detected on {conflict.path ?? conflict.documentId}.</span>
+          <div className="wb-editor-banner-actions">
+            <button
+              type="button"
+              className="wb-button"
+              disabled={resolvingCurrentConflict}
+              data-testid="wb-editor-conflict-keep"
+              onClick={() => void handleResolveConflict("keep-mine")}
+            >
+              Keep mine
+            </button>
+            <button
+              type="button"
+              className="wb-button wb-button-primary"
+              disabled={resolvingCurrentConflict}
+              data-testid="wb-editor-conflict-theirs"
+              onClick={() => void handleResolveConflict("take-theirs")}
+            >
+              Take theirs
+            </button>
+          </div>
         </div>
       ) : null}
 
       {currentDoc && !tier.analysisAllowed ? (
         <div
-          className="wb-editor-banner wb-editor-large-file-notice"
+          className="wb-editor-banner wb-editor-large-file"
           role="status"
           data-testid="wb-editor-large-file-notice"
         >
-          Large file ({Math.round(currentDoc.byteLength / 1024)} KB) — syntax highlighting and analysis
-          disabled for responsiveness.
+          Large file ({Math.round(currentDoc.byteLength / (1024 * 1024))} MiB): syntax highlighting and
+          diagnostics disabled for responsiveness.
+        </div>
+      ) : null}
+
+      {effectiveLoaded?.status === "missing" ? (
+        <div className="wb-editor-state" data-testid="wb-editor-missing">
+          <strong>File not found</strong>
+          <p>{path ?? documentId}</p>
         </div>
       ) : null}
 
       {effectiveLoaded?.status === "error" ? (
         <div className="wb-editor-state" role="alert" data-testid="wb-editor-error">
-          <strong>Unable to load document</strong>
+          <strong>Unable to open document</strong>
           <p>{effectiveLoaded.error}</p>
         </div>
-      ) : effectiveLoaded?.status === "missing" ? (
-        <div className="wb-editor-state" data-testid="wb-editor-missing">
-          <strong>File not found</strong>
-          <p>{path ?? documentId}</p>
-        </div>
-      ) : (
-        <div
-          ref={editorMountRef}
-          className="wb-editor-surface"
-          data-testid="wb-editor-surface"
-          aria-busy={effectiveLoaded?.status !== "ready"}
-        />
-      )}
+      ) : null}
+
+      {currentDoc ? (
+        <div ref={editorMountRef} className="wb-editor-surface" data-testid="wb-editor-surface" />
+      ) : null}
     </div>
   );
 }

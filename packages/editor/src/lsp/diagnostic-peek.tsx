@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { useEffect, useEffectEvent, useLayoutEffect, useRef, useState, type KeyboardEvent } from "react";
 import type { LspHostAdapter, LspLocation } from "@shaulavo/workbench-core";
 import { useSubscribable } from "@shaulavo/workbench-core/react";
 import { StrokeIcon } from "@shaulavo/workbench-icons/react";
@@ -49,7 +49,7 @@ export function copyDiagnosticPeekClientRect(rect: DiagnosticPeekClientRect): Di
   });
 }
 
-/** Positions `DiagnosticPeek` below or above its marker anchor while clamping inside the clip rect. */
+/** Positions `DiagnosticPeek` below or above its marker anchor while strictly clamping inside `clipRect`. */
 export function diagnosticPeekPlacement(input: {
   readonly anchorRect: DiagnosticPeekClientRect;
   readonly clipRect: DiagnosticPeekClientRect;
@@ -61,8 +61,20 @@ export function diagnosticPeekPlacement(input: {
   const gap = input.gap ?? 6;
   const below = input.anchorRect.bottom + gap;
   const above = input.anchorRect.top - gap - input.surfaceHeight;
-  const clientTop =
-    below + input.surfaceHeight <= input.clipRect.bottom ? below : Math.max(input.clipRect.top, above);
+  const maxTop = Math.max(input.clipRect.top, input.clipRect.bottom - input.surfaceHeight);
+
+  let preferredTop: number;
+  if (below >= input.clipRect.top && below + input.surfaceHeight <= input.clipRect.bottom) {
+    preferredTop = below;
+  } else if (above >= input.clipRect.top && above + input.surfaceHeight <= input.clipRect.bottom) {
+    preferredTop = above;
+  } else if (below < input.clipRect.top) {
+    preferredTop = input.clipRect.top;
+  } else {
+    preferredTop = above;
+  }
+
+  const clientTop = Math.min(Math.max(preferredTop, input.clipRect.top), maxTop);
   const maxLeft = Math.max(input.clipRect.left, input.clipRect.right - input.surfaceWidth);
   const clientLeft = Math.min(Math.max(input.anchorRect.left, input.clipRect.left), maxLeft);
   return {
@@ -83,6 +95,11 @@ export function DiagnosticPeek({ model, onClose, onOpenTarget, className }: Diag
   const layerRef = useRef<HTMLDivElement | null>(null);
   const surfaceRef = useRef<HTMLDivElement | null>(null);
   const [placement, setPlacement] = useState<DiagnosticPeekPlacement | null>(null);
+  const isVisible = model.geometry.kind === "visible";
+
+  const emitClose = useEffectEvent((restoreOrigin: boolean) => {
+    onClose(restoreOrigin);
+  });
 
   useLayoutEffect(() => {
     const layer = layerRef.current;
@@ -109,17 +126,18 @@ export function DiagnosticPeek({ model, onClose, onOpenTarget, className }: Diag
     return () => observer.disconnect();
   }, [model]);
 
+  // Focus dialog only on hidden -> visible transition so parent re-renders never steal focus.
   useEffect(() => {
-    if (model.geometry.kind !== "visible") return;
+    if (!isVisible) return;
     surfaceRef.current?.focus({ preventScroll: true });
-    const onKeyDown = (event: KeyboardEvent): void => {
-      if (event.key !== "Escape") return;
-      event.preventDefault();
-      onClose(true);
-    };
-    window.addEventListener("keydown", onKeyDown);
-    return () => window.removeEventListener("keydown", onKeyDown);
-  }, [model.geometry.kind, onClose]);
+  }, [isVisible]);
+
+  function handleDialogKeyDown(event: KeyboardEvent<HTMLDivElement>): void {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    event.stopPropagation();
+    emitClose(true);
+  }
 
   if (model.geometry.kind !== "visible") return null;
 
@@ -137,6 +155,7 @@ export function DiagnosticPeek({ model, onClose, onOpenTarget, className }: Diag
         data-testid="wb-diagnostic-peek"
         className={cx("wb-diagnostic-peek", !placement && "wb-diagnostic-peek-measuring")}
         style={placement ?? { left: 0, top: 0 }}
+        onKeyDown={handleDialogKeyDown}
       >
         <div className="wb-diagnostic-peek-header">
           <div className="wb-diagnostic-peek-body">

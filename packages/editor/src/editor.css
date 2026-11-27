@@ -207,7 +207,8 @@
   }
 
   .wb-diagnostic-peek-measuring {
-    visibility: hidden;
+    opacity: 0;
+    pointer-events: none;
   }
 
   .wb-diagnostic-peek-header {

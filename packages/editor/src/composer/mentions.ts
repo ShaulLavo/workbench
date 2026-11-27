@@ -30,11 +30,19 @@ export interface ComposerTriggerMatch {
   readonly query: string;
 }
 
-/** Formats a workspace file path into its canonical `@`-mention text token. */
+const NEEDS_BRACKET_RE = /[\s)\]},;!?\\[\]]/;
+
+/**
+ * Formats a workspace file path into its canonical `@`-mention text token.
+ * Paths containing spaces, commas, brackets, backslashes, or trailing delimiters use reversible
+ * `@[...]` escaping (`\\` and `\]`).
+ */
 export function formatMentionToken(filePath: string): string {
   const normalized = filePath.trim();
   if (!normalized) return "";
-  return /\s/.test(normalized) ? `@[${normalized}]` : `@${normalized}`;
+  if (!NEEDS_BRACKET_RE.test(normalized)) return `@${normalized}`;
+  const escaped = normalized.replace(/\\/g, "\\\\").replace(/\]/g, "\\]");
+  return `@[${escaped}]`;
 }
 
 function basenameLabel(filePath: string): string {
@@ -52,12 +60,25 @@ function matchBracketMention(
   knownPaths?: ReadonlySet<string>,
 ): ComposerMentionRange | null {
   if (text[start + 1] !== "[") return null;
-  const close = text.indexOf("]", start + 2);
-  if (close <= start + 2) return null;
-  const path = text.slice(start + 2, close);
-  if (knownPaths && !knownPaths.has(path)) return null;
-  const end = close + 1;
-  return { start, end, raw: text.slice(start, end), path, label: `@${basenameLabel(path)}` };
+  let decoded = "";
+  let i = start + 2;
+  while (i < text.length) {
+    const ch = text[i];
+    if (ch === "\\" && i + 1 < text.length) {
+      decoded += text[i + 1];
+      i += 2;
+      continue;
+    }
+    if (ch === "]") {
+      if (!decoded) return null;
+      if (knownPaths && !knownPaths.has(decoded)) return null;
+      const end = i + 1;
+      return { start, end, raw: text.slice(start, end), path: decoded, label: `@${basenameLabel(decoded)}` };
+    }
+    decoded += ch;
+    i += 1;
+  }
+  return null;
 }
 
 /**
