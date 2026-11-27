@@ -49,6 +49,11 @@ if (!outDirArg) {
 }
 const allowDirty = process.argv.includes("--allow-dirty");
 const outDir = path.resolve(ROOT, outDirArg);
+const distDir = path.join(PKG_DIR, "dist");
+const relToDist = path.relative(distDir, outDir);
+if (relToDist === "" || (!relToDist.startsWith("..") && !path.isAbsolute(relToDist))) {
+  throw new Error(`--out-dir (${outDir}) must not be inside packages/workbench/dist (${distDir})`);
+}
 
 const porcelain = run("git", ["status", "--porcelain"], ROOT);
 const dirty = porcelain.length > 0;

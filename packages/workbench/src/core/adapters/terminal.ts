@@ -54,6 +54,8 @@ export interface TerminalAdapter {
   readonly sessions: Subscribable<readonly TerminalSessionInfo[]>;
   readonly activeId: Subscribable<string | undefined>;
   readonly splitId: Subscribable<string | undefined>;
+  /** Optional authoritative `[leftId, rightId]` split pair for adapters that track focus separately from split membership. */
+  readonly splitPair?: Subscribable<readonly [leftId: string, rightId: string] | undefined>;
 
   createSession(options?: { readonly title?: string; readonly cwd?: string }): Promise<string>;
   /** Explicit user kill: terminates the PTY process and removes the session. */

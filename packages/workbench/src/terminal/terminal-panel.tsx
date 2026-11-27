@@ -69,23 +69,15 @@ export interface TerminalPanelProps {
   readonly className?: string;
 }
 
-interface SplitPairRecord {
-  readonly leftId: string;
-  readonly rightId: string;
-}
-
-const rememberedSplitPairs = new WeakMap<TerminalAdapter, SplitPairRecord>();
-
 const EMPTY_SPLIT_ID = {
   getSnapshot: (): string | undefined => undefined,
   subscribe: () => () => {},
 };
 
-function findSplitPartnerId(pair: SplitPairRecord, sessionId: string): string | undefined {
-  if (pair.leftId === sessionId) return pair.rightId;
-  if (pair.rightId === sessionId) return pair.leftId;
-  return undefined;
-}
+const EMPTY_SPLIT_PAIR = {
+  getSnapshot: (): readonly [string, string] | undefined => undefined,
+  subscribe: () => () => {},
+};
 
 function SessionStatusDot({ status }: { readonly status: TerminalSessionInfo["status"] }) {
   return <span className="wb-terminal-status-dot" data-status={status} aria-label={`Terminal ${status}`} />;
@@ -135,32 +127,27 @@ function resolveSplitSessions(
   sessions: readonly TerminalSessionInfo[],
   activeId: string | undefined,
   splitId: string | undefined,
-  previousPair: SplitPairRecord | null,
+  splitPair: readonly [string, string] | undefined,
 ): {
   readonly primary: TerminalSessionInfo | undefined;
   readonly secondary: TerminalSessionInfo | undefined;
 } {
+  if (splitPair) {
+    const left = sessions.find((s) => s.id === splitPair[0]);
+    const right = sessions.find((s) => s.id === splitPair[1]);
+    if (left && right && left.id !== right.id) {
+      return { primary: left, secondary: right };
+    }
+  }
   const activeSession = sessions.find((s) => s.id === activeId) ?? sessions[0];
   if (!splitId || !activeSession) {
     return { primary: activeSession, secondary: undefined };
   }
   const splitSession = sessions.find((s) => s.id === splitId);
-  if (!splitSession) {
+  if (!splitSession || splitSession.id === activeSession.id) {
     return { primary: activeSession, secondary: undefined };
   }
-  if (splitSession.id !== activeSession.id) {
-    return { primary: activeSession, secondary: splitSession };
-  }
-  // If an adapter sets activeId === splitId when the user selects the right split pane,
-  // preserve the remembered split partner on the left so clicking the split tab never unsplits.
-  if (previousPair) {
-    const partnerId = findSplitPartnerId(previousPair, splitSession.id);
-    const partner = partnerId ? sessions.find((s) => s.id === partnerId) : undefined;
-    if (partner && partner.id !== splitSession.id) {
-      return { primary: partner, secondary: splitSession };
-    }
-  }
-  return { primary: activeSession, secondary: undefined };
+  return { primary: activeSession, secondary: splitSession };
 }
 
 /**
@@ -208,12 +195,10 @@ export function TerminalPanel({
   const sessions = useSubscribable(adapter.sessions);
   const activeId = useSubscribable(adapter.activeId);
   const splitId = useSubscribable(adapter.splitId ?? EMPTY_SPLIT_ID);
+  const splitPair = useSubscribable(adapter.splitPair ?? EMPTY_SPLIT_PAIR);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [focusTick, setFocusTick] = useState(0);
   const [tabFocusTick, setTabFocusTick] = useState(0);
-  const [splitPair, setSplitPair] = useState<SplitPairRecord | null>(
-    () => rememberedSplitPairs.get(adapter) ?? null,
-  );
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
 
   const headerRef = useRef<HTMLDivElement | null>(null);
@@ -232,30 +217,23 @@ export function TerminalPanel({
     sessions,
     activeId,
     splitId,
-    splitPair ?? rememberedSplitPairs.get(adapter) ?? null,
+    splitPair,
   );
-
-  if (primarySession && secondarySession) {
-    if (splitPair?.leftId !== primarySession.id || splitPair.rightId !== secondarySession.id) {
-      setSplitPair({ leftId: primarySession.id, rightId: secondarySession.id });
-    }
-  } else if (splitPair !== null) {
-    setSplitPair(null);
-  }
-
-  useEffect(() => {
-    if (primarySession && secondarySession) {
-      rememberedSplitPairs.set(adapter, { leftId: primarySession.id, rightId: secondarySession.id });
-      return;
-    }
-    rememberedSplitPairs.delete(adapter);
-  }, [adapter, primarySession, secondarySession]);
 
   let focusedSession = primarySession;
   if (secondarySession) {
     const wantsSecondary =
       focusedPaneId === secondarySession.id || (focusedPaneId === null && activeId === secondarySession.id);
     if (wantsSecondary) focusedSession = secondarySession;
+  }
+
+  function selectSessionPreservingSplit(sessionId: string): void {
+    setFocusedPaneId(sessionId);
+    const isSecondaryWithoutPair =
+      !adapter.splitPair && secondarySession !== undefined && sessionId === secondarySession.id;
+    if (!isSecondaryWithoutPair) {
+      adapter.selectSession(sessionId);
+    }
   }
 
   function focusTabButton(targetSessionId: string): void {
@@ -285,13 +263,14 @@ export function TerminalPanel({
   }
 
   function selectAndFocusSession(sessionId: string): void {
-    setFocusedPaneId(sessionId);
-    adapter.selectSession(sessionId);
+    pendingTabFocusRef.current = null;
+    selectSessionPreservingSplit(sessionId);
     if (collapsed) onToggleCollapsed?.();
     requestTerminalFocus(sessionId);
   }
 
   function handleCreateSession(): void {
+    pendingTabFocusRef.current = null;
     focusSeqRef.current += 1;
     const reqSeq = focusSeqRef.current;
     if (collapsed) onToggleCollapsed?.();
@@ -348,6 +327,7 @@ export function TerminalPanel({
     const fallbackId = focusedSession?.id ?? primarySession.id;
     const targetSessionId = resolveStageClickTarget(event.target, fallbackId);
     if (!targetSessionId) return;
+    pendingTabFocusRef.current = null;
     setFocusedPaneId(targetSessionId);
     const terminal = terminalsByIdRef.current.get(targetSessionId);
     if (terminal) {
@@ -363,19 +343,24 @@ export function TerminalPanel({
   useLayoutEffect(() => {
     const targetId = pendingTabFocusRef.current;
     if (!targetId) return;
-    pendingTabFocusRef.current = null;
     focusTabButton(targetId);
-  }, [tabFocusTick, primarySession?.id, secondarySession?.id]);
+    const settled = targetId === primarySession?.id || targetId === secondarySession?.id;
+    if (settled) {
+      pendingTabFocusRef.current = null;
+    }
+  }, [tabFocusTick, primarySession?.id, secondarySession?.id, activeId, splitId]);
 
   function handleTabKeyDown(event: KeyboardEvent<HTMLButtonElement>, sessionId: string): void {
     const index = orderedTabs.findIndex((session) => session.id === sessionId);
     if (event.key === "F2") {
       event.preventDefault();
+      pendingTabFocusRef.current = null;
       setRenamingId(sessionId);
       return;
     }
     if (event.key === "Delete") {
       event.preventDefault();
+      pendingTabFocusRef.current = null;
       clearPendingTerminalFocus();
       const survivor = orderedTabs[index + 1] ?? orderedTabs[index - 1];
       restoreFocusTargetRef.current = survivor
@@ -388,10 +373,9 @@ export function TerminalPanel({
     if (!next) return;
     event.preventDefault();
     clearPendingTerminalFocus();
-    setFocusedPaneId(next.id);
     pendingTabFocusRef.current = next.id;
     setTabFocusTick((tick) => tick + 1);
-    adapter.selectSession(next.id);
+    selectSessionPreservingSplit(next.id);
   }
 
   function renderSessionTab(session: TerminalSessionInfo, splitRole?: "left" | "right"): ReactNode {
@@ -481,8 +465,8 @@ export function TerminalPanel({
         showAccessoryBar={showBar}
         extraContextMenuItems={extraContextMenuItemsForSession?.(session.id)}
         onPointerDown={() => {
-          setFocusedPaneId(session.id);
-          adapter.selectSession(session.id);
+          pendingTabFocusRef.current = null;
+          selectSessionPreservingSplit(session.id);
         }}
         onTerminalReady={(term) => {
           terminalsByIdRef.current.set(session.id, term);

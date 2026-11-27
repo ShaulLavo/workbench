@@ -2155,11 +2155,13 @@ describe("@shaulavo/workbench-terminal", () => {
         host.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset.splitFocused,
       ).toBe("true");
 
-      // Remounting with the same adapter while activeId === splitId preserves the split pair and focused right half.
+      // Remounting after unmounting and changing the split pair externally to s3 + s2 restores s3 + s2 (never stale s1 + s2).
       act(() => {
         activeRoot?.unmount();
         activeRoot = null;
       });
+      activeId.set("s3");
+      splitId.set("s2");
       const remountedHost = mount(
         <TerminalPanel
           adapter={adapter}
@@ -2171,39 +2173,95 @@ describe("@shaulavo/workbench-terminal", () => {
       await act(async () => {
         await flushMicrotasks();
       });
-      expect(remountedHost.querySelector("[data-wb-term-split-group]")).not.toBeNull();
+      const remountedGroup = remountedHost.querySelector<HTMLElement>("[data-wb-term-split-group]");
+      expect(remountedGroup).not.toBeNull();
+      expect(remountedGroup?.querySelector('[data-testid="wb-term-tab-s3"]')).not.toBeNull();
+      expect(remountedGroup?.querySelector('[data-testid="wb-term-tab-s2"]')).not.toBeNull();
+      expect(remountedGroup?.querySelector('[data-testid="wb-term-tab-s1"]')).toBeNull();
       expect(remountedHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(2);
+
+      // Authoritative adapter.splitPair also survives remount with focused right half (activeId === splitId).
+      const splitPairSub = createSubscribable<readonly [string, string] | undefined>(["s3", "s2"]);
+      const deferredActiveId = createSubscribable<string | undefined>("s2");
+      const deferredSplitId = createSubscribable<string | undefined>("s2");
+      const deferredAdapter: TerminalAdapter = {
+        ...adapter,
+        activeId: deferredActiveId,
+        splitId: deferredSplitId,
+        splitPair: splitPairSub,
+        selectSession: (id) => {
+          queueMicrotask(() => {
+            deferredActiveId.set(id);
+            if (id !== "s2") splitPairSub.set([id, "s2"]);
+          });
+        },
+      };
+      act(() => {
+        activeRoot?.unmount();
+        activeRoot = null;
+      });
+      const deferredHost = mount(
+        <TerminalPanel
+          adapter={deferredAdapter}
+          collapsed={false}
+          onToggleCollapsed={vi.fn()}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
       expect(
-        remountedHost.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset
+        deferredHost.querySelector<HTMLElement>('[data-wb-terminal][data-session-id="s2"]')?.dataset
           .splitFocused,
       ).toBe("true");
 
-      // ArrowRight from s2 (right half) selects s3, regroups s3+s2 into a new split group, and keeps keyboard focus on s3's live tab button.
-      const remountedRightTab = remountedHost.querySelector<HTMLButtonElement>(
+      // ArrowRight from s2 (right half) with DEFERRED async selectSession keeps keyboard focus on s1 after regrouping!
+      const deferredRightTab = deferredHost.querySelector<HTMLButtonElement>(
         '[data-testid="wb-term-tab-s2"] button[role="tab"]',
       )!;
       act(() => {
-        remountedRightTab.focus();
-        remountedRightTab.dispatchEvent(
+        deferredRightTab.focus();
+        deferredRightTab.dispatchEvent(
           new KeyboardEvent("keydown", { key: "ArrowRight", bubbles: true, cancelable: true }),
         );
       });
-      const liveS3Tab = remountedHost.querySelector<HTMLButtonElement>(
-        '[data-testid="wb-term-tab-s3"] button[role="tab"]',
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      const liveS1Tab = deferredHost.querySelector<HTMLButtonElement>(
+        '[data-testid="wb-term-tab-s1"] button[role="tab"]',
       )!;
-      expect(liveS3Tab).not.toBeNull();
-      expect(document.activeElement).toBe(liveS3Tab);
+      expect(liveS1Tab).not.toBeNull();
+      expect(document.activeElement).toBe(liveS1Tab);
 
-      // Select s2 again and verify Rename button targets the focused right half (s2).
+      // Select s2 again on standard adapter and verify Rename button targets the focused right half (s2).
       act(() => {
-        remountedHost
+        activeRoot?.unmount();
+        activeRoot = null;
+      });
+      activeId.set("s1");
+      splitId.set("s2");
+      const finalHost = mount(
+        <TerminalPanel
+          adapter={adapter}
+          collapsed={false}
+          onToggleCollapsed={vi.fn()}
+          loadRuntime={async () => ({}) as GhosttyRuntime}
+        />,
+      );
+      await act(async () => {
+        await flushMicrotasks();
+      });
+      act(() => {
+        finalHost
           .querySelector<HTMLButtonElement>('[data-testid="wb-term-tab-s2"] button[role="tab"]')
           ?.click();
       });
       act(() => {
-        remountedHost.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
+        finalHost.querySelector<HTMLButtonElement>('[data-testid="wb-term-rename"]')?.click();
       });
-      const renameInput = remountedHost.querySelector<HTMLInputElement>(
+      const renameInput = finalHost.querySelector<HTMLInputElement>(
         '[data-testid="wb-term-rename-input-s2"]',
       );
       expect(renameInput).not.toBeNull();
@@ -2216,13 +2274,13 @@ describe("@shaulavo/workbench-terminal", () => {
 
       // Closing the right half exits split cleanly.
       await act(async () => {
-        remountedHost
+        finalHost
           .querySelector<HTMLButtonElement>('[data-testid="wb-term-tab-s2"] button[aria-label^="Close"]')
           ?.click();
         await flushMicrotasks();
       });
-      expect(remountedHost.querySelector("[data-wb-term-split-group]")).toBeNull();
-      expect(remountedHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(1);
+      expect(finalHost.querySelector("[data-wb-term-split-group]")).toBeNull();
+      expect(finalHost.querySelectorAll("[data-wb-terminal]")).toHaveLength(1);
 
       // Collapsed state sets aria-expanded="false" for upward chevron rotation.
       act(() => {
@@ -2236,7 +2294,7 @@ describe("@shaulavo/workbench-terminal", () => {
         );
       });
       expect(
-        remountedHost
+        finalHost
           .querySelector<HTMLButtonElement>('[data-testid="wb-term-collapse"]')
           ?.getAttribute("aria-expanded"),
       ).toBe("false");
