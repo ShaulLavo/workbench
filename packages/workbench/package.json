@@ -1,6 +1,6 @@
 {
   "name": "@shaulavo/workbench",
-  "version": "0.1.21",
+  "version": "0.1.22",
   "description": "Shared MIT React 19 workbench UI library (tokens, core adapters, icons, UI shell, virtualized file tree, Ghostty terminal, live preview, and Singapore editor)",
   "license": "MIT",
   "files": [

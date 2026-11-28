@@ -67,7 +67,7 @@ export interface TerminalPanelProps {
   readonly onExit?: (sessionId: string, exitCode: number | null) => void;
   readonly onBell?: (sessionId: string) => void;
   readonly onClear?: (sessionId: string, terminal: Terminal, attachment: TerminalAttachment | null) => void;
-  readonly onError?: (message: string, cause?: unknown) => void;
+  readonly onError?: (message: string, cause: unknown, sessionId: string) => void;
   readonly className?: string;
 }
 
@@ -660,7 +660,7 @@ export function TerminalPanel({
         onExit={onExit ? (code) => onExit(session.id, code) : undefined}
         onBell={onBell ? () => onBell(session.id) : undefined}
         onClear={onClear ? (term, att) => onClear(session.id, term, att) : undefined}
-        onError={onError}
+        onError={onError ? (message, cause) => onError(message, cause, session.id) : undefined}
       />
     );
   }
