@@ -1,4 +1,4 @@
-import { detectPlatform, formatForDisplay, type RegisterableHotkey } from "@shaulavo/hotkeys";
+import { detectPlatform, formatForDisplay } from "@shaulavo/hotkeys";
 import type { HotkeyAdapter, WorkbenchCommand } from "./adapters/hotkeys.js";
 import { isEditableTextSurface } from "./focus-policy.js";
 import { createSubscribable, type Subscribable } from "./subscribable.js";
@@ -78,7 +78,7 @@ export function createDefaultHotkeyAdapter(options?: DefaultHotkeyAdapterOptions
       const first = getBindings(commandId)[0];
       if (!first) return undefined;
       try {
-        return formatForDisplay(first as RegisterableHotkey, { platform });
+        return formatForDisplay(first, { platform });
       } catch {
         return first;
       }

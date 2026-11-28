@@ -24,6 +24,19 @@ for (const host of [
     await expect(editorView).toHaveAttribute("data-status", "ready", { timeout: 10000 });
     await expect(editorView).toHaveAttribute("data-analysis-allowed", "true");
     await expect(page.getByTestId("wb-lsp-status")).toContainText("1E · 0W");
+    await expect
+      .poll(() =>
+        editorView.evaluate((view) => {
+          for (const [name, highlight] of CSS.highlights) {
+            if (!name.startsWith("editor-shared-token-")) continue;
+            for (const range of highlight) {
+              if (view.contains(range.startContainer)) return true;
+            }
+          }
+          return false;
+        }),
+      )
+      .toBe(true);
 
     // Toggle theme and verify Singapore editor stays healthy with zero errors.
     await page.getByTestId("toggle-mode").click();

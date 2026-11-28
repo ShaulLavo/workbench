@@ -1,9 +1,6 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
 
-test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 host (Fregat)", async ({
-  page,
-}, testInfo) => {
-  const errors: string[] = [];
+function recordPageErrors(page: Page, errors: string[]): void {
   page.on("pageerror", (error) => errors.push(`pageerror: ${error.message}`));
   page.on("console", (msg) => {
     if (msg.type() === "error") errors.push(`console.error: ${msg.text()}`);
@@ -11,6 +8,14 @@ test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 
   page.on("requestfailed", (req) => {
     errors.push(`requestfailed: ${req.url()} (${req.failure()?.errorText ?? "unknown"})`);
   });
+}
+
+test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 host (Fregat)", async ({
+  context,
+  page,
+}, testInfo) => {
+  const errors: string[] = [];
+  recordPageErrors(page, errors);
 
   // Plain-CSS host (Sprockt Sheet & Biro)
   await page.goto("/");
@@ -61,13 +66,15 @@ test("boot-smoke & css-tokens-smoke on plain-CSS host (Sprockt) and Tailwind v4 
   );
   expect(compactNoPresetRow).toBe(expectedCompactRow);
 
-  // Tailwind v4 host (Fregat Graphite) + @theme inline bridge utility classes
-  await page.goto("/tailwind.html");
-  await expect(page.getByTestId("harness-ready")).toHaveAttribute("data-host-kind", "tailwind");
-  await expect(page.getByTestId("root-theme-probe")).toContainText("observedScheme: dark");
-  await expect(page.getByTestId("root-theme-probe")).toContainText("preset: fregat");
+  // Keep the plain host open while its syntax worker loads grammar assets.
+  const tailwindPage = await context.newPage();
+  recordPageErrors(tailwindPage, errors);
+  await tailwindPage.goto("/tailwind.html");
+  await expect(tailwindPage.getByTestId("harness-ready")).toHaveAttribute("data-host-kind", "tailwind");
+  await expect(tailwindPage.getByTestId("root-theme-probe")).toContainText("observedScheme: dark");
+  await expect(tailwindPage.getByTestId("root-theme-probe")).toContainText("preset: fregat");
 
-  const bridgeProbe = page.getByTestId("tailwind-bridge-probe");
+  const bridgeProbe = tailwindPage.getByTestId("tailwind-bridge-probe");
   await expect(bridgeProbe).toBeVisible();
   const bridgeCheck = await bridgeProbe.evaluate((el) => {
     const style = getComputedStyle(el);
