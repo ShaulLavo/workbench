@@ -54,7 +54,7 @@
     "typecheck": "bun run build && bun run typecheck:no-build",
     "typecheck:no-build": "bun run --cwd packages/workbench typecheck && bun run --cwd apps/harness typecheck && bun run --cwd examples/vibe-builder typecheck",
     "lint": "bun scripts/check-javascript.ts && oxlint . && bun run lint:structure",
-    "lint:structure": "bun -e 'if (await Bun.file(\".unknot.allow\").exists()) throw new Error(\"Remove .unknot.allow. Workbench requires zero structural findings.\")' && unknot .",
+    "lint:structure": "bun -e 'const fs = await import(\"node:fs\"); for (const name of [\".unknot.allow\", \".unknot.json\"]) if (fs.existsSync(name)) throw new Error(`Remove ${name}. Workbench requires zero structural findings with default rules.`)' && unknot .",
     "format": "oxfmt --write .",
     "format:check": "oxfmt --check .",
     "license:check": "bun scripts/license-check.ts",
