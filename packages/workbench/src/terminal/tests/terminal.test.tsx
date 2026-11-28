@@ -697,6 +697,42 @@ describe("@shaulavo/workbench-terminal", () => {
     expect(onError).toHaveBeenCalledWith("custom runtime loader", expect.any(Error));
   });
 
+  it("passes the failing sessionId to TerminalPanel onError when a keepAlive session fails to initialize", async () => {
+    const adapter: TerminalAdapter = {
+      sessions: createSubscribable<readonly TerminalSessionInfo[]>([
+        { id: "bash", title: "bash", status: "starting" },
+        { id: "dev", title: "dev", status: "starting" },
+      ]),
+      activeId: createSubscribable<string | undefined>("bash"),
+      splitId: createSubscribable<string | undefined>(undefined),
+      createSession: async () => "s3",
+      closeSession: async () => {},
+      selectSession: () => {},
+      renameSession: () => {},
+      toggleSplit: () => {},
+      attach: async () => ({ write: () => {}, resize: () => {}, detach: () => {} }),
+    };
+
+    let runtimeCalls = 0;
+    const loadRuntime = vi.fn((_signal: AbortSignal) => {
+      runtimeCalls += 1;
+      // Keep active session "bash" pending while background keepAlive session "dev" fails.
+      if (runtimeCalls === 1) return new Promise<never>(() => {});
+      return Promise.reject(new Error("dev renderer init failed"));
+    });
+    const onError = vi.fn();
+
+    mount(<TerminalPanel adapter={adapter} keepAlive loadRuntime={loadRuntime} onError={onError} />);
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+
+    expect(onError).toHaveBeenCalledTimes(1);
+    expect(onError).toHaveBeenCalledWith("dev renderer init failed", expect.any(Error), "dev");
+  });
+
   it("aborts custom loadRuntime on unmount and suppresses late rejection errors", async () => {
     let capturedSignal: AbortSignal | undefined;
     let rejectDeferred: ((reason?: unknown) => void) | undefined;
